@@ -23,6 +23,9 @@ def create_app(root: Path | None = None) -> Flask:
         shelf_manifest=load_shelf_manifest(project_root),
         root=project_root,
     )
+    app.config["INSPECTION_STORE"] = store
+    app.config["WAREHOUSE_MAP"] = store.warehouse_map
+    app.config["SHELF_MANIFEST"] = store.shelf_manifest
 
     @app.get("/")
     def index():

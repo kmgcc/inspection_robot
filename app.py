@@ -15,6 +15,14 @@ from inspection_robot.web import create_app
 
 
 app = create_app(ROOT)
+if os.environ.get("RUN_MODE", "simulate").strip().lower() == "robot":
+    from inspection_robot.runtime import start_background_runtime
+
+    app.config["ROBOT_RUNTIME"] = start_background_runtime(
+        app.config["INSPECTION_STORE"],
+        app.config["WAREHOUSE_MAP"],
+        app.config["SHELF_MANIFEST"],
+    )
 
 
 if __name__ == "__main__":

@@ -1,1 +1,7 @@
 Flask>=2.2,<3.0
+
+# Optional on-car vision/runtime dependencies. Keep them commented so local
+# contract tests do not require camera-native wheels on every teammate machine.
+# opencv-python>=4.8
+# dt-apriltags>=3.1
+# pytesseract>=0.3
