@@ -86,6 +86,74 @@ class WebApiTest(unittest.TestCase):
             "事件ID,时间,类型,标签ID,物品,区域,货架,期望货架,颜色,OCR,图像类别,优先级,状态,来源,说明",
         )
 
+    def test_dashboard_demo_routes_cover_path_obstacle_forbidden_and_scans(self) -> None:
+        path = self.client.post("/api/demo/path")
+        self.assertEqual(path.status_code, 200)
+        payload = self.client.get("/api/status").get_json()
+        self.assertEqual(payload["task_status"], "PLAN_READY")
+        self.assertGreater(len(payload["path"]["waypoints"]), 0)
+
+        obstacle = self.client.post("/api/demo/obstacle")
+        self.assertEqual(obstacle.status_code, 200)
+        payload = self.client.get("/api/status").get_json()
+        self.assertEqual(payload["task_status"], "OBSTACLE_WAIT")
+        self.assertTrue(payload["obstacle"]["blocked"])
+
+        obstacle_clear = self.client.post("/api/demo/obstacle/clear")
+        self.assertEqual(obstacle_clear.status_code, 200)
+        payload = self.client.get("/api/status").get_json()
+        self.assertEqual(payload["task_status"], "MOVING")
+        self.assertFalse(payload["obstacle"]["blocked"])
+
+        forbidden = self.client.post("/api/demo/forbidden")
+        self.assertEqual(forbidden.status_code, 200)
+        payload = self.client.get("/api/status").get_json()
+        self.assertEqual(payload["task_status"], "FORBIDDEN_ZONE_WAIT")
+        self.assertTrue(any(zone.get("blocked") for zone in payload["forbidden_zones"]))
+
+        forbidden_clear = self.client.post("/api/demo/forbidden/clear")
+        self.assertEqual(forbidden_clear.status_code, 200)
+        payload = self.client.get("/api/status").get_json()
+        self.assertEqual(payload["task_status"], "MOVING")
+
+        normal = self.client.post("/api/demo/scan/A1/normal")
+        self.assertEqual(normal.status_code, 200)
+        payload = self.client.get("/api/status").get_json()
+        self.assertEqual(payload["current_shelf"], "A1")
+        self.assertGreater(len(payload["scan"]["detections"]), 0)
+        self.assertEqual(payload["events"][0]["type"], "shelf_scanned")
+
+        abnormal = self.client.post("/api/demo/scan/A2/abnormal")
+        self.assertEqual(abnormal.status_code, 200)
+        payload = self.client.get("/api/status").get_json()
+        event_types = {event["type"] for event in payload["events"]}
+        self.assertIn("missing_item", event_types)
+        self.assertIn("duplicate_item", event_types)
+        self.assertIn("wrong_shelf", event_types)
+        self.assertTrue(any(event["status"] == "waiting_confirm" for event in payload["events"]))
+
+    def test_evidence_mismatch_and_demo_run_are_available_without_car(self) -> None:
+        mismatch = self.client.post("/api/demo/evidence-mismatch")
+        self.assertEqual(mismatch.status_code, 200)
+        payload = self.client.get("/api/status").get_json()
+        self.assertGreater(len(payload["scan"]["detections"]), 0)
+        self.assertTrue(any(event["type"] == "evidence_mismatch" for event in payload["events"]))
+
+        demo = self.client.post("/api/demo/run")
+        self.assertEqual(demo.status_code, 200)
+        self.assertGreater(demo.get_json()["confirmed_count"], 0)
+        payload = self.client.get("/api/status").get_json()
+        event_types = {event["type"] for event in payload["events"]}
+
+        self.assertEqual(payload["task_status"], "FINISHED")
+        self.assertIn("path_planned", event_types)
+        self.assertIn("obstacle_wait", event_types)
+        self.assertIn("forbidden_zone_detected", event_types)
+        self.assertIn("shelf_scanned", event_types)
+        self.assertIn("evidence_mismatch", event_types)
+        self.assertIn("manual_confirm", event_types)
+        self.assertFalse(any(event["status"] == "waiting_confirm" for event in payload["events"]))
+
 
 if __name__ == "__main__":
     unittest.main()

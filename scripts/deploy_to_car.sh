@@ -6,6 +6,7 @@ CAR_DIR="${CAR_DIR:-/home/pi/temp/inspection_robot}"
 
 cd "$(dirname "$0")/.."
 
+echo "Deploying warehouse patrol dashboard to $CAR_HOST:$CAR_DIR"
 ssh "$CAR_HOST" "mkdir -p '$CAR_DIR'"
 rsync -av --delete \
   --exclude '.git/' \

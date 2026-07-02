@@ -14,4 +14,6 @@ else
   exit 1
 fi
 
-PORT="${PORT:-5050}" "${PYTHON_CMD[@]}" app.py
+PORT="${PORT:-5050}"
+echo "Starting local warehouse dashboard: http://127.0.0.1:${PORT}"
+PORT="$PORT" "${PYTHON_CMD[@]}" app.py

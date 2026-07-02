@@ -3,65 +3,151 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>物品巡检看板</title>
+  <title>仓库巡逻看板</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
 <body>
-  <header>
-    <h1>移动式物品巡检看板</h1>
-    <span class="badge">AprilTag 巡检闭环</span>
+  <header class="app-header">
+    <div>
+      <h1>固定仓库巡逻看板</h1>
+      <span class="subtitle">麦克纳姆轮路径规划、货架扫描、异常复核与日志导出</span>
+    </div>
+    <div class="header-status">
+      <span id="run_id">-</span>
+      <strong id="header_status">-</strong>
+    </div>
   </header>
-  <main>
-    <section>
-      <h2>当前状态</h2>
-      <div class="status-grid">
+
+  <main class="dashboard">
+    <section class="panel overview" aria-labelledby="overview-title">
+      <div class="section-title">
+        <div>
+          <h2 id="overview-title">状态总览</h2>
+          <p id="last_message">-</p>
+        </div>
+        <span class="pill" id="path_status">-</span>
+      </div>
+
+      <div class="metric-grid">
         <div class="metric">
-          <label>任务状态</label>
+          <label>当前阶段</label>
           <strong id="task_status">-</strong>
         </div>
         <div class="metric">
-          <label>小车状态</label>
-          <strong id="robot_status">-</strong>
+          <label>当前目标点</label>
+          <strong id="current_target">-</strong>
         </div>
         <div class="metric">
-          <label>当前标签</label>
-          <strong id="current_tag">-</strong>
+          <label>当前货架</label>
+          <strong id="current_shelf">-</strong>
         </div>
         <div class="metric">
-          <label>物品 / 分区</label>
+          <label>当前标签 / 物品</label>
           <strong id="current_item">-</strong>
         </div>
+        <div class="metric">
+          <label>货架 OCR</label>
+          <strong id="shelf_ocr">-</strong>
+        </div>
+        <div class="metric">
+          <label>颜色 / 文字 / 图像</label>
+          <strong id="evidence_summary">-</strong>
+        </div>
+        <div class="metric">
+          <label>前方障碍</label>
+          <strong id="obstacle_state">-</strong>
+        </div>
+        <div class="metric">
+          <label>告警等级</label>
+          <strong id="alarm_state">-</strong>
+        </div>
+        <div class="metric">
+          <label>当前位置</label>
+          <strong id="pose_state">-</strong>
+        </div>
+        <div class="metric">
+          <label>待确认异常</label>
+          <strong id="pending_count">0</strong>
+        </div>
       </div>
-      <div class="message" id="last_message">-</div>
-      <div class="actions">
-        <button class="primary" onclick="postAction('/api/start')">开始巡检</button>
-        <button onclick="postAction('/api/simulate/tag/1')">模拟正常标签</button>
-        <button class="danger" onclick="postAction('/api/simulate/tag/4')">模拟异常标签</button>
-        <button class="ok" onclick="confirmLatest()">确认处理</button>
-        <button onclick="playCarAudio()">播放音频</button>
+
+      <div class="actions" aria-label="巡逻操作">
+        <button class="primary" type="button" data-post="/api/start">开始巡逻</button>
+        <button type="button" data-post="/api/stop">停止</button>
+        <button type="button" data-post="/api/reset">重置</button>
+        <button type="button" data-post="/api/demo/path">模拟规划路径</button>
+        <button type="button" data-post="/api/demo/obstacle">模拟障碍等待</button>
+        <button type="button" data-post="/api/demo/obstacle/clear">模拟障碍解除</button>
+        <button type="button" data-post="/api/demo/forbidden">模拟禁区触发</button>
+        <button type="button" data-post="/api/demo/forbidden/clear">模拟禁区恢复</button>
+        <button type="button" data-post="/api/demo/scan/A1/normal">模拟扫描 A1 正常</button>
+        <button class="danger" type="button" data-post="/api/demo/scan/A2/abnormal">模拟扫描 A2 异常</button>
+        <button class="danger" type="button" data-post="/api/demo/evidence-mismatch">模拟识别证据冲突</button>
+        <button class="ok" type="button" data-confirm>确认处理</button>
+        <button class="demo" type="button" data-post="/api/demo/run">软件兜底全流程</button>
+        <button type="button" data-audio>播放音频</button>
         <a class="button" href="{{ url_for('static', filename='audio/youdowhatreversed.wav') }}">浏览器试听</a>
-        <button onclick="postAction('/api/reset')">重置</button>
         <a class="button" href="/api/export.csv">导出日志</a>
       </div>
     </section>
 
-    <section>
-      <h2>事件日志</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>时间</th>
-            <th>标签</th>
-            <th>物品</th>
-            <th>分区</th>
-            <th>状态</th>
-            <th>说明</th>
-          </tr>
-        </thead>
-        <tbody id="events"></tbody>
-      </table>
+    <section class="panel map-panel" aria-labelledby="map-title">
+      <div class="section-title compact">
+        <h2 id="map-title">固定地图与路径</h2>
+        <span id="path_counter">-</span>
+      </div>
+      <div class="map-grid" id="warehouse_map" aria-label="仓库固定地图"></div>
+      <div class="legend">
+        <span><i class="legend-start"></i>起点/回家点</span>
+        <span><i class="legend-shelf"></i>货架扫描点</span>
+        <span><i class="legend-path"></i>规划路径</span>
+        <span><i class="legend-forbidden"></i>黑胶带禁区</span>
+        <span><i class="legend-robot"></i>当前估计位置</span>
+      </div>
+    </section>
+
+    <section class="panel shelves-panel" aria-labelledby="shelves-title">
+      <div class="section-title compact">
+        <h2 id="shelves-title">货架扫描</h2>
+      </div>
+      <div class="shelf-grid" id="shelves"></div>
+    </section>
+
+    <section class="panel evidence-panel" aria-labelledby="evidence-title">
+      <div class="section-title compact">
+        <h2 id="evidence-title">多模态识别证据</h2>
+      </div>
+      <div class="detection-list" id="detections"></div>
+    </section>
+
+    <section class="panel events-panel" aria-labelledby="events-title">
+      <div class="section-title compact">
+        <h2 id="events-title">事件日志</h2>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>类型</th>
+              <th>货架</th>
+              <th>标签</th>
+              <th>物品</th>
+              <th>期望货架</th>
+              <th>状态</th>
+              <th>来源</th>
+              <th>OCR</th>
+              <th>颜色</th>
+              <th>图像类别</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody id="events"></tbody>
+        </table>
+      </div>
     </section>
   </main>
+
   <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
 </body>
 </html>

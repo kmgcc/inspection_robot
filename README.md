@@ -1,61 +1,59 @@
 # 固定仓库场景下的麦克纳姆轮巡逻小车
 
-这是一个小团队工程实践项目，目标是在 RASPBOT V2 麦轮小车上完成“固定地图路径规划、黑胶带禁区规避、超声波避障、侧向货架扫描、多模态物品识别、物品异常上报、网页看板展示”的课程演示系统。
+这是一个 RASPBOT V2 麦轮小车课程项目，目标是在固定小仓库场景中完成“路径规划、黑胶带禁区规避、超声波避障、侧向货架扫描、多模态物品识别、异常上报、网页看板展示和人工复核确认”的演示闭环。
 
-项目边界很清楚：小车在固定小场景中巡逻，不做 SLAM，不做开放环境自动驾驶，不训练大型识别模型，不做机械臂搬运。LLM 可以作为告警后处理的加分项，用来生成巡检摘要和处置建议；它不参与实时底盘控制。
+项目边界：不做 SLAM，不做开放场景自动驾驶，不训练大型识别模型，不做机械臂搬运，不让 LLM 控制底盘。LLM 只可作为告警后的摘要和建议加分项。
 
-## 当前状态
+## 当前代码状态
 
-当前仓库已经有一个 0.1 软件最小闭环：
+当前仓库已经具备可运行的软件闭环：
 
-- Flask 看板入口：`app.py`
-- 状态与事件逻辑：`src/inspection_robot/state.py`
-- API 路由：`src/inspection_robot/web.py`
+- Flask 入口：`app.py`
+- 共享契约：`docs/api_contract.md`
+- 状态与事件存储：`src/inspection_robot/core/store.py`
+- Web API：`src/inspection_robot/web.py`
+- 固定仓库地图：`config/warehouse_map.json`
+- 货架清单：`config/shelf_manifest.json`
 - 标签配置：`config/tag_map.json`
-- 单页看板：`src/inspection_robot/templates/dashboard.html`
-- 前端轮询脚本：`src/inspection_robot/static/dashboard.js`
-- CSV 导出接口：`GET /api/export.csv`
+- 新版看板：`src/inspection_robot/templates/dashboard.html`
+- 前端渲染：`src/inspection_robot/static/dashboard.js`
+- CSV 导出：`GET /api/export.csv`
 
-这套代码仍是旧的最小契约版本，字段以 `zone/tag/item` 为主。新版计划已经在文档中对齐，后续要按 `docs/api_contract.md` 扩展固定地图、货架、路径、扫描和异常规则。
+3.1 已提供软件兜底演示接口，可在没有小车时演示路径、货架扫描、障碍、禁区、异常、证据冲突、确认处理和日志导出。
 
 ## 文档入口
 
-- [全局规划书](docs/PROJECT_PLAN.md)：新版项目定位、资料依据、场景设计、功能模块、分工和验收标准。
-- [共享 API 契约](docs/api_contract.md)：`/api/status`、事件字段、状态枚举、地图/货架配置和 `InspectionStore` 扩展方法。
-- [SSH 连接与运维手册](docs/ssh_operations.md)：小车账号、SSH/VNC 登录、代码推送、看板运行、Docker/ROS2 操作和硬件测试命令。
+- [全局规划书](docs/PROJECT_PLAN.md)：项目定位、资料依据、场景设计、模块边界和验收清单。
+- [共享 API 契约](docs/api_contract.md)：`/api/status`、事件字段、状态枚举、地图/货架/路径配置和 `InspectionStore` 方法。
+- [SSH 连接与运维手册](docs/ssh_operations.md)：小车账号、SSH/VNC、代码部署、看板运行和 ROS2 操作。
+- [演示运行手册](docs/demo_runbook.md)：真车流程、软件兜底、硬件失败兜底、网络失败兜底和 2-3 分钟答辩顺序。
+- [答辩证据清单](docs/evidence_checklist.md)：视频、截图、CSV 和 PPT 素材检查表。
+- [官方资料索引](docs/RASPBOT-V2_Clean_Docs/README.md)：精简后的 RASPBOT V2 官方文档和示例。
+
+## 执行计划入口
+
 - [0.1 基准计划](docs/plans/0.1-plan-shared-contract.md)：共享契约、配置格式和资料依据。
-- [1.1 队友计划：小车硬件与侧向感知](docs/plans/1.1-plan-robot-io.md)：麦轮运动、超声波、黑胶带禁区兜底、侧向摄像头和 runtime。
-- [2.1 队友计划：路径规划与货架规则](docs/plans/2.1-plan-core-contract.md)：固定地图、A*、货架清单、异常规则、状态机和测试。
-- [3.1 队友计划：看板与演示](docs/plans/3.1-plan-dashboard-demo.md)：地图看板、模拟演示、部署脚本、运行手册和答辩证据。
-- [官方资料索引](docs/RASPBOT-V2_Clean_Docs/README.md)：已精简的 RASPBOT V2 官方文档与示例位置。
-- [打印素材目录](../打印素材_AprilTag)：已生成的物品/货架 AprilTag 标签、A4 PDF 和 ID 对照表。
+- [1.1 队友计划：小车硬件与侧向感知](docs/plans/1.1-plan-robot-io.md)：麦轮运动、超声波、黑胶带传感器、侧向摄像头和 runtime。
+- [2.1 队友计划：路径规划与货架规则](docs/plans/2.1-plan-core-contract.md)：固定地图、A*、货架清单、异常规则、状态机和持久化。
+- [3.1 队友计划：看板、模拟演示、部署与答辩证据](docs/plans/3.1-plan-dashboard-demo.md)：地图看板、模拟演示、部署脚本、运行手册和证据清单。
 
-## 分工建议
-
-四份执行文档的关系如下：
-
-- 基准协调者执行 `0.1`：保证接口、配置和资料依据统一。
-- 队友 1 执行 `1.1`：只管真实小车硬件输入输出。
-- 队友 2 执行 `2.1`：只管路径规划、货架清单和异常判定。
-- 队友 3 执行 `3.1`：只管看板、部署、兜底演示和答辩证据。
-
-三名队友可以并行推进。1.1 上报观察，2.1 产出状态和事件，3.1 展示 `/api/status`；共同边界以 `docs/api_contract.md` 为准。
+四份计划以 `docs/api_contract.md` 为边界并行推进：1.1 上报观察，2.1 产出状态和事件，3.1 展示 `/api/status` 并提供演示兜底。
 
 ## 本地运行
 
-在仓库根目录安装依赖：
+安装依赖：
 
 ```bash
 python3 -m pip install -r requirements.txt
 ```
 
-Windows 上如果 `python3` 不可用，可使用：
+Windows 上如果 `python3` 不可用：
 
 ```bash
 py -3 -m pip install -r requirements.txt
 ```
 
-启动本地看板：
+启动本地看板，默认端口为 `5050`：
 
 ```bash
 scripts/run_local.sh
@@ -67,18 +65,20 @@ scripts/run_local.sh
 http://127.0.0.1:5050
 ```
 
-当前页面仍支持：
+当前看板支持：
 
-- 开始巡检
-- 模拟正常标签
-- 模拟异常标签
-- 人工确认处理
-- 重置状态
+- 开始巡逻、停止、重置
+- 模拟规划路径
+- 模拟障碍等待和障碍解除
+- 模拟黑胶带禁区触发和恢复
+- 模拟扫描 A1 正常
+- 模拟扫描 A2 异常
+- 模拟识别证据冲突
+- 软件兜底全流程
+- 确认处理
 - 导出 CSV 日志
 
-后续 3.1 会把页面改成新版地图、路径、货架和异常看板。
-
-## 小车部署入口
+## 小车部署
 
 默认小车地址：
 
@@ -98,47 +98,57 @@ pi@192.168.1.11
 scripts/deploy_to_car.sh
 ```
 
-启动小车上的看板：
+启动小车看板，默认端口为 `5000`。模拟模式只启动网页和软件演示，不触碰硬件：
 
 ```bash
-scripts/run_on_car.sh
+RUN_MODE=simulate scripts/run_on_car.sh
 ```
 
-停止小车上的看板：
+真实硬件 runtime 接入后再启用：
+
+```bash
+RUN_MODE=robot scripts/run_on_car.sh
+```
+
+停止小车看板：
 
 ```bash
 scripts/stop_on_car.sh
 ```
 
-如果小车 IP 变化：
+如果小车 IP 或端口变化：
 
 ```bash
 CAR_HOST=pi@新的IP scripts/deploy_to_car.sh
-CAR_HOST=pi@新的IP scripts/run_on_car.sh
-```
-
-后续 3.1 会让 `run_on_car.sh` 区分：
-
-```bash
-RUN_MODE=simulate scripts/run_on_car.sh
-RUN_MODE=robot scripts/run_on_car.sh
+CAR_HOST=pi@新的IP PORT=5000 RUN_MODE=simulate scripts/run_on_car.sh
+CAR_HOST=pi@新的IP PORT=5000 scripts/stop_on_car.sh
 ```
 
 ## 验证命令
 
-本地轻量检查：
+本地编译检查：
 
 ```bash
-py -3 -m py_compile app.py src/inspection_robot/*.py
+py -3 -m py_compile app.py src/inspection_robot/*.py src/inspection_robot/core/*.py
 ```
 
-运行测试：
+运行全部测试：
 
 ```bash
 py -3 -m unittest discover -s tests -v
 ```
 
-小车硬件验证按 [1.1 队友计划](docs/plans/1.1-plan-robot-io.md) 中的脚本执行。
+3.1 Web API 检查：
+
+```bash
+py -3 -m unittest tests.test_web_api -v
+```
+
+文档叙事检查：
+
+```bash
+rg -n "固定仓库场景|麦克纳姆|货架|禁区" README.md docs src scripts
+```
 
 ## 代码目录
 
@@ -146,35 +156,32 @@ py -3 -m unittest discover -s tests -v
 .
 ├── app.py
 ├── config/
-│   └── tag_map.json
+│   ├── shelf_manifest.json
+│   ├── tag_map.json
+│   └── warehouse_map.json
 ├── data/
 ├── docs/
 │   ├── PROJECT_PLAN.md
 │   ├── api_contract.md
-│   ├── plans/
-│   │   ├── 0.1-plan-shared-contract.md
-│   │   ├── 1.1-plan-robot-io.md
-│   │   ├── 2.1-plan-core-contract.md
-│   │   └── 3.1-plan-dashboard-demo.md
-│   └── RASPBOT-V2_Clean_Docs/
+│   ├── demo_runbook.md
+│   ├── evidence_checklist.md
+│   ├── ssh_operations.md
+│   └── plans/
 ├── scripts/
 ├── src/
 │   └── inspection_robot/
-│       ├── config.py
-│       ├── state.py
-│       ├── web.py
+│       ├── core/
 │       ├── static/
-│       └── templates/
-└── requirements.txt
+│       ├── templates/
+│       └── web.py
+└── tests/
 ```
 
 ## 重要边界
 
-- 黑胶带在新版方案中表示禁区、边界或兜底保护线，不是主巡线路径。
-- 货架识别以 AprilTag TAG36H11 为主，OCR 识别上方大号货架号作为补充；标签版式固定为“上方货架号、下方 AprilTag、底部数字脚注”。
-- 物品识别采用 AprilTag、图像、文字、颜色块共同参与的多模态方案；AprilTag 负责稳定身份，颜色和图像用于复核、展示和加分检测。
-- AprilTag ID 必须分段管理：物品、货架、定位点、特殊区域不能复用同一个语义 ID。
-- 动态避障采用超声波停车、等待、保守绕行或短路径重规划，不承诺开放环境自由驾驶。
-- 底部四路红外传感器可用于识别黑胶带禁区边界；它是安全兜底，不是主循迹控制。
-- 人工按钮用于确认处理或复核异常，不再使用旧版回收叙事。
-- 现场演示必须保留软件模拟兜底，避免硬件或网络临时失败导致无法展示系统主链路。
+- 黑胶带表示禁区、边界或安全兜底线，不是主巡线路径。
+- AprilTag TAG36H11 是货架和物品的主身份来源；OCR、颜色和图像类别是复核证据。
+- 识别证据冲突进入人工复核，不自动覆盖 AprilTag 主 ID。
+- 动态避障只承诺超声波停车等待、恢复或保守重规划，不承诺开放环境自由绕障。
+- `RUN_MODE=simulate` 不触碰硬件；`RUN_MODE=robot` 留给 1.1 的真实 runtime。
+- 现场演示必须保留软件兜底，避免硬件或网络临时失败导致无法展示主链路。
