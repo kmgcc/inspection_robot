@@ -191,3 +191,48 @@ du -sh .
 ```
 
 仓库应保持在 KB 或少量 MB 级别。若出现 `.zip`、`.mp4`、`.rar`、镜像文件、日志文件或缓存目录，先删掉再提交。
+
+## 2026-07-02 Codex 交接记录
+
+### 已完成步骤
+
+- [x] 将远端 `https://github.com/kmgcc/inspection_robot.git` 同步到本地 `C:\Users\15pro\Desktop\小学期`，当前分支为 `main`，同步到提交 `4e25097`。
+- [x] 按最新确认，错误的本地资料上传计划已取消；当前本地只保留仓库源码和本机缓存目录。
+- [x] 将 `.codegraph/` 加入 `.gitignore`，避免本地代码索引缓存被误提交。
+- [x] 定位并处理本机 GitHub 拉取失败原因：全局 Git 代理 `127.0.0.1:7897` 会导致 HTTPS TLS EOF/握手失败；已在本仓库本地配置中清空 `http.proxy` 与 `https.proxy`，未改全局配置。
+- [x] 阅读 `HANDOFF.md` 与 `docs/PROJECT_PLAN.md`，确认当前软件侧可继续推进的可验证任务是日志导出。
+- [x] 新增 `GET /api/export.csv`，看板增加“导出日志”按钮，导出的 CSV 包含事件 ID、时间、标签、物品、分区、状态和说明。
+- [x] 修复本机运行脚本兼容性：`scripts/run_local.sh` 会自动选择可用的 `python3`、`python` 或 `py -3`，避免 WindowsApps 的 `python3` 占位符导致退出 49。
+
+### 本轮验证
+
+```bash
+py -3 -m py_compile app.py src/inspection_robot/*.py
+```
+
+已通过 Flask 测试客户端走通：开始巡检、模拟正常标签、模拟异常标签、确认回收、导出 CSV。注意本机 Git Bash 的 `python3` 指向 WindowsApps 占位符，会直接退出 49；本轮验证改用 `py -3`。
+
+已从真实脚本入口验证：
+
+```bash
+scripts/run_local.sh
+```
+
+本地服务已通过 HTTP 验证：
+
+```text
+http://127.0.0.1:5050
+```
+
+验证内容：`/health` 返回 `{"ok": true}`；首页包含“导出日志”按钮；通过 HTTP 调用开始巡检、模拟正常标签、模拟异常标签后，`/api/export.csv` 能导出包含数据行的 CSV。
+
+验证完成后，本地看板服务已关闭，`5050` 端口不再监听。
+
+### 资料状态更正
+
+已按最新口径取消资料上传计划：本轮提交只包含仓库源码、脚本、配置和交接文档，不包含本地课程资料。
+
+### 下一步建议
+
+- [ ] 若有小车环境，按交接文档接入真实 ROS2 AprilTag 话题 `/single_apriltag_id`，继续调用 `InspectionStore.handle_tag(tag_id)`。
+- [ ] 若仍在本机开发，补一个缺失/重复标签的异常规则，再更新看板展示。

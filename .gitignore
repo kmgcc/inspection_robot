@@ -19,6 +19,7 @@ data/*.sqlite
 .DS_Store
 .idea/
 .vscode/
+.codegraph/
 
 # Large local reference material
 RASPBOT-V2 AI视觉小车/

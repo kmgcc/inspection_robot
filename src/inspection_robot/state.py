@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+from io import StringIO
 from dataclasses import dataclass, field
 from datetime import datetime
 from threading import Lock
@@ -35,6 +37,27 @@ class InspectionStore:
                 "last_message": self.state.last_message,
                 "events": list(self.state.events),
             }
+
+    def export_events_csv(self) -> str:
+        with self.lock:
+            events = list(reversed(self.state.events))
+
+        output = StringIO(newline="")
+        writer = csv.writer(output)
+        writer.writerow(["事件ID", "时间", "标签ID", "物品", "分区", "状态", "说明"])
+        for event in events:
+            writer.writerow(
+                [
+                    event["id"],
+                    event["time"],
+                    event["tag_id"],
+                    event["item"],
+                    event["zone"],
+                    event["status"],
+                    event["message"],
+                ]
+            )
+        return output.getvalue()
 
     def start(self) -> None:
         with self.lock:

@@ -93,7 +93,8 @@ h2 {
   margin-top: 14px;
 }
 
-button {
+button,
+a.button {
   border: 1px solid #b8c0cc;
   background: #fff;
   color: var(--text);
@@ -101,6 +102,8 @@ button {
   padding: 9px 12px;
   font-size: 14px;
   cursor: pointer;
+  line-height: 1.2;
+  text-decoration: none;
 }
 
 button.primary {
