@@ -247,7 +247,7 @@ class InspectionStore:
                 return False
 
             target["status"] = "confirmed"
-            target["message"] = "人工已完成回收确认。"
+            target["message"] = "人工已完成处理确认。"
             self.state.task_status = "PATROL"
             self.state.robot_status = "异常已关闭"
             self.state.last_message = f"异常事件 {target['id']} 已人工确认。"
