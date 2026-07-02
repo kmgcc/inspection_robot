@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>物品巡检看板</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <header>
+    <h1>移动式物品巡检看板</h1>
+    <span class="badge">AprilTag 巡检闭环</span>
+  </header>
+  <main>
+    <section>
+      <h2>当前状态</h2>
+      <div class="status-grid">
+        <div class="metric">
+          <label>任务状态</label>
+          <strong id="task_status">-</strong>
+        </div>
+        <div class="metric">
+          <label>小车状态</label>
+          <strong id="robot_status">-</strong>
+        </div>
+        <div class="metric">
+          <label>当前标签</label>
+          <strong id="current_tag">-</strong>
+        </div>
+        <div class="metric">
+          <label>物品 / 分区</label>
+          <strong id="current_item">-</strong>
+        </div>
+      </div>
+      <div class="message" id="last_message">-</div>
+      <div class="actions">
+        <button class="primary" onclick="postAction('/api/start')">开始巡检</button>
+        <button onclick="postAction('/api/simulate/tag/1')">模拟正常标签</button>
+        <button class="danger" onclick="postAction('/api/simulate/tag/4')">模拟异常标签</button>
+        <button class="ok" onclick="confirmLatest()">确认回收</button>
+        <button onclick="postAction('/api/reset')">重置</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>事件日志</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>时间</th>
+            <th>标签</th>
+            <th>物品</th>
+            <th>分区</th>
+            <th>状态</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody id="events"></tbody>
+      </table>
+    </section>
+  </main>
+  <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+</body>
+</html>

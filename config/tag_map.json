@@ -1,0 +1,22 @@
+{
+  "1": {
+    "name": "Apple",
+    "zone": "A区",
+    "expected_zone": "A区"
+  },
+  "2": {
+    "name": "Medicine Box",
+    "zone": "B区",
+    "expected_zone": "B区"
+  },
+  "3": {
+    "name": "Book",
+    "zone": "C区",
+    "expected_zone": "C区"
+  },
+  "4": {
+    "name": "Bottle",
+    "zone": "A区",
+    "expected_zone": "B区"
+  }
+}

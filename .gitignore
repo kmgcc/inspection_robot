@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Runtime data
+*.log
+data/*.json
+data/*.csv
+data/*.db
+data/*.sqlite
+!data/.gitkeep
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Large local reference material
+RASPBOT-V2 AI视觉小车/
+经验与操作方法/
+_local_reference_not_for_git/
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.zip
+*.rar
+*.7z
+*.img
+*.iso
+*.step
+*.STEP
+
+# Office files are allowed only when deliberately added under docs/.
+*.pptx
+*.docx
+*.doc
+*.pdf
+!docs/**/*.pdf
+!docs/**/*.md
