@@ -1,0 +1,6 @@
+{
+  "A1": {"expected_items": ["item_01", "item_02", "item_03"]},
+  "A2": {"expected_items": ["item_04", "item_05"]},
+  "B1": {"expected_items": ["item_06", "item_07"]},
+  "B2": {"expected_items": ["item_08", "item_09", "item_10"]}
+}

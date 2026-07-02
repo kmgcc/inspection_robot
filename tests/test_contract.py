@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -27,6 +28,17 @@ CONTRACT_FIELDS = {
     "events",
 }
 
+EXTENSION_FIELDS = {
+    "current_shelf",
+    "current_target",
+    "pose",
+    "path",
+    "forbidden_zones",
+    "shelves",
+    "scan",
+    "llm_summary",
+}
+
 EVENT_FIELDS = {
     "id",
     "time",
@@ -40,11 +52,28 @@ EVENT_FIELDS = {
     "message",
 }
 
+EVENT_EXTENSION_FIELDS = {
+    "shelf_id",
+    "expected_shelf",
+    "target",
+    "source",
+    "frame_id",
+    "marker_family",
+    "ocr_text",
+    "color",
+    "image_class",
+    "evidence",
+}
+
 
 class ContractTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.app = create_app(ROOT)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.app = create_app(Path(self.tmp.name))
         self.client = self.app.test_client()
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
 
     def test_health_when_called_returns_ok(self) -> None:
         response = self.client.get("/health")
@@ -58,8 +87,11 @@ class ContractTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(CONTRACT_FIELDS.issubset(payload))
+        self.assertTrue(EXTENSION_FIELDS.issubset(payload))
         self.assertEqual(set(payload["obstacle"]), {"distance_mm", "blocked"})
         self.assertEqual(set(payload["alarm"]), {"level", "message"})
+        self.assertEqual(payload["scan"]["detections"], [])
+        self.assertEqual(payload["path"]["waypoints"], [])
 
     def test_start_when_posted_returns_ok(self) -> None:
         response = self.client.post("/api/start")
@@ -78,6 +110,7 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(status_response.status_code, 200)
         self.assertGreaterEqual(len(payload["events"]), 1)
         self.assertTrue(EVENT_FIELDS.issubset(payload["events"][0]))
+        self.assertTrue(EVENT_EXTENSION_FIELDS.issubset(payload["events"][0]))
         self.assertEqual(payload["events"][0]["tag_id"], "1")
 
 

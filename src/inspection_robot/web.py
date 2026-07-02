@@ -4,7 +4,7 @@ from pathlib import Path
 
 from flask import Flask, Response, jsonify, render_template, request
 
-from .config import load_tag_map
+from .config import load_shelf_manifest, load_tag_map, load_warehouse_map
 from .state import InspectionStore
 
 
@@ -15,7 +15,12 @@ def create_app(root: Path | None = None) -> Flask:
         template_folder=str(project_root / "src" / "inspection_robot" / "templates"),
         static_folder=str(project_root / "src" / "inspection_robot" / "static"),
     )
-    store = InspectionStore(load_tag_map(project_root))
+    store = InspectionStore(
+        load_tag_map(project_root),
+        warehouse_map=load_warehouse_map(project_root),
+        shelf_manifest=load_shelf_manifest(project_root),
+        root=project_root,
+    )
 
     @app.get("/")
     def index():

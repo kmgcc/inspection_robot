@@ -1,0 +1,231 @@
+from __future__ import annotations
+
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from inspection_robot.config import TagMap
+from inspection_robot.config import DEFAULT_SHELF_MANIFEST, DEFAULT_WAREHOUSE_MAP
+from inspection_robot.core.store import InspectionStore
+from inspection_robot.state import InspectionStore as StateInspectionStore
+
+
+def sample_tag_map() -> TagMap:
+    return {
+        "1": {
+            "name": "Apple",
+            "kind": "item",
+            "item_id": "item_01",
+            "expected_shelf": "A1",
+            "marker_family": "TAG36H11",
+            "expected_color": "RED",
+            "expected_ocr": "ITEM-01",
+            "expected_image_class": "BOTTLE",
+            "priority": 1,
+            "zone": "A区",
+            "expected_zone": "A区",
+        },
+        "2": {
+            "name": "Box",
+            "kind": "item",
+            "item_id": "item_02",
+            "expected_shelf": "A1",
+            "marker_family": "TAG36H11",
+            "expected_color": "BLUE",
+            "expected_ocr": "ITEM-02",
+            "expected_image_class": "BOX",
+            "priority": 1,
+            "zone": "A区",
+            "expected_zone": "A区",
+        },
+        "3": {
+            "name": "Tape",
+            "kind": "item",
+            "item_id": "item_03",
+            "expected_shelf": "A1",
+            "marker_family": "TAG36H11",
+            "expected_color": "GREEN",
+            "expected_ocr": "ITEM-03",
+            "expected_image_class": "CUBE",
+            "priority": 1,
+            "zone": "A区",
+            "expected_zone": "A区",
+        },
+        "4": {
+            "name": "Medicine",
+            "kind": "item",
+            "item_id": "item_04",
+            "expected_shelf": "A2",
+            "marker_family": "TAG36H11",
+            "expected_color": "YELLOW",
+            "expected_ocr": "ITEM-04",
+            "expected_image_class": "BOX",
+            "priority": 2,
+            "zone": "B区",
+            "expected_zone": "B区",
+        },
+        "101": {
+            "name": "A1",
+            "kind": "shelf",
+            "shelf_id": "A1",
+            "marker_family": "TAG36H11",
+            "ocr_label": "A1",
+            "priority": 1,
+            "zone": "A区",
+            "expected_zone": "A区",
+        },
+    }
+
+
+class StoreTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def make_store(self) -> InspectionStore:
+        return InspectionStore(
+            sample_tag_map(),
+            warehouse_map=DEFAULT_WAREHOUSE_MAP,
+            shelf_manifest=DEFAULT_SHELF_MANIFEST,
+            root=self.root,
+        )
+
+    def test_state_import_reexports_core_store(self) -> None:
+        self.assertIs(StateInspectionStore, InspectionStore)
+
+    def test_record_scan_result_is_persisted_and_loaded_on_startup(self) -> None:
+        store = self.make_store()
+        store.start()
+        store.record_scan_result("A1", ["item_01", "item_02", "item_03"], frame_id="frame-1")
+        snapshot = store.snapshot()
+
+        self.assertEqual(snapshot["task_status"], "NORMAL_LOGGED")
+        self.assertEqual(snapshot["events"][0]["type"], "shelf_scanned")
+        events_path = self.root / "data" / "events.json"
+        self.assertTrue(events_path.exists())
+
+        reloaded = self.make_store()
+        self.assertEqual(reloaded.snapshot()["events"][0]["type"], "shelf_scanned")
+
+    def test_detection_evidence_and_confirm_close_one_waiting_event(self) -> None:
+        store = self.make_store()
+        store.start()
+        store.record_detection_evidence("A1", [{"tag_id": "404"}], frame_id="frame-404")
+        store.record_scan_result("A1", ["item_01", "item_04"])
+        before = store.snapshot()
+        waiting_ids = [event["id"] for event in before["events"] if event["status"] == "waiting_confirm"]
+
+        confirmed = store.confirm(waiting_ids[0])
+        after = store.snapshot()
+
+        self.assertTrue(confirmed)
+        self.assertEqual(after["events"][0]["type"], "manual_confirm")
+        self.assertEqual(after["events"][1]["status"], "confirmed")
+        still_waiting = [event for event in after["events"] if event["status"] == "waiting_confirm"]
+        self.assertEqual(len(still_waiting), len(waiting_ids) - 1)
+        self.assertFalse(store.confirm(after["events"][1]["id"]))
+
+    def test_new_status_fields_are_updated_by_path_pose_and_shelf_methods(self) -> None:
+        store = self.make_store()
+        store.start()
+        store.record_path([(0, 0), (1, 0), (2, 0)], status="active")
+        store.record_pose(1, 0, "E")
+        store.record_shelf_arrival("A1")
+        snapshot = store.snapshot()
+
+        self.assertEqual(snapshot["task_status"], "ALIGNING_SHELF")
+        self.assertEqual(snapshot["current_shelf"], "A1")
+        self.assertEqual(snapshot["current_target"], "A1_SCAN")
+        self.assertEqual(snapshot["pose"], {"x": 1, "y": 0, "heading": "E"})
+        self.assertEqual(snapshot["path"]["waypoints"], [[0, 0], [1, 0], [2, 0]])
+
+    def test_finish_run_only_changes_state_after_patrol_started(self) -> None:
+        store = self.make_store()
+        store.finish_run()
+        self.assertEqual(store.snapshot()["events"], [])
+
+        store.start()
+        store.finish_run()
+        snapshot = store.snapshot()
+
+        self.assertEqual(snapshot["task_status"], "FINISHED")
+
+    def test_obstacle_status_stop_and_robot_status_transitions(self) -> None:
+        store = self.make_store()
+        store.start()
+        store.record_obstacle(320, True)
+        self.assertEqual(store.snapshot()["task_status"], "OBSTACLE_WAIT")
+
+        store.record_obstacle(None, False)
+        self.assertEqual(store.snapshot()["task_status"], "MOVING")
+
+        store.record_robot_status("TAG_DETECTED", "tag seen")
+        self.assertEqual(store.snapshot()["task_status"], "TAG_DETECTED")
+        self.assertEqual(store.snapshot()["last_message"], "tag seen")
+
+        store.stop()
+        self.assertEqual(store.snapshot()["task_status"], "STOPPED")
+
+    def test_write_failure_preserves_in_memory_event_and_reports_error(self) -> None:
+        store = self.make_store()
+        store.events_path = self.root
+        store.start()
+        store.record_scan_result("A1", ["item_01", "item_02", "item_03"])
+        snapshot = store.snapshot()
+
+        self.assertEqual(len(snapshot["events"]), 1)
+        self.assertIn("写入", snapshot["last_message"])
+
+    def test_export_events_csv_uses_stable_header(self) -> None:
+        store = self.make_store()
+        store.start()
+        store.record_scan_result("A1", ["item_01", "item_02", "item_03"])
+        header = store.export_events_csv().splitlines()[0]
+
+        self.assertEqual(header, "事件ID,时间,类型,标签ID,物品,区域,货架,期望货架,颜色,OCR,图像类别,优先级,状态,来源,说明")
+
+    def test_old_events_file_is_loaded(self) -> None:
+        events_path = self.root / "data" / "events.json"
+        events_path.parent.mkdir()
+        events_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "id": "old-1",
+                        "time": "2026-07-02T10:00:00",
+                        "type": "normal_item",
+                        "tag_id": "1",
+                        "item": "Apple",
+                        "zone": "A区",
+                        "expected_zone": "A区",
+                        "shelf_id": "A1",
+                        "expected_shelf": "A1",
+                        "source": "test",
+                        "priority": 1,
+                        "status": "normal",
+                        "message": "old",
+                    }
+                ],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        store = self.make_store()
+
+        self.assertEqual(store.snapshot()["events"][0]["id"], "old-1")
+
+
+if __name__ == "__main__":
+    unittest.main()
