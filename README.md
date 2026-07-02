@@ -22,6 +22,7 @@
 
 - [全局规划书](docs/PROJECT_PLAN.md)：新版项目定位、资料依据、场景设计、功能模块、分工和验收标准。
 - [共享 API 契约](docs/api_contract.md)：`/api/status`、事件字段、状态枚举、地图/货架配置和 `InspectionStore` 扩展方法。
+- [SSH 连接与运维手册](docs/ssh_operations.md)：小车账号、SSH/VNC 登录、代码推送、看板运行、Docker/ROS2 操作和硬件测试命令。
 - [0.1 基准计划](docs/plans/0.1-plan-shared-contract.md)：共享契约、配置格式和资料依据。
 - [1.1 队友计划：小车硬件与侧向感知](docs/plans/1.1-plan-robot-io.md)：麦轮运动、超声波、黑胶带禁区兜底、侧向摄像头和 runtime。
 - [2.1 队友计划：路径规划与货架规则](docs/plans/2.1-plan-core-contract.md)：固定地图、A*、货架清单、异常规则、状态机和测试。

@@ -52,5 +52,14 @@ async function confirmLatest() {
   await postAction("/api/confirm", { event_id: latestEventId });
 }
 
+async function playCarAudio() {
+  const res = await fetch("/api/audio/play", { method: "POST" });
+  const payload = await res.json();
+
+  if (!payload.ok) {
+    window.alert(`小车音频播放失败：${payload.error || "未知错误"}`);
+  }
+}
+
 loadStatus();
 setInterval(loadStatus, 1000);

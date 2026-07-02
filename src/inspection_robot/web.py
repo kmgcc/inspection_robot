@@ -4,6 +4,7 @@ from pathlib import Path
 
 from flask import Flask, Response, jsonify, render_template, request
 
+from .audio import start_default_audio
 from .config import load_tag_map
 from .state import InspectionStore
 
@@ -50,6 +51,11 @@ def create_app(root: Path | None = None) -> Flask:
         payload = request.get_json(silent=True) or {}
         confirmed = store.confirm(payload.get("event_id"))
         return jsonify({"ok": True, "confirmed": confirmed})
+
+    @app.post("/api/audio/play")
+    def api_audio_play():
+        payload, status = start_default_audio(project_root)
+        return jsonify(payload), status
 
     @app.get("/api/export.csv")
     def api_export_csv():
