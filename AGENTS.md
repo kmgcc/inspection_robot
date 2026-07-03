@@ -143,7 +143,64 @@ git push origin main
 - 小步提交，减少冲突范围
 - 及时沟通，避免同时修改同一文件
 
-### 2.4 代码风格与质量
+### 2.4 Git 分支策略建议
+
+**推荐分支结构：**
+
+```
+main (主分支，稳定版本)
+├── develop (开发分支，日常集成)
+│   ├── feature/xxx (功能分支)
+│   ├── feature/yyy
+│   └── bugfix/zzz
+└── release/v1.0 (发布分支，可选)
+```
+
+**分支命名规范：**
+- 功能分支：`feature/功能名称`（如 `feature/path-planner`）
+- 修复分支：`bugfix/问题描述`（如 `bugfix/tag-detection`）
+- 热修复分支：`hotfix/紧急修复`
+
+**分支操作流程：**
+
+```bash
+# 1. 从 develop 创建功能分支
+git checkout develop
+git pull origin develop
+git checkout -b feature/your-feature
+
+# 2. 在功能分支上开发
+git add .
+git commit -m "feat: 添加 xxx 功能"
+
+# 3. 完成后合并回 develop
+git checkout develop
+git pull origin develop
+git merge feature/your-feature
+git push origin develop
+
+# 4. 删除功能分支
+git branch -d feature/your-feature
+git push origin --delete feature/your-feature
+```
+
+**提交信息规范（Conventional Commits）：**
+- `feat:` 新功能
+- `fix:` 修复 bug
+- `docs:` 文档更新
+- `style:` 代码格式调整
+- `refactor:` 重构
+- `test:` 测试相关
+- `chore:` 构建/工具相关
+
+**示例：**
+```bash
+git commit -m "feat: 添加 A* 路径规划算法"
+git commit -m "fix: 修复 AprilTag 识别抖动问题"
+git commit -m "docs: 更新 API 契约文档"
+```
+
+### 2.5 代码风格与质量
 
 **Python 代码规范：**
 - 遵循 PEP 8 风格指南
@@ -156,6 +213,35 @@ git push origin main
 - 一个提交只做一件事
 - 提交前运行测试：`python3 -m unittest discover -s tests -v`
 
+### 2.6 .gitignore 重要条目说明
+
+**不应提交的文件：**
+
+| 类型 | 文件/目录 | 原因 |
+|------|-----------|------|
+| Python 缓存 | `__pycache__/`, `*.pyc` | 自动生成，无需版本控制 |
+| 运行时数据 | `data/*.json`, `data/*.csv` | 本地运行时数据，不应提交 |
+| 日志文件 | `*.log` | 运行时生成，不应提交 |
+| 虚拟环境 | `.venv/`, `venv/` | 本地环境，每人不同 |
+| IDE 配置 | `.idea/`, `.vscode/` | 个人编辑器配置 |
+| CodeGraph 索引 | `.codegraph/` | 本地生成的代码索引 |
+| 大型本地资料 | `RASPBOT-V2 AI视觉小车/` | 不应纳入版本控制 |
+| 视频文件 | `*.mp4`, `*.avi` | 文件过大，不适合 Git |
+| Office 文件 | `*.pptx`, `*.docx`, `*.pdf` | 除非明确放在 `docs/` 下 |
+
+**可以提交的文件：**
+- `docs/` 目录下的 `.md` 和 `.pdf` 文件
+- `data/.gitkeep`（保持目录结构）
+
+**提交前检查：**
+```bash
+# 查看将要提交的文件
+git status
+
+# 确认没有意外添加大文件
+git diff --cached --stat
+```
+
 ---
 
 ## 三、代码查看与分析
@@ -167,8 +253,8 @@ inspection_robot/
 ├── app.py                          # Flask 看板入口
 ├── config/                         # 配置文件目录
 │   ├── tag_map.json                # 标签字典（物品、货架）
-│   ├── warehouse_map.json          # 仓库地图配置（待创建）
-│   └── shelf_manifest.json         # 货架清单配置（待创建）
+│   ├── warehouse_map.json          # 仓库地图配置（按 2.1 计划创建）
+│   └── shelf_manifest.json         # 货架清单配置（按 2.1 计划创建）
 ├── data/                           # 运行时数据目录
 │   └── .gitkeep
 ├── docs/                           # 文档目录
@@ -222,7 +308,8 @@ inspection_robot/
 
 ```bash
 # 1. 安装 CodeGraph CLI（如果未安装）
-# 参考官方文档安装
+npm install -g @anthropic/codegraph
+# 或者参考官方文档：https://github.com/anthropics/codegraph
 
 # 2. 初始化索引（首次使用）
 codegraph index .
@@ -348,7 +435,12 @@ python3 app.py
 py -3 app.py
 ```
 
-**访问地址：** `http://127.0.0.1:5050`
+**访问地址：** `http://127.0.0.1:5050`（脚本默认端口）
+
+**端口配置说明：**
+- `scripts/run_local.sh` 默认端口：**5050**
+- `app.py` 默认端口：**5000**（直接运行 `python3 app.py` 时）
+- 可通过环境变量自定义：`PORT=8080 scripts/run_local.sh`
 
 **本地验证：**
 
@@ -379,7 +471,7 @@ CAR_HOST=pi@新的IP scripts/deploy_to_car.sh
 scripts/run_on_car.sh
 
 # 4. 访问小车上的服务
-# 浏览器打开：http://192.168.1.11:5000
+# 浏览器打开：http://192.168.1.11:5000（小车默认端口 5000）
 
 # 5. 查看运行日志
 ssh pi@192.168.1.11
@@ -668,7 +760,7 @@ evidence_mismatch, manual_confirm, llm_summary
 | 201-220 | 定位点预留 |
 | 301-320 | 禁区/特殊点预留 |
 
-### 6.2 warehouse_map.json（待创建）
+### 6.2 warehouse_map.json（按 2.1 计划创建）
 
 仓库地图配置。
 
@@ -685,7 +777,7 @@ evidence_mismatch, manual_confirm, llm_summary
 }
 ```
 
-### 6.3 shelf_manifest.json（待创建）
+### 6.3 shelf_manifest.json（按 2.1 计划创建）
 
 货架清单配置。
 
