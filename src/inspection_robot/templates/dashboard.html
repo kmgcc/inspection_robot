@@ -10,7 +10,7 @@
   <header class="app-header">
     <div>
       <h1>固定仓库巡逻看板</h1>
-      <span class="subtitle">麦克纳姆轮路径规划、货架扫描、异常复核与日志导出</span>
+      <span class="subtitle">货架通道循环巡逻、侧向扫描、列端转向、异常复核与日志导出</span>
     </div>
     <div class="header-status">
       <span id="run_id">-</span>
@@ -30,8 +30,20 @@
 
       <div class="metric-grid">
         <div class="metric">
+          <label>运行模式</label>
+          <strong id="run_mode">-</strong>
+        </div>
+        <div class="metric">
+          <label>真实硬件</label>
+          <strong id="hardware_connected">-</strong>
+        </div>
+        <div class="metric">
           <label>当前阶段</label>
           <strong id="task_status">-</strong>
+        </div>
+        <div class="metric">
+          <label>当前轮次</label>
+          <strong id="patrol_cycle">-</strong>
         </div>
         <div class="metric">
           <label>当前目标点</label>
@@ -58,8 +70,20 @@
           <strong id="obstacle_state">-</strong>
         </div>
         <div class="metric">
+          <label>黑胶带/列端</label>
+          <strong id="boundary_state">-</strong>
+        </div>
+        <div class="metric">
           <label>告警等级</label>
           <strong id="alarm_state">-</strong>
+        </div>
+        <div class="metric">
+          <label>音频提示</label>
+          <strong id="audio_state">-</strong>
+        </div>
+        <div class="metric">
+          <label>云台状态</label>
+          <strong id="gimbal_state">-</strong>
         </div>
         <div class="metric">
           <label>当前位置</label>
@@ -83,7 +107,7 @@
         <button type="button" data-post="/api/control/turn_left_90">左转 90</button>
         <button type="button" data-post="/api/control/turn_right_90">右转 90</button>
         <button type="button" data-post="/api/control/stop">电机停止</button>
-        <button type="button" data-post="/api/audio/announce">预留播报</button>
+        <button type="button" data-post="/api/audio/announce">音频测试</button>
         <button type="button" data-post="/api/demo/path">模拟规划路径</button>
         <button type="button" data-post="/api/demo/obstacle">模拟障碍等待</button>
         <button type="button" data-post="/api/demo/obstacle/clear">模拟障碍解除</button>
@@ -102,16 +126,15 @@
 
     <section class="panel map-panel" aria-labelledby="map-title">
       <div class="section-title compact">
-        <h2 id="map-title">固定地图与路径</h2>
+        <h2 id="map-title">巡检拓扑与轨迹</h2>
         <span id="path_counter">-</span>
       </div>
-      <div class="map-grid" id="warehouse_map" aria-label="仓库固定地图"></div>
+      <div class="topology-list" id="warehouse_map" aria-label="运行中生成的巡检拓扑"></div>
       <div class="legend">
-        <span><i class="legend-start"></i>起点/回家点</span>
-        <span><i class="legend-shelf"></i>货架扫描点</span>
-        <span><i class="legend-path"></i>规划路径</span>
-        <span><i class="legend-forbidden"></i>黑胶带禁区</span>
-        <span><i class="legend-robot"></i>当前估计位置</span>
+        <span><i class="legend-shelf"></i>已识别货架</span>
+        <span><i class="legend-path"></i>经过关系</span>
+        <span><i class="legend-forbidden"></i>列端/非预期边界</span>
+        <span><i class="legend-robot"></i>当前节点</span>
       </div>
     </section>
 

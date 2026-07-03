@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from .audio import start_audio_cue
 from .config import ShelfManifest, WarehouseMap
 from .core.planner import PlanningError, RouteStep, plan_patrol_route
 from .core.store import InspectionStore
@@ -32,6 +33,9 @@ class RobotRuntimeConfig:
     scan_interval_seconds: float = 1.5
     turn_90_seconds: float = 0.55
     turn_speed: int = 30
+    obstacle_wait_seconds: float = 6.0
+    avoidance_body_seconds: float = 0.45
+    max_avoidance_depth: int = 2
     boundary_cooldown_seconds: float = 1.2
     turns_per_cycle: int = 2
     skip_scan_cycles: int = 1
@@ -96,11 +100,14 @@ class RobotRuntime:
         try:
             self.run_continuous_patrol()
         except RobotHardwareError as exc:
-            self.store.record_robot_status("STOPPED", f"runtime hardware error: {exc}")
+            self.store.record_run_mode("robot", False)
+            self.store.record_robot_status("ERROR", f"runtime hardware error: {exc}")
 
     def run_continuous_patrol(self, max_iterations: int | None = None) -> None:
+        self.store.record_run_mode("robot", True)
         self.store.start()
-        self.store.record_robot_status("MOVING", "自主巡检循环已启动，小车慢速前进。")
+        self.store.record_cycle(1, True)
+        self.store.record_robot_status("PATROLLING", "自主巡检循环已启动，小车慢速前进。")
         self._initialize_gimbal()
 
         iterations = 0
@@ -117,9 +124,11 @@ class RobotRuntime:
             if self._handle_tape_boundary_turn():
                 turn_count += 1
                 cycle_count = turn_count // max(1, self.config.turns_per_cycle)
+                current_cycle = cycle_count + 1
+                self.store.record_cycle(current_cycle, current_cycle <= self.config.skip_scan_cycles)
                 self.store.record_robot_status(
-                    "TURNING",
-                    f"检测到货架尽头黑胶带，已顺时针转向；当前完成 {cycle_count} 个循环。",
+                    "TURNING_AT_BOUNDARY",
+                    f"检测到货架尽头黑胶带，已顺时针转向；当前第 {current_cycle} 轮。",
                 )
                 continue
 
@@ -128,10 +137,12 @@ class RobotRuntime:
 
             self.motion.move_forward_slow(duration_seconds=self.config.step_seconds)
             iterations += 1
-            self.store.record_robot_status("MOVING", f"自主巡检中，第 {cycle_count + 1} 轮。")
+            current_cycle = cycle_count + 1
+            self.store.record_cycle(current_cycle, current_cycle <= self.config.skip_scan_cycles)
+            self.store.record_robot_status("PATROLLING", f"自主巡检中，第 {current_cycle} 轮。")
 
             now = time.monotonic()
-            if cycle_count >= self.config.skip_scan_cycles and now - last_scan_at >= self.config.scan_interval_seconds:
+            if now - last_scan_at >= self.config.scan_interval_seconds:
                 self._scan_visible_shelf()
                 last_scan_at = now
 
@@ -186,18 +197,33 @@ class RobotRuntime:
     def _handle_tape_boundary_turn(self) -> bool:
         tape_state = self.sensors.read_tape_boundary()
         detector = getattr(self.sensors, "full_tape_boundary_detected", sensors.full_tape_boundary_detected)
-        if not detector(tape_state):
+        if detector(tape_state):
+            now = time.monotonic()
+            if now - self._last_boundary_turn < self.config.boundary_cooldown_seconds:
+                return False
+            self._last_boundary_turn = now
+            self.motion.stop()
+            self.alarm.show_warning()
+            self.store.record_boundary(tape_state, True, "column_end")
+            self.store.record_forbidden_zone("black-tape-end", True)
+            self.motion.rotate_right_slow(speed=self.config.turn_speed, duration_seconds=self.config.turn_90_seconds)
+            self.store.record_boundary_turn("clockwise", 90)
+            self.store.record_forbidden_zone("black-tape-end", False)
+            self.alarm.show_normal()
+            return True
+
+        if tape_state is None or not sensors.tape_boundary_detected(tape_state):
             return False
         now = time.monotonic()
         if now - self._last_boundary_turn < self.config.boundary_cooldown_seconds:
             return False
         self._last_boundary_turn = now
         self.motion.stop()
-        self.alarm.show_warning()
-        self.store.record_forbidden_zone("black-tape-end", True)
-        self.motion.rotate_right_slow(speed=self.config.turn_speed, duration_seconds=self.config.turn_90_seconds)
-        self.store.record_forbidden_zone("black-tape-end", False)
-        self.alarm.show_normal()
+        self.alarm.show_obstacle_wait()
+        self.store.record_boundary(tape_state, False, "unexpected_partial")
+        self.store.record_obstacle(None, True, waiting_seconds=int(self.config.obstacle_wait_seconds))
+        self._play_cue("obstacle", "检测到非预期黑胶带，进入保护处理。")
+        self._wait_for_obstacle_clear(None)
         return True
 
     def _guard_obstacle(self, shelf_id: str | None) -> bool:
@@ -220,7 +246,8 @@ class RobotRuntime:
         self._obstacle_active = True
         self.motion.stop()
         self.alarm.show_obstacle_wait()
-        self.store.record_obstacle(distance_mm, True)
+        self.store.record_obstacle(distance_mm, True, waiting_seconds=int(self.config.obstacle_wait_seconds))
+        self._play_cue("obstacle", "检测到障碍物，小车停车等待。")
         self._wait_for_obstacle_clear(shelf_id)
         return True
 
@@ -230,8 +257,11 @@ class RobotRuntime:
             return
         try:
             initializer()
+            yaw = getattr(self.gimbal, "DEFAULT_YAW_ANGLE", None)
+            pitch = getattr(self.gimbal, "DEFAULT_PITCH_ANGLE", None)
+            self.store.record_gimbal_initialized(yaw=yaw, pitch=pitch)
         except RobotHardwareError as exc:
-            self.store.record_robot_status("MOVING", f"camera gimbal init skipped: {exc}")
+            self.store.record_robot_status("PATROLLING", f"camera gimbal init skipped: {exc}")
 
     def _scan_visible_shelf(self) -> None:
         detections = self._collect_detections()
@@ -239,9 +269,12 @@ class RobotRuntime:
         if shelf_id is None:
             return
         self.store.record_shelf_arrival(shelf_id)
+        self._play_cue("first", f"扫描到 {shelf_id} 货架。")
         frame_id = f"runtime-{shelf_id.lower()}-{int(time.time())}"
         if detections:
             self.store.record_detection_evidence(shelf_id, detections, frame_id=frame_id)
+            if any(str(detection.get("kind", "item")) == "item" or detection.get("item_id") for detection in detections):
+                self._play_cue("following", f"识别到 {shelf_id} 货架上的物品。")
         else:
             self.store.record_scan_result(shelf_id, [], frame_id=frame_id)
 
@@ -255,7 +288,8 @@ class RobotRuntime:
         return None
 
     def _wait_for_obstacle_clear(self, shelf_id: str | None) -> None:
-        deadline = time.monotonic() + 3.0
+        started_at = time.monotonic()
+        deadline = started_at + self.config.obstacle_wait_seconds
         while not self._stop_event.is_set() and time.monotonic() < deadline:
             time.sleep(self.config.poll_seconds)
             distance_mm = self.sensors.read_distance_mm()
@@ -265,20 +299,37 @@ class RobotRuntime:
                 self.alarm.clear_alarm()
                 self.store.record_obstacle(distance_mm, False)
                 return
-        self._avoid_to_safe_side(shelf_id)
+        self._avoid_to_safe_side(shelf_id, nested_level=0)
 
-    def _avoid_to_safe_side(self, shelf_id: str | None) -> None:
-        safe_side = self._safe_side_for_shelf(shelf_id)
-        if safe_side == "W":
-            self.motion.strafe_left_slow(duration_seconds=self.config.step_seconds)
-        elif safe_side == "E":
-            self.motion.strafe_right_slow(duration_seconds=self.config.step_seconds)
-        elif safe_side == "N":
-            self.motion.move_forward_slow(duration_seconds=self.config.step_seconds)
-        elif safe_side == "S":
-            self.motion.move_backward_slow(duration_seconds=self.config.step_seconds)
-        else:
-            self.store.record_robot_status("OBSTACLE_WAIT", "obstacle remains and no safe side is configured")
+    def _avoid_to_safe_side(self, shelf_id: str | None, nested_level: int = 0) -> None:
+        if nested_level > self.config.max_avoidance_depth:
+            self.motion.stop()
+            self.store.record_robot_status("ERROR", "避障嵌套次数过多，已停车等待人工处理。")
+            return
+        self.store.record_avoidance_step("start_right_side_avoidance", nested_level=nested_level)
+        steps = [
+            ("clockwise_90", lambda: self.motion.rotate_right_slow(speed=self.config.turn_speed, duration_seconds=self.config.turn_90_seconds)),
+            ("forward_body_1", lambda: self.motion.move_forward_slow(duration_seconds=self.config.avoidance_body_seconds)),
+            ("counterclockwise_90_a", lambda: self.motion.rotate_left_slow(speed=self.config.turn_speed, duration_seconds=self.config.turn_90_seconds)),
+            ("forward_body_2", lambda: self.motion.move_forward_slow(duration_seconds=self.config.avoidance_body_seconds)),
+            ("counterclockwise_90_b", lambda: self.motion.rotate_left_slow(speed=self.config.turn_speed, duration_seconds=self.config.turn_90_seconds)),
+            ("forward_body_3", lambda: self.motion.move_forward_slow(duration_seconds=self.config.avoidance_body_seconds)),
+            ("clockwise_restore_90", lambda: self.motion.rotate_right_slow(speed=self.config.turn_speed, duration_seconds=self.config.turn_90_seconds)),
+        ]
+        for label, action in steps:
+            if self._stop_event.is_set():
+                self.motion.stop()
+                return
+            self.store.record_avoidance_step(label, nested_level=nested_level)
+            action()
+            distance_mm = self.sensors.read_distance_mm()
+            if distance_mm is not None and distance_mm < self.config.blocked_distance_mm:
+                self.motion.stop()
+                self.store.record_obstacle(distance_mm, True, waiting_seconds=int(self.config.obstacle_wait_seconds))
+                self._avoid_to_safe_side(shelf_id, nested_level=nested_level + 1)
+        self._blocked_count = 0
+        self._obstacle_active = False
+        self.store.record_obstacle(self.sensors.read_distance_mm(), False)
 
     def _safe_side_for_shelf(self, shelf_id: str | None) -> str | None:
         if shelf_id is None:
@@ -306,10 +357,13 @@ class RobotRuntime:
         shelf_id = str(step["shelf_id"])
         self.motion.stop()
         self.store.record_shelf_arrival(shelf_id, target=step["target"])
+        self._play_cue("first", f"扫描到 {shelf_id} 货架。")
         detections = self._collect_detections()
         frame_id = f"runtime-{shelf_id.lower()}-{int(time.time())}"
         if detections:
             self.store.record_detection_evidence(shelf_id, detections, frame_id=frame_id)
+            if any(str(detection.get("kind", "item")) == "item" or detection.get("item_id") for detection in detections):
+                self._play_cue("following", f"识别到 {shelf_id} 货架上的物品。")
         else:
             self.store.record_scan_result(shelf_id, [], frame_id=frame_id)
 
@@ -329,6 +383,10 @@ class RobotRuntime:
         except (RobotHardwareError, VisionDependencyError) as exc:
             self.store.record_robot_status("SCANNING_SHELF", f"side camera scan skipped: {exc}")
         return detections
+
+    def _play_cue(self, cue: str, message: str) -> None:
+        payload, status = start_audio_cue(self.store.root, cue)
+        self.store.record_audio_cue(cue, message if status == 200 else message, None if status == 200 else str(payload.get("error")))
 
 
 def start_background_runtime(

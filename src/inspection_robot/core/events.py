@@ -9,6 +9,23 @@ JsonScalar: TypeAlias = str | int | float | bool | None
 JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 
 EVENT_TYPES = {
+    "runtime_started",
+    "runtime_stopped",
+    "manual_control",
+    "gimbal_initialized",
+    "shelf_detected",
+    "item_detected",
+    "first_pass_observed",
+    "cycle_started",
+    "cycle_completed",
+    "boundary_full_black",
+    "boundary_turn",
+    "unexpected_boundary",
+    "obstacle_avoidance_started",
+    "obstacle_avoidance_step",
+    "obstacle_avoidance_nested",
+    "audio_cue",
+    "light_cue",
     "path_planned",
     "path_step",
     "path_replanned",
@@ -33,7 +50,7 @@ EVENT_TYPES = {
     "missing_tag",
     "duplicate_tag",
 }
-EVENT_STATUSES = {"normal", "waiting_confirm", "confirmed", "info", "warning"}
+EVENT_STATUSES = {"normal", "waiting_confirm", "confirmed", "info", "warning", "error"}
 CSV_HEADER = [
     "事件ID",
     "时间",

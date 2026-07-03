@@ -19,6 +19,7 @@ Type=simple
 User=pi
 WorkingDirectory=$CAR_DIR
 Environment=RUN_MODE=robot
+Environment=AUTO_START_RUNTIME=0
 Environment=PORT=$PORT
 Environment=ROBOT_SLOW_SPEED=30
 ExecStartPre=/bin/sh -c '/home/pi/project_demo/raspbot/killprocess.sh || true'

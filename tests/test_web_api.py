@@ -102,7 +102,7 @@ class WebApiTest(unittest.TestCase):
         obstacle_clear = self.client.post("/api/demo/obstacle/clear")
         self.assertEqual(obstacle_clear.status_code, 200)
         payload = self.client.get("/api/status").get_json()
-        self.assertEqual(payload["task_status"], "MOVING")
+        self.assertEqual(payload["task_status"], "PATROLLING")
         self.assertFalse(payload["obstacle"]["blocked"])
 
         forbidden = self.client.post("/api/demo/forbidden")

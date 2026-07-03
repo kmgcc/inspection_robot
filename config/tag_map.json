@@ -29,40 +29,39 @@
     "name": "Green Cube",
     "kind": "item",
     "item_id": "item_03",
-    "expected_shelf": "A1",
+    "expected_shelf": "A2",
     "marker_family": "TAG36H11",
     "expected_color": "GREEN",
     "expected_ocr": "ITEM-03",
     "expected_image_class": "CUBE",
     "priority": 1,
     "zone": "A区",
-    "expected_zone": "A1"
+    "expected_zone": "A2"
   },
   "4": {
     "name": "Yellow Medicine Box",
     "kind": "item",
     "item_id": "item_04",
-    "expected_shelf": "A2",
+    "expected_shelf": "A3",
     "marker_family": "TAG36H11",
     "expected_color": "YELLOW",
     "expected_ocr": "ITEM-04",
     "expected_image_class": "BOX",
     "priority": 2,
-    "zone": "B区",
-    "expected_zone": "A2"
+    "zone": "A区",
+    "expected_zone": "A3"
   },
   "5": {
     "name": "White Sensor",
     "kind": "item",
     "item_id": "item_05",
-    "expected_shelf": "A2",
+    "expected_shelf": "A4",
     "marker_family": "TAG36H11",
-    "expected_color": "WHITE",
     "expected_ocr": "ITEM-05",
     "expected_image_class": "MODULE",
     "priority": 1,
-    "zone": "B区",
-    "expected_zone": "A2"
+    "zone": "A区",
+    "expected_zone": "A4"
   },
   "6": {
     "name": "Black Cable",
@@ -74,60 +73,60 @@
     "expected_ocr": "ITEM-06",
     "expected_image_class": "COIL",
     "priority": 1,
-    "zone": "C区",
+    "zone": "B区",
     "expected_zone": "B1"
   },
   "7": {
     "name": "Gray Tool",
     "kind": "item",
     "item_id": "item_07",
-    "expected_shelf": "B1",
+    "expected_shelf": "B2",
     "marker_family": "TAG36H11",
     "expected_color": "GRAY",
     "expected_ocr": "ITEM-07",
     "expected_image_class": "TOOL",
     "priority": 1,
-    "zone": "C区",
-    "expected_zone": "B1"
+    "zone": "B区",
+    "expected_zone": "B2"
   },
   "8": {
     "name": "Orange Battery",
     "kind": "item",
     "item_id": "item_08",
-    "expected_shelf": "B2",
+    "expected_shelf": "B3",
     "marker_family": "TAG36H11",
     "expected_color": "ORANGE",
     "expected_ocr": "ITEM-08",
     "expected_image_class": "BATTERY",
     "priority": 2,
-    "zone": "D区",
-    "expected_zone": "B2"
+    "zone": "B区",
+    "expected_zone": "B3"
   },
   "9": {
     "name": "Purple Label",
     "kind": "item",
     "item_id": "item_09",
-    "expected_shelf": "B2",
+    "expected_shelf": "B4",
     "marker_family": "TAG36H11",
     "expected_color": "PURPLE",
     "expected_ocr": "ITEM-09",
     "expected_image_class": "CARD",
     "priority": 1,
-    "zone": "D区",
-    "expected_zone": "B2"
+    "zone": "B区",
+    "expected_zone": "B4"
   },
   "10": {
     "name": "Silver Screw",
     "kind": "item",
     "item_id": "item_10",
-    "expected_shelf": "B2",
+    "expected_shelf": "B4",
     "marker_family": "TAG36H11",
     "expected_color": "SILVER",
     "expected_ocr": "ITEM-10",
     "expected_image_class": "CYLINDER",
     "priority": 1,
-    "zone": "D区",
-    "expected_zone": "B2"
+    "zone": "B区",
+    "expected_zone": "B4"
   },
   "101": {
     "name": "A1",
@@ -146,27 +145,67 @@
     "marker_family": "TAG36H11",
     "ocr_label": "A2",
     "priority": 1,
-    "zone": "B区",
+    "zone": "A区",
     "expected_zone": "A2"
   },
   "103": {
+    "name": "A3",
+    "kind": "shelf",
+    "shelf_id": "A3",
+    "marker_family": "TAG36H11",
+    "ocr_label": "A3",
+    "priority": 1,
+    "zone": "A区",
+    "expected_zone": "A3"
+  },
+  "104": {
+    "name": "A4",
+    "kind": "shelf",
+    "shelf_id": "A4",
+    "marker_family": "TAG36H11",
+    "ocr_label": "A4",
+    "priority": 1,
+    "zone": "A区",
+    "expected_zone": "A4"
+  },
+  "105": {
     "name": "B1",
     "kind": "shelf",
     "shelf_id": "B1",
     "marker_family": "TAG36H11",
     "ocr_label": "B1",
     "priority": 1,
-    "zone": "C区",
+    "zone": "B区",
     "expected_zone": "B1"
   },
-  "104": {
+  "106": {
     "name": "B2",
     "kind": "shelf",
     "shelf_id": "B2",
     "marker_family": "TAG36H11",
     "ocr_label": "B2",
     "priority": 1,
-    "zone": "D区",
+    "zone": "B区",
     "expected_zone": "B2"
+  },
+  "107": {
+    "name": "B3",
+    "kind": "shelf",
+    "shelf_id": "B3",
+    "marker_family": "TAG36H11",
+    "ocr_label": "B3",
+    "priority": 1,
+    "zone": "B区",
+    "expected_zone": "B3"
+  },
+  "108": {
+    "name": "B4",
+    "kind": "shelf",
+    "shelf_id": "B4",
+    "marker_family": "TAG36H11",
+    "ocr_label": "B4",
+    "priority": 1,
+    "zone": "B区",
+    "expected_zone": "B4"
   }
 }

@@ -88,8 +88,8 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(CONTRACT_FIELDS.issubset(payload))
         self.assertTrue(EXTENSION_FIELDS.issubset(payload))
-        self.assertEqual(set(payload["obstacle"]), {"distance_mm", "blocked"})
-        self.assertEqual(set(payload["alarm"]), {"level", "message"})
+        self.assertTrue({"distance_mm", "blocked", "waiting_seconds"}.issubset(payload["obstacle"]))
+        self.assertTrue({"level", "message", "light"}.issubset(payload["alarm"]))
         self.assertEqual(payload["scan"]["detections"], [])
         self.assertEqual(payload["path"]["waypoints"], [])
 

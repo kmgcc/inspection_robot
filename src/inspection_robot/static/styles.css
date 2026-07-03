@@ -257,6 +257,65 @@ button.demo {
   gap: 4px;
 }
 
+.topology-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: 8px;
+}
+
+.topology-node {
+  min-height: 68px;
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.topology-node strong {
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.topology-node span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.topology-node.shelf {
+  border-color: #b7dfc8;
+  background: #effaf4;
+}
+
+.topology-node.boundary_turn,
+.topology-node.forbidden {
+  border-color: #f1c27d;
+  background: #fff8ed;
+}
+
+.topology-node.current {
+  box-shadow: inset 0 0 0 2px #384253;
+}
+
+.topology-node.warning {
+  border-color: #f2b8b5;
+  background: #fff1f0;
+}
+
+.topology-edges {
+  grid-column: 1 / -1;
+  padding: 9px 10px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .map-cell {
   aspect-ratio: 1;
   min-height: 34px;

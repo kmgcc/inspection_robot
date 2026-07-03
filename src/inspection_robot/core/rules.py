@@ -15,6 +15,7 @@ def evaluate_shelf_scan(
     *,
     source: str = "core",
     frame_id: str | None = None,
+    skip_missing: bool = False,
 ) -> list[EventRecord]:
     expected = set(manifest.get(shelf_id, {"expected_items": []})["expected_items"])
     counts = Counter(detected_items)
@@ -59,26 +60,42 @@ def evaluate_shelf_scan(
                 )
             )
 
-    for item_id in sorted(expected - set(counts)):
-        tag_entry = item_lookup.get(item_id)
-        tag_id, info = tag_entry if tag_entry is not None else (item_id, {"name": item_id, "priority": 2})
-        events.append(
-            make_event(
-                "missing_item",
-                tag_id=tag_id,
-                item=str(info["name"]),
-                shelf_id=shelf_id,
-                expected_shelf=shelf_id,
-                priority=max(int(info.get("priority", 1)), 2),
-                status="waiting_confirm",
-                message=f"{shelf_id} 货架缺少 {info['name']}。",
-                source=source,
-                frame_id=frame_id,
+    missing_items = sorted(expected - set(counts))
+    if not skip_missing:
+        for item_id in missing_items:
+            tag_entry = item_lookup.get(item_id)
+            tag_id, info = tag_entry if tag_entry is not None else (item_id, {"name": item_id, "priority": 2})
+            events.append(
+                make_event(
+                    "missing_item",
+                    tag_id=tag_id,
+                    item=str(info["name"]),
+                    shelf_id=shelf_id,
+                    expected_shelf=shelf_id,
+                    priority=max(int(info.get("priority", 1)), 2),
+                    status="waiting_confirm",
+                    message=f"{shelf_id} 货架缺少 {info['name']}。",
+                    source=source,
+                    frame_id=frame_id,
+                )
             )
-        )
 
     if events:
         return events
+    if skip_missing and missing_items:
+        return [
+            make_event(
+                "first_pass_observed",
+                item="-",
+                shelf_id=shelf_id,
+                expected_shelf=shelf_id,
+                priority=1,
+                status="info",
+                message=f"第 1 轮已观察 {shelf_id} 货架，暂不做缺货判断。",
+                source=source,
+                frame_id=frame_id,
+            )
+        ]
     return [
         make_event(
             "shelf_scanned",
@@ -102,6 +119,7 @@ def evaluate_detection_evidence(
     *,
     source: str = "core",
     frame_id: str | None = None,
+    skip_missing: bool = False,
 ) -> list[EventRecord]:
     detected_items: list[str] = []
     events: list[EventRecord] = []
@@ -142,7 +160,17 @@ def evaluate_detection_evidence(
                     evidence={"mismatch": mismatch},
                 )
             )
-    events.extend(evaluate_shelf_scan(shelf_id, detected_items, manifest, tag_map, source=source, frame_id=frame_id))
+    events.extend(
+        evaluate_shelf_scan(
+            shelf_id,
+            detected_items,
+            manifest,
+            tag_map,
+            source=source,
+            frame_id=frame_id,
+            skip_missing=skip_missing,
+        )
+    )
     return events
 
 

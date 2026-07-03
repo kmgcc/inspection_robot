@@ -241,15 +241,6 @@ def fake_detection_provider(**_: object) -> Iterator[dict[str, object]]:
         "ocr_text": "ITEM-02",
         "image_class": "BOX",
     }
-    yield {
-        "tag_id": "3",
-        "kind": "item",
-        "item_id": "item_03",
-        "marker_family": "TAG36H11",
-        "color": "GREEN",
-        "ocr_text": "ITEM-03",
-        "image_class": "CUBE",
-    }
 
 
 if __name__ == "__main__":

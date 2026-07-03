@@ -1,12 +1,16 @@
 {
-  "grid_size": [8, 6],
+  "grid_size": [10, 6],
   "start": [0, 0],
   "home": [0, 0],
   "forbidden_cells": [[2, 2], [2, 3], [4, 3]],
   "shelf_points": {
-    "A1": {"scan_pose": [3, 1, "E"], "safe_side": "W"},
-    "A2": {"scan_pose": [5, 1, "E"], "safe_side": "W"},
-    "B1": {"scan_pose": [3, 4, "W"], "safe_side": "E"},
-    "B2": {"scan_pose": [5, 4, "W"], "safe_side": "E"}
+    "A1": {"scan_pose": [2, 1, "E"], "safe_side": "W"},
+    "A2": {"scan_pose": [4, 1, "E"], "safe_side": "W"},
+    "A3": {"scan_pose": [6, 1, "E"], "safe_side": "W"},
+    "A4": {"scan_pose": [8, 1, "E"], "safe_side": "W"},
+    "B4": {"scan_pose": [8, 4, "W"], "safe_side": "E"},
+    "B3": {"scan_pose": [6, 4, "W"], "safe_side": "E"},
+    "B2": {"scan_pose": [4, 4, "W"], "safe_side": "E"},
+    "B1": {"scan_pose": [2, 4, "W"], "safe_side": "E"}
   }
 }

@@ -10,6 +10,10 @@ from .events import EventRecord, JsonValue
 
 ObstacleState: TypeAlias = dict[str, int | bool | None]
 AlarmState: TypeAlias = dict[str, str]
+BoundaryState: TypeAlias = dict[str, JsonValue]
+AudioState: TypeAlias = dict[str, JsonValue]
+GimbalState: TypeAlias = dict[str, JsonValue]
+TopologyState: TypeAlias = dict[str, JsonValue]
 ZoneState: TypeAlias = dict[str, JsonValue]
 PoseState: TypeAlias = dict[str, int | str]
 PathState: TypeAlias = dict[str, JsonValue]
@@ -20,11 +24,27 @@ StatusSnapshot: TypeAlias = dict[str, JsonValue | list[EventRecord]]
 
 
 def default_obstacle() -> ObstacleState:
-    return {"distance_mm": None, "blocked": False}
+    return {"distance_mm": None, "blocked": False, "waiting_seconds": 0}
 
 
 def default_alarm() -> AlarmState:
-    return {"level": "normal", "message": "正常"}
+    return {"level": "normal", "message": "正常", "light": "green"}
+
+
+def default_boundary() -> BoundaryState:
+    return {"tape_state": None, "full_black": False, "kind": "none"}
+
+
+def default_audio() -> AudioState:
+    return {"last_cue": None, "last_message": None, "last_error": None}
+
+
+def default_gimbal() -> GimbalState:
+    return {"side_initialized": False, "yaw": None, "pitch": None}
+
+
+def default_topology() -> TopologyState:
+    return {"status": "empty", "nodes": [], "edges": [], "current_node": None}
 
 
 def default_path() -> PathState:
@@ -38,6 +58,8 @@ def default_scan() -> ScanState:
 @dataclass(slots=True)
 class DashboardState:
     run_id: str = "local-001"
+    run_mode: str = "simulate"
+    hardware_connected: bool = False
     task_status: str = "IDLE"
     robot_status: str = "待命"
     current_tag: str | None = None
@@ -45,11 +67,17 @@ class DashboardState:
     current_zone: str | None = None
     current_shelf: str | None = None
     current_target: str | None = None
+    patrol_cycle: int = 1
+    skip_shortage_detection: bool = True
     pose: PoseState | None = None
     path: PathState = field(default_factory=default_path)
     forbidden_zones: list[ForbiddenZoneState] = field(default_factory=list)
     shelves: list[ShelfState] = field(default_factory=list)
     scan: ScanState = field(default_factory=default_scan)
+    boundary: BoundaryState = field(default_factory=default_boundary)
+    audio: AudioState = field(default_factory=default_audio)
+    gimbal: GimbalState = field(default_factory=default_gimbal)
+    topology: TopologyState = field(default_factory=default_topology)
     llm_summary: str | None = None
     last_message: str = "系统已启动，等待开始巡检。"
     obstacle: ObstacleState = field(default_factory=default_obstacle)

@@ -3,7 +3,8 @@ set -euo pipefail
 
 CAR_HOST="${CAR_HOST:-pi@192.168.1.11}"
 CAR_DIR="${CAR_DIR:-/home/pi/temp/inspection_robot}"
-RUN_MODE="${RUN_MODE:-simulate}"
+RUN_MODE="${RUN_MODE:-robot}"
+AUTO_START_RUNTIME="${AUTO_START_RUNTIME:-0}"
 PORT="${PORT:-5000}"
 
 case "$RUN_MODE" in
@@ -27,6 +28,9 @@ if [ -z \"\$PYTHON_CMD\" ]; then
   echo '未找到可用的 Python 3.10+ 解释器。' >&2
   exit 1
 fi
-RUN_MODE='$RUN_MODE' PORT='$PORT' nohup \"\$PYTHON_CMD\" app.py > app.log 2>&1 & echo \$!
+if [ '$RUN_MODE' = 'robot' ] && [ -x /home/pi/project_demo/raspbot/killprocess.sh ]; then
+  /bin/sh /home/pi/project_demo/raspbot/killprocess.sh || true
+fi
+RUN_MODE='$RUN_MODE' AUTO_START_RUNTIME='$AUTO_START_RUNTIME' PORT='$PORT' nohup \"\$PYTHON_CMD\" app.py > app.log 2>&1 & echo \$!
 "
-echo "Started on $CAR_HOST:$CAR_DIR with RUN_MODE=$RUN_MODE, PORT=$PORT"
+echo "Started on $CAR_HOST:$CAR_DIR with RUN_MODE=$RUN_MODE, AUTO_START_RUNTIME=$AUTO_START_RUNTIME, PORT=$PORT"

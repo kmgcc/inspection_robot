@@ -4,7 +4,7 @@ from pathlib import Path
 
 from flask import Flask, Response, jsonify, render_template, request
 
-from .audio import start_default_audio
+from .audio import start_audio_cue, start_default_audio
 from .config import load_shelf_manifest, load_tag_map, load_warehouse_map
 from .core.planner import PlanningError, plan_patrol_route
 from .robot import gimbal, motion
@@ -29,6 +29,7 @@ def create_app(root: Path | None = None) -> Flask:
     app.config["WAREHOUSE_MAP"] = store.warehouse_map
     app.config["SHELF_MANIFEST"] = store.shelf_manifest
     app.config["RUN_MODE"] = "simulate"
+    store.record_run_mode("simulate", False)
 
     @app.get("/")
     def index():
@@ -40,9 +41,10 @@ def create_app(root: Path | None = None) -> Flask:
 
     @app.post("/api/start")
     def api_start():
-        runtime = app.config.get("ROBOT_RUNTIME")
-        if runtime is not None:
+        if _robot_mode_enabled():
+            runtime = _ensure_runtime()
             runtime.start()
+            store.record_run_mode("robot", True)
         else:
             store.start()
         return jsonify({"ok": True})
@@ -110,6 +112,7 @@ def create_app(root: Path | None = None) -> Flask:
     def api_demo_scan_abnormal(shelf_id: str):
         normalized_shelf = _normalize_shelf_id(shelf_id)
         detected_items = _abnormal_items_for_shelf(normalized_shelf)
+        store.record_cycle(2, False)
         store.record_shelf_arrival(normalized_shelf)
         store.record_scan_result(normalized_shelf, detected_items, frame_id=f"demo-{normalized_shelf.lower()}-abnormal")
         return jsonify({"ok": True, "shelf_id": normalized_shelf, "detected_items": detected_items})
@@ -150,6 +153,7 @@ def create_app(root: Path | None = None) -> Flask:
         store.record_obstacle(420, False)
         store.record_forbidden_zone("black-tape-F1", True)
         store.record_forbidden_zone("black-tape-F1", False)
+        store.record_cycle(2, False)
         store.record_shelf_arrival("A2")
         store.record_scan_result("A2", _abnormal_items_for_shelf("A2"), frame_id="demo-a2-abnormal")
         store.record_detection_evidence(
@@ -188,24 +192,33 @@ def create_app(root: Path | None = None) -> Flask:
     @app.post("/api/audio/announce")
     def api_audio_announce():
         payload = request.get_json(silent=True) or {}
-        message = str(payload.get("message") or "语音播报接口已预留，等待后续音频文件接入。")
-        store.record_robot_status(store.snapshot()["task_status"], message)
-        return jsonify({"ok": True, "queued": False, "message": message})
+        cue = str(payload.get("cue") or "default")
+        message = str(payload.get("message") or f"音频提示：{cue}")
+        result, status = start_audio_cue(project_root, cue)
+        store.record_audio_cue(cue, message, None if status == 200 else str(result.get("error")))
+        return jsonify({**result, "queued": status == 200, "message": message}), status
 
     @app.post("/api/gimbal/init")
     def api_gimbal_init():
+        if not _robot_mode_enabled():
+            store.record_robot_status("IDLE", "当前为 simulate mode；请用 RUN_MODE=robot 在小车上启动后再初始化云台。")
+            return jsonify({"ok": False, "error": "当前服务是 simulate mode，请用 RUN_MODE=robot 启动小车端服务。"}), 409
         try:
             gimbal.initialize_side_camera()
         except RobotHardwareError as exc:
+            store.record_run_mode("robot", False)
+            store.record_robot_status("ERROR", str(exc))
             return jsonify({"ok": False, "error": str(exc)}), 500
-        store.record_robot_status(store.snapshot()["task_status"], "摄像云台已初始化到侧向货架视角。")
+        store.record_run_mode("robot", True)
+        store.record_gimbal_initialized(yaw=getattr(gimbal, "DEFAULT_YAW_ANGLE", None), pitch=getattr(gimbal, "DEFAULT_PITCH_ANGLE", None))
         return jsonify({"ok": True})
 
     @app.post("/api/control/<command>")
     def api_control(command: str):
-        runtime = app.config.get("ROBOT_RUNTIME")
-        if runtime is None:
-            return jsonify({"ok": False, "error": "manual robot control requires RUN_MODE=robot"}), 409
+        if not _robot_mode_enabled():
+            store.record_robot_status("IDLE", "当前为 simulate mode；手动控制不会发送到底盘。请用 RUN_MODE=robot 启动小车端服务。")
+            return jsonify({"ok": False, "error": "当前服务是 simulate mode，请用 RUN_MODE=robot 启动小车端服务。"}), 409
+        runtime = _ensure_runtime()
         payload = request.get_json(silent=True) or {}
         speed = _int_payload(payload, "speed", 30)
         duration = _float_payload(payload, "duration_seconds", 0.35)
@@ -213,8 +226,12 @@ def create_app(root: Path | None = None) -> Flask:
             runtime.stop()
             _run_manual_command(command, speed=speed, duration_seconds=duration, runtime=runtime)
         except (RobotHardwareError, ValueError) as exc:
+            store.record_run_mode("robot", False)
+            store.record_robot_status("ERROR", str(exc))
             return jsonify({"ok": False, "error": str(exc)}), 400
-        store.record_robot_status("STOPPED", f"手动控制完成：{command}")
+        store.record_run_mode("robot", True)
+        status = "STOPPED" if command == "stop" else "MANUAL_CONTROL"
+        store.record_robot_status(status, f"手动控制完成：{command}")
         return jsonify({"ok": True, "command": command})
 
     @app.get("/api/export.csv")
@@ -275,6 +292,18 @@ def create_app(root: Path | None = None) -> Flask:
             raise ValueError(f"unknown manual command: {command}")
         action()
 
+    def _robot_mode_enabled() -> bool:
+        return str(app.config.get("RUN_MODE", "simulate")).strip().lower() == "robot"
+
+    def _ensure_runtime() -> object:
+        runtime = app.config.get("ROBOT_RUNTIME")
+        if runtime is None:
+            from .runtime import RobotRuntime
+
+            runtime = RobotRuntime(store, store.warehouse_map, store.shelf_manifest)
+            app.config["ROBOT_RUNTIME"] = runtime
+        return runtime
+
     def _normalize_shelf_id(shelf_id: str) -> str:
         return shelf_id.strip().upper() or "A1"
 
@@ -325,6 +354,8 @@ def create_app(root: Path | None = None) -> Flask:
         if not expected:
             return [wrong_item]
         first = expected[0]
+        if len(expected) == 1:
+            return [wrong_item, wrong_item]
         return [first, first, wrong_item]
 
     def _tag_for_item(item_id: str):

@@ -168,7 +168,7 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(store.snapshot()["task_status"], "OBSTACLE_WAIT")
 
         store.record_obstacle(None, False)
-        self.assertEqual(store.snapshot()["task_status"], "MOVING")
+        self.assertEqual(store.snapshot()["task_status"], "PATROLLING")
 
         store.record_robot_status("TAG_DETECTED", "tag seen")
         self.assertEqual(store.snapshot()["task_status"], "TAG_DETECTED")
