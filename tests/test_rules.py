@@ -112,6 +112,13 @@ class RulesTest(unittest.TestCase):
         self.assertIn("unknown_item", event_types)
         self.assertTrue(all(event["status"] == "waiting_confirm" for event in events))
 
+    def test_empty_shelf_scan_reports_scan_failed_when_missing_detection_is_enabled(self) -> None:
+        events = rules.evaluate_shelf_scan("A1", [], MANIFEST, TAG_MAP, frame_id="empty-1")
+
+        self.assertEqual([event["type"] for event in events], ["scan_failed"])
+        self.assertEqual(events[0]["status"], "waiting_confirm")
+        self.assertEqual(events[0]["frame_id"], "empty-1")
+
     def test_detection_evidence_reports_mismatched_item_evidence(self) -> None:
         events = rules.evaluate_detection_evidence(
             "A1",
@@ -124,6 +131,20 @@ class RulesTest(unittest.TestCase):
         mismatch = next(event for event in events if event["type"] == "evidence_mismatch")
         self.assertEqual(mismatch["tag_id"], "1")
         self.assertEqual(mismatch["color"], "BLUE")
+
+    def test_detection_evidence_preserves_untagged_visual_evidence(self) -> None:
+        events = rules.evaluate_detection_evidence(
+            "A1",
+            [{"ocr_text": "ITEM-01", "color": "RED", "image_class": "BOTTLE", "confidence": 0.72}],
+            MANIFEST,
+            TAG_MAP,
+            frame_id="untagged-1",
+        )
+
+        self.assertEqual([event["type"] for event in events], ["untagged_evidence"])
+        self.assertEqual(events[0]["status"], "waiting_confirm")
+        self.assertEqual(events[0]["ocr_text"], "ITEM-01")
+        self.assertEqual(events[0]["evidence"], {"ocr_text": "ITEM-01", "color": "RED", "image_class": "BOTTLE", "confidence": 0.72})
 
     def test_detection_evidence_reports_shelf_ocr_mismatch(self) -> None:
         events = rules.evaluate_detection_evidence(

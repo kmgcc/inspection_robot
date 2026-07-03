@@ -15,13 +15,14 @@ from inspection_robot.vision import tag_detector
 
 
 class RobotAdapterTest(unittest.TestCase):
-    def test_motion_wraps_vendor_functions_and_stops(self) -> None:
+    def test_motion_wraps_vendor_functions_and_leaves_stop_explicit(self) -> None:
         fake = FakeMotionModule()
         original = motion._motion_module
         motion._motion_module = lambda: fake  # type: ignore[assignment]
         try:
             motion.move_forward_slow(speed=42, duration_seconds=0)
             motion.strafe_right_slow(speed=20, duration_seconds=0)
+            motion.stop()
         finally:
             motion._motion_module = original  # type: ignore[assignment]
 
@@ -30,7 +31,6 @@ class RobotAdapterTest(unittest.TestCase):
             [
                 ("move_forward", 42),
                 ("move_forward", 42),
-                ("stop", None),
                 ("move_right", 20),
                 ("move_right", 20),
                 ("stop", None),

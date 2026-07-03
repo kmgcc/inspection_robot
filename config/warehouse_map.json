@@ -1,6 +1,7 @@
 {
   "grid_size": [10, 6],
   "start": [0, 0],
+  "start_heading": "E",
   "home": [0, 0],
   "forbidden_cells": [[2, 2], [2, 3], [4, 3]],
   "shelf_points": {

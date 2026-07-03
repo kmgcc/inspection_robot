@@ -21,6 +21,7 @@ class PlanningError(ValueError):
 class RouteStep(TypedDict):
     target: str
     cell: list[int]
+    heading: str | None
     shelf_id: str | None
     action: str
     path: list[list[int]]
@@ -76,12 +77,13 @@ def plan_patrol_route(map_config: WarehouseMap, shelf_order: list[str]) -> list[
             raise PlanningError(f"unknown shelf target: {shelf_id}")
         pose = map_config["shelf_points"][shelf_id]["scan_pose"]
         goal = (int(pose[0]), int(pose[1]))
+        heading = str(pose[2])
         segment = plan_path(current, goal, grid_size, forbidden)
-        route.append({"target": f"{shelf_id}_SCAN", "cell": [goal[0], goal[1]], "shelf_id": shelf_id, "action": "scan", "path": _json_path(segment)})
+        route.append({"target": f"{shelf_id}_SCAN", "cell": [goal[0], goal[1]], "heading": heading, "shelf_id": shelf_id, "action": "scan", "path": _json_path(segment)})
         current = goal
     home = (map_config["home"][0], map_config["home"][1])
     home_path = plan_path(current, home, grid_size, forbidden)
-    route.append({"target": "HOME", "cell": [home[0], home[1]], "shelf_id": None, "action": "home", "path": _json_path(home_path)})
+    route.append({"target": "HOME", "cell": [home[0], home[1]], "heading": None, "shelf_id": None, "action": "home", "path": _json_path(home_path)})
     return route
 
 

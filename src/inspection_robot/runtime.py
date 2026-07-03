@@ -20,6 +20,7 @@ from .vision.tag_detector import VisionDependencyError
 
 Cell = tuple[int, int]
 DetectionProvider = Callable[..., Iterator[Mapping[str, object]]]
+HEADINGS = ["N", "E", "S", "W"]
 
 
 @dataclass(slots=True)
@@ -171,7 +172,7 @@ class RobotRuntime:
         self.store.start()
         self.store.record_path(flatten_route(route), status="active")
         current = (int(self.warehouse_map["start"][0]), int(self.warehouse_map["start"][1]))
-        heading = "E"
+        heading = _normalize_heading(str(self.warehouse_map.get("start_heading", "E")), "E")
         executed = 0
 
         for step in route:
@@ -183,11 +184,12 @@ class RobotRuntime:
                 if cell == current:
                     self.store.record_pose(cell[0], cell[1], heading, source="runtime")
                     continue
-                if not self._guard_before_move(step.get("shelf_id")):
+                guarded_heading = self._guard_before_move(step.get("shelf_id"), heading)
+                if guarded_heading is None:
                     return
+                heading = guarded_heading
                 next_heading = heading_for_delta(current, cell, heading)
-                self._move_between(current, cell, heading, next_heading)
-                heading = next_heading
+                heading = self._move_between(current, cell, heading, next_heading)
                 current = cell
                 executed += 1
                 self.store.record_pose(current[0], current[1], heading, source="runtime")
@@ -195,16 +197,18 @@ class RobotRuntime:
                     self.store.record_robot_status("STOPPED", f"runtime stopped after {executed} waypoint steps")
                     return
             if step["action"] == "scan" and step["shelf_id"] is not None:
-                self._scan_shelf(step)
+                heading = self._scan_shelf(step, heading)
 
         self.motion.stop()
         self.alarm.show_normal()
         self.store.finish_run()
 
-    def _guard_before_move(self, shelf_id: str | None) -> bool:
+    def _guard_before_move(self, shelf_id: str | None, heading: str) -> str | None:
         if self._handle_tape_boundary_turn():
-            return True
-        return self._guard_obstacle(shelf_id)
+            return _heading_after_right_turn(heading)
+        if not self._guard_obstacle(shelf_id):
+            return None
+        return heading
 
     def _handle_tape_boundary_turn(self, tape_state: tuple[int, int, int, int] | None = None) -> bool:
         if tape_state is None:
@@ -311,15 +315,7 @@ class RobotRuntime:
         shelf_id = self._shelf_id_from_detections(detections)
         if shelf_id is None:
             return
-        self.store.record_shelf_arrival(shelf_id)
-        self._play_cue("first", f"扫描到 {shelf_id} 货架。")
-        frame_id = f"runtime-{shelf_id.lower()}-{int(time.time())}"
-        if detections:
-            self.store.record_detection_evidence(shelf_id, detections, frame_id=frame_id)
-            if any(str(detection.get("kind", "item")) == "item" or detection.get("item_id") for detection in detections):
-                self._play_cue("following", f"识别到 {shelf_id} 货架上的物品。")
-        else:
-            self.store.record_scan_result(shelf_id, [], frame_id=frame_id)
+        self._perform_scan(shelf_id, f"{shelf_id}_SCAN", detections)
 
     def _shelf_id_from_detections(self, detections: list[dict[str, object]]) -> str | None:
         for detection in detections:
@@ -414,19 +410,36 @@ class RobotRuntime:
             return None
         return str(point["safe_side"]).upper()
 
-    def _move_between(self, current: Cell, target: Cell, heading: str, target_heading: str) -> None:
+    def _move_between(self, current: Cell, target: Cell, heading: str, target_heading: str) -> str:
         dx = target[0] - current[0]
         dy = target[1] - current[1]
         if abs(dx) + abs(dy) != 1:
             raise ValueError(f"non-adjacent waypoint transition: {current} -> {target}")
-        self._turn_to_heading(heading, target_heading)
-        self._forward_step(speed=self.config.patrol_speed, duration_seconds=self.config.step_seconds)
+        if heading not in HEADINGS or target_heading not in HEADINGS:
+            self._turn_to_heading(heading, target_heading)
+            self._forward_step(speed=self.config.patrol_speed, duration_seconds=self.config.step_seconds)
+            return target_heading
+        delta = (HEADINGS.index(target_heading) - HEADINGS.index(heading)) % len(HEADINGS)
+        if delta == 0:
+            self._forward_step(speed=self.config.patrol_speed, duration_seconds=self.config.step_seconds)
+        elif delta == 1:
+            self.motion.strafe_right_slow(speed=self.config.patrol_speed, duration_seconds=self.config.step_seconds)
+            self.motion.stop()
+            self._settle()
+        elif delta == 2:
+            self._turn_to_heading(heading, target_heading)
+            self._forward_step(speed=self.config.patrol_speed, duration_seconds=self.config.step_seconds)
+            return target_heading
+        else:
+            self.motion.strafe_left_slow(speed=self.config.patrol_speed, duration_seconds=self.config.step_seconds)
+            self.motion.stop()
+            self._settle()
+        return heading
 
     def _turn_to_heading(self, heading: str, target_heading: str) -> None:
-        headings = ["N", "E", "S", "W"]
-        if heading not in headings or target_heading not in headings:
+        if heading not in HEADINGS or target_heading not in HEADINGS:
             return
-        delta = (headings.index(target_heading) - headings.index(heading)) % len(headings)
+        delta = (HEADINGS.index(target_heading) - HEADINGS.index(heading)) % len(HEADINGS)
         if delta == 1:
             self._turn_90("right")
         elif delta == 2:
@@ -462,16 +475,33 @@ class RobotRuntime:
         if delay > 0:
             time.sleep(delay)
 
-    def _scan_shelf(self, step: RouteStep) -> None:
+    def _scan_shelf(self, step: RouteStep, heading: str) -> str:
         shelf_id = str(step["shelf_id"])
+        scan_heading = step.get("heading")
+        if isinstance(scan_heading, str):
+            self._turn_to_heading(heading, scan_heading)
+            heading = scan_heading
         self.motion.stop()
-        self.store.record_shelf_arrival(shelf_id, target=step["target"])
+        self._perform_scan(shelf_id, step["target"])
+        return heading
+
+    def _perform_scan(
+        self,
+        shelf_id: str,
+        target: str,
+        detections: list[dict[str, object]] | None = None,
+    ) -> None:
+        self.store.record_shelf_arrival(shelf_id, target=target)
         self._play_cue("first", f"扫描到 {shelf_id} 货架。")
-        detections = self._collect_detections()
         frame_id = f"runtime-{shelf_id.lower()}-{int(time.time())}"
-        if detections:
-            self.store.record_detection_evidence(shelf_id, detections, frame_id=frame_id)
-            if any(str(detection.get("kind", "item")) == "item" or detection.get("item_id") for detection in detections):
+        self.store.record_scan_start(shelf_id, target=target, frame_id=frame_id)
+        scan_detections = self._collect_detections() if detections is None else detections
+        if scan_detections:
+            self.store.record_detection_evidence(shelf_id, scan_detections, frame_id=frame_id)
+            if any(
+                str(detection.get("kind", "item")) == "item" or detection.get("item_id")
+                for detection in scan_detections
+            ):
                 self._play_cue("following", f"识别到 {shelf_id} 货架上的物品。")
         else:
             self.store.record_scan_result(shelf_id, [], frame_id=frame_id)
@@ -525,11 +555,22 @@ def heading_for_delta(current: Cell, target: Cell, fallback: str = "E") -> str:
         return "E"
     if dx < 0:
         return "W"
+    # Grid coordinates use screen-style rows: larger y means farther south.
     if dy > 0:
         return "S"
     if dy < 0:
         return "N"
     return fallback
+
+
+def _heading_after_right_turn(heading: str) -> str:
+    normalized = _normalize_heading(heading, "E")
+    return HEADINGS[(HEADINGS.index(normalized) + 1) % len(HEADINGS)]
+
+
+def _normalize_heading(value: str, fallback: str) -> str:
+    normalized = value.strip().upper()
+    return normalized if normalized in HEADINGS else fallback
 
 
 def _cells_from_step(step: RouteStep) -> list[Cell]:

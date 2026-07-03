@@ -104,17 +104,21 @@ def create_app(root: Path | None = None) -> Flask:
     def api_demo_scan_normal(shelf_id: str):
         normalized_shelf = _normalize_shelf_id(shelf_id)
         detections = _detections_for_expected_shelf(normalized_shelf)
+        frame_id = f"demo-{normalized_shelf.lower()}-normal"
         store.record_shelf_arrival(normalized_shelf)
-        store.record_detection_evidence(normalized_shelf, detections, frame_id=f"demo-{normalized_shelf.lower()}-normal")
+        store.record_scan_start(normalized_shelf, target=f"{normalized_shelf}_SCAN", frame_id=frame_id)
+        store.record_detection_evidence(normalized_shelf, detections, frame_id=frame_id)
         return jsonify({"ok": True, "shelf_id": normalized_shelf, "detections": detections})
 
     @app.post("/api/demo/scan/<shelf_id>/abnormal")
     def api_demo_scan_abnormal(shelf_id: str):
         normalized_shelf = _normalize_shelf_id(shelf_id)
         detected_items = _abnormal_items_for_shelf(normalized_shelf)
+        frame_id = f"demo-{normalized_shelf.lower()}-abnormal"
         store.record_cycle(2, False)
         store.record_shelf_arrival(normalized_shelf)
-        store.record_scan_result(normalized_shelf, detected_items, frame_id=f"demo-{normalized_shelf.lower()}-abnormal")
+        store.record_scan_start(normalized_shelf, target=f"{normalized_shelf}_SCAN", frame_id=frame_id)
+        store.record_scan_result(normalized_shelf, detected_items, frame_id=frame_id)
         return jsonify({"ok": True, "shelf_id": normalized_shelf, "detected_items": detected_items})
 
     @app.post("/api/demo/evidence-mismatch")

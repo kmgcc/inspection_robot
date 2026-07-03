@@ -15,6 +15,32 @@ from .status import (
     new_dashboard_state,
 )
 
+MAX_EVENTS = 1000
+POSE_PROTECTED_STATUSES = {
+    "ALIGNING_SHELF",
+    "SCANNING_SHELF",
+    "ANALYZING",
+    "WAIT_CONFIRM",
+    "ABNORMAL_ALARM",
+    "OBSTACLE_WAIT",
+    "REROUTING",
+    "FORBIDDEN_ZONE_WAIT",
+    "GIMBAL_INIT",
+    "TURNING_AT_BOUNDARY",
+    "AVOIDING_OBSTACLE",
+    "NESTED_AVOIDANCE",
+    "STOPPED",
+    "FINISHED",
+    "CONFIRMED",
+}
+OBSTACLE_CLEAR_RESUME_STATUSES = {
+    "OBSTACLE_WAIT",
+    "AVOIDING_OBSTACLE",
+    "NESTED_AVOIDANCE",
+    "PATROLLING",
+    "MOVING",
+}
+
 
 class InspectionStore:
     def __init__(
@@ -177,11 +203,13 @@ class InspectionStore:
 
     def record_pose(self, x: int, y: int, heading: str, source: str = "runtime") -> None:
         with self.lock:
+            message = f"当前位置更新为 ({x}, {y}, {heading})。"
             self.state.pose = {"x": x, "y": y, "heading": heading}
-            self.state.task_status = "MOVING"
-            self.state.robot_status = "移动中"
-            self.state.last_message = f"当前位置更新为 ({x}, {y}, {heading})。"
-            self._append_event_locked(make_event("path_step", shelf_id=self.state.current_shelf, target=self.state.current_target, source=source, message=self.state.last_message))
+            if self.state.task_status not in POSE_PROTECTED_STATUSES:
+                self.state.task_status = "MOVING"
+                self.state.robot_status = "移动中"
+                self.state.last_message = message
+            self._append_event_locked(make_event("path_step", shelf_id=self.state.current_shelf, target=self.state.current_target, source=source, message=message))
             self._persist_events_locked()
 
     def record_path(self, waypoints: list[tuple[int, int]], status: str = "active") -> None:
@@ -196,6 +224,20 @@ class InspectionStore:
     def record_shelf_arrival(self, shelf_id: str, target: str | None = None) -> None:
         with self.lock:
             self._record_shelf_arrival_locked(shelf_id, target=target, source="runtime")
+
+    def record_scan_start(self, shelf_id: str, target: str | None = None, frame_id: str | None = None) -> None:
+        with self.lock:
+            self.state.current_shelf = shelf_id
+            self.state.current_target = target or f"{shelf_id}_SCAN"
+            self.state.scan = {"active": True, "shelf_id": shelf_id, "detected_items": [], "frame_id": frame_id, "detections": []}
+            self.state.task_status = "SCANNING_SHELF"
+            self.state.robot_status = "侧向扫描中"
+            self.state.last_message = f"{shelf_id} 货架开始侧向扫描。"
+            self._mark_shelf_locked(shelf_id, "scanning", 0)
+            self._append_event_locked(
+                make_event("shelf_aligned", shelf_id=shelf_id, target=self.state.current_target, status="info", source="runtime", frame_id=frame_id, message=self.state.last_message)
+            )
+            self._persist_events_locked()
 
     def record_scan_result(self, shelf_id: str, detected_items: list[str], frame_id: str | None = None) -> None:
         with self.lock:
@@ -229,13 +271,20 @@ class InspectionStore:
     def record_forbidden_zone(self, zone_id: str | None, blocked: bool) -> None:
         with self.lock:
             zone_key = zone_id or "map"
-            self.state.task_status = "FORBIDDEN_ZONE_WAIT" if blocked else "MOVING"
-            self.state.robot_status = "禁区等待" if blocked else "移动中"
-            self.state.last_message = f"禁区 {zone_key} {'触发' if blocked else '解除'}。"
-            self.state.alarm = {"level": "warning" if blocked else "normal", "message": "禁区等待" if blocked else "正常", "light": "blue" if blocked else "green"}
+            message = f"禁区 {zone_key} {'触发' if blocked else '解除'}。"
+            if blocked:
+                self.state.task_status = "FORBIDDEN_ZONE_WAIT"
+                self.state.robot_status = "禁区等待"
+                self.state.last_message = message
+                self.state.alarm = {"level": "warning", "message": "禁区等待", "light": "blue"}
+            elif self.state.task_status == "FORBIDDEN_ZONE_WAIT":
+                self.state.task_status = "MOVING"
+                self.state.robot_status = "移动中"
+                self.state.last_message = message
+                self.state.alarm = {"level": "normal", "message": "正常", "light": "green"}
             self._upsert_forbidden_zone_locked(zone_key, blocked)
             self._append_event_locked(
-                make_event("forbidden_zone_detected", shelf_id=self.state.current_shelf, priority=2 if blocked else 1, status="warning" if blocked else "info", message=self.state.last_message, source="line_sensor")
+                make_event("forbidden_zone_detected", shelf_id=self.state.current_shelf, priority=2 if blocked else 1, status="warning" if blocked else "info", message=message, source="line_sensor")
             )
             self._persist_events_locked()
 
@@ -250,12 +299,13 @@ class InspectionStore:
                 event_type = "obstacle_wait"
                 message = self.state.last_message
             else:
-                self.state.task_status = "PATROLLING"
-                self.state.robot_status = "巡逻中"
-                self.state.last_message = "障碍已解除，恢复巡检。"
-                self.state.alarm = {"level": "normal", "message": "正常", "light": "green"}
-                event_type = "obstacle_clear"
                 message = "障碍已解除，恢复巡检。"
+                if self.state.task_status in OBSTACLE_CLEAR_RESUME_STATUSES:
+                    self.state.task_status = "PATROLLING"
+                    self.state.robot_status = "巡逻中"
+                    self.state.last_message = message
+                    self.state.alarm = {"level": "normal", "message": "正常", "light": "green"}
+                event_type = "obstacle_clear"
             self._append_event_locked(make_event(event_type, shelf_id=self.state.current_shelf, priority=1, status="info", message=message, source="ultrasonic"))
             self._persist_events_locked()
 
@@ -364,6 +414,7 @@ class InspectionStore:
 
     def _append_event_locked(self, event: EventRecord) -> None:
         self.state.events.insert(0, event)
+        del self.state.events[MAX_EVENTS:]
 
     def _load_events(self) -> None:
         if not self.events_path.exists():

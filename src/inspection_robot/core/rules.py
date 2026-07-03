@@ -22,6 +22,21 @@ def evaluate_shelf_scan(
     item_lookup = _items_by_item_id(tag_map)
     events: list[EventRecord] = []
 
+    if not detected_items and expected and not skip_missing:
+        return [
+            make_event(
+                "scan_failed",
+                item="-",
+                shelf_id=shelf_id,
+                expected_shelf=shelf_id,
+                priority=2,
+                status="waiting_confirm",
+                message=f"{shelf_id} 货架本次扫描未识别到有效物品，建议重试或人工复核。",
+                source=source,
+                frame_id=frame_id,
+            )
+        ]
+
     for item_id in counts:
         tag_entry = item_lookup.get(item_id)
         if tag_entry is None:
@@ -126,6 +141,9 @@ def evaluate_detection_evidence(
     for detection in detections:
         tag_id = _text(detection, "tag_id")
         if tag_id is None:
+            event = _untagged_evidence(detection, shelf_id, source, frame_id)
+            if event is not None:
+                events.append(event)
             continue
         info = tag_map.get(tag_id)
         if info is None:
@@ -160,17 +178,18 @@ def evaluate_detection_evidence(
                     evidence={"mismatch": mismatch},
                 )
             )
-    events.extend(
-        evaluate_shelf_scan(
-            shelf_id,
-            detected_items,
-            manifest,
-            tag_map,
-            source=source,
-            frame_id=frame_id,
-            skip_missing=skip_missing,
+    if detected_items or not events:
+        events.extend(
+            evaluate_shelf_scan(
+                shelf_id,
+                detected_items,
+                manifest,
+                tag_map,
+                source=source,
+                frame_id=frame_id,
+                skip_missing=skip_missing,
+            )
         )
-    )
     return events
 
 
@@ -240,6 +259,32 @@ def _unknown_item(tag_id: str, shelf_id: str, source: str, frame_id: str | None)
         message=f"{shelf_id} 货架识别到未知标签 {tag_id}。",
         source=source,
         frame_id=frame_id,
+    )
+
+
+def _untagged_evidence(detection: Mapping[str, JsonValue], shelf_id: str, source: str, frame_id: str | None) -> EventRecord | None:
+    evidence: dict[str, JsonValue] = {}
+    for field in ("marker_family", "ocr_text", "color", "image_class", "confidence"):
+        value = detection.get(field)
+        if value is not None:
+            evidence[field] = value
+    if not evidence:
+        return None
+    return make_event(
+        "untagged_evidence",
+        item="Unknown",
+        shelf_id=shelf_id,
+        expected_shelf=shelf_id,
+        priority=2,
+        status="waiting_confirm",
+        message=f"{shelf_id} 货架发现无法绑定 AprilTag 的视觉证据，需人工复核。",
+        source=source,
+        frame_id=frame_id,
+        marker_family=_text(detection, "marker_family"),
+        ocr_text=_text(detection, "ocr_text"),
+        color=_text(detection, "color"),
+        image_class=_text(detection, "image_class"),
+        evidence=evidence,
     )
 
 

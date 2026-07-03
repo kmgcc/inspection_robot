@@ -66,8 +66,41 @@ class RuntimeTest(unittest.TestCase):
         self.assertGreater(len(snapshot["path"]["waypoints"]), 0)
         self.assertTrue(any(event["type"] == "shelf_scanned" for event in snapshot["events"]))
         self.assertIn("move_forward", fake_motion.calls)
-        self.assertNotIn("strafe_right", fake_motion.calls)
+        self.assertIn("strafe_right", fake_motion.calls)
         self.assertNotIn("move_backward", fake_motion.calls)
+        self.assertGreaterEqual(fake_motion.calls.count("rotate_right"), 2)
+
+    def test_runtime_uses_configured_start_heading(self) -> None:
+        warehouse_map = {
+            "grid_size": [3, 3],
+            "start": [0, 0],
+            "start_heading": "N",
+            "home": [0, 0],
+            "forbidden_cells": [],
+            "shelf_points": {"A1": {"scan_pose": [1, 0, "E"], "safe_side": "W"}},
+        }
+        store = InspectionStore(
+            DEFAULT_TAG_MAP,
+            warehouse_map=warehouse_map,
+            shelf_manifest={"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            root=self.root,
+        )
+        fake_motion = FakeMotion()
+        runtime = RobotRuntime(
+            store,
+            warehouse_map,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=RobotRuntimeConfig(step_seconds=0, poll_seconds=0, scan_timeout_seconds=0, action_settle_seconds=0),
+            motion_adapter=fake_motion,
+            sensor_adapter=FakeSensors(distances=[400] * 4, tapes=[(1, 1, 1, 1)] * 4),
+            alarm_adapter=FakeAlarm(),
+            detection_provider=fake_detection_provider,
+        )
+
+        runtime.run_patrol(shelf_order=["A1"], max_steps=1)
+
+        self.assertIn("strafe_right", fake_motion.calls)
+        self.assertNotIn("move_forward", fake_motion.calls)
 
     def test_runtime_reports_obstacle_wait_and_clear(self) -> None:
         store = self.make_store()
@@ -113,6 +146,7 @@ class RuntimeTest(unittest.TestCase):
         self.assertTrue(any(event["type"] == "forbidden_zone_detected" for event in snapshot["events"]))
         self.assertIn("rotate_right", fake_motion.calls)
         self.assertNotIn("move_backward", fake_motion.calls)
+        self.assertEqual(snapshot["pose"]["heading"], "S")
 
     def test_continuous_patrol_treats_center_tape_as_line_follow_forward(self) -> None:
         store = self.make_store()

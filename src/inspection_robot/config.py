@@ -58,10 +58,18 @@ def validate_warehouse_map(data: JsonValue) -> WarehouseMap:
     if grid_size[0] <= 0 or grid_size[1] <= 0:
         raise ConfigError("warehouse_map grid_size must contain positive integers")
     start = _required_cell(data, "warehouse_map", "start", grid_size)
+    start_heading = _direction(data.get("start_heading", "E"), "warehouse_map start_heading")
     home = _required_cell(data, "warehouse_map", "home", grid_size)
     forbidden_cells = _cell_list(data.get("forbidden_cells", []), "forbidden_cells", grid_size)
     shelf_points = _shelf_points(data.get("shelf_points"), grid_size)
-    return {"grid_size": grid_size, "start": start, "home": home, "forbidden_cells": forbidden_cells, "shelf_points": shelf_points}
+    return {
+        "grid_size": grid_size,
+        "start": start,
+        "start_heading": start_heading,
+        "home": home,
+        "forbidden_cells": forbidden_cells,
+        "shelf_points": shelf_points,
+    }
 
 
 def validate_shelf_manifest(data: JsonValue) -> ShelfManifest:
@@ -244,12 +252,8 @@ def _shelf_points(value: JsonValue, grid_size: list[int]) -> dict[str, ShelfPoin
         if not isinstance(raw_pose, list) or len(raw_pose) != 3:
             raise ConfigError(f"shelf point {shelf_key} scan_pose must be [x, y, heading]")
         cell = _required_cell({"scan_pose": raw_pose[:2]}, shelf_key, "scan_pose", grid_size)
-        heading = str(raw_pose[2]).strip().upper()
-        if heading not in VALID_DIRECTIONS:
-            raise ConfigError(f"shelf point {shelf_key} heading must be one of N/E/S/W")
-        safe_side = str(raw_point.get("safe_side", "")).strip().upper()
-        if safe_side not in VALID_DIRECTIONS:
-            raise ConfigError(f"shelf point {shelf_key} safe_side must be one of N/E/S/W")
+        heading = _direction(raw_pose[2], f"shelf point {shelf_key} heading")
+        safe_side = _direction(raw_point.get("safe_side", ""), f"shelf point {shelf_key} safe_side")
         points[shelf_key] = {"scan_pose": [cell[0], cell[1], heading], "safe_side": safe_side}
     if not points:
         raise ConfigError("warehouse_map shelf_points must define at least one shelf")
@@ -261,6 +265,13 @@ def _ensure_in_bounds(cell: list[int], field: str, grid_size: list[int]) -> None
         raise ConfigError(f"{field} cell {cell} is outside grid_size {grid_size}")
 
 
+def _direction(value: JsonValue, field: str) -> str:
+    direction = str(value).strip().upper()
+    if direction not in VALID_DIRECTIONS:
+        raise ConfigError(f"{field} must be one of N/E/S/W")
+    return direction
+
+
 def _copy_tag_map(tag_map: TagMap) -> TagMap:
     return {tag_id: info.copy() for tag_id, info in tag_map.items()}
 
@@ -269,6 +280,7 @@ def _copy_warehouse_map(warehouse_map: WarehouseMap) -> WarehouseMap:
     return {
         "grid_size": list(warehouse_map["grid_size"]),
         "start": list(warehouse_map["start"]),
+        "start_heading": warehouse_map["start_heading"],
         "home": list(warehouse_map["home"]),
         "forbidden_cells": [list(cell) for cell in warehouse_map["forbidden_cells"]],
         "shelf_points": {

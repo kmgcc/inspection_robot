@@ -48,6 +48,7 @@ class ShelfPoint(TypedDict):
 class WarehouseMap(TypedDict):
     grid_size: list[int]
     start: list[int]
+    start_heading: str
     home: list[int]
     forbidden_cells: list[list[int]]
     shelf_points: dict[str, ShelfPoint]

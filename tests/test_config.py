@@ -38,6 +38,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(tag_map["1"]["kind"], "item")
         self.assertEqual(tag_map["101"]["kind"], "shelf")
         self.assertEqual(warehouse_map["grid_size"], [8, 6])
+        self.assertEqual(warehouse_map["start_heading"], "E")
         self.assertIn("A1", manifest)
 
     def test_old_config_without_priority_or_kind_is_compatible(self) -> None:
@@ -161,6 +162,25 @@ class ConfigTest(unittest.TestCase):
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ConfigError, "grid_size"):
+                load_warehouse_map(root)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config").mkdir()
+            (root / "config" / "warehouse_map.json").write_text(
+                json.dumps(
+                    {
+                        "grid_size": [3, 3],
+                        "start": [0, 0],
+                        "start_heading": "NE",
+                        "home": [0, 0],
+                        "forbidden_cells": [],
+                        "shelf_points": {"A1": {"scan_pose": [1, 0, "E"], "safe_side": "W"}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ConfigError, "start_heading"):
                 load_warehouse_map(root)
 
         with tempfile.TemporaryDirectory() as tmp:

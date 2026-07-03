@@ -14,6 +14,7 @@ if str(SRC) not in sys.path:
 
 from inspection_robot.config import TagMap
 from inspection_robot.config import DEFAULT_SHELF_MANIFEST, DEFAULT_WAREHOUSE_MAP
+from inspection_robot.core.events import make_event
 from inspection_robot.core.store import InspectionStore
 from inspection_robot.state import InspectionStore as StateInspectionStore
 
@@ -150,6 +151,35 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(snapshot["pose"], {"x": 1, "y": 0, "heading": "E"})
         self.assertEqual(snapshot["path"]["waypoints"], [[0, 0], [1, 0], [2, 0]])
 
+    def test_record_scan_start_marks_scan_window_active(self) -> None:
+        store = self.make_store()
+        store.start()
+        store.record_shelf_arrival("A1")
+
+        store.record_scan_start("A1", target="A1_SCAN", frame_id="scan-1")
+        snapshot = store.snapshot()
+
+        self.assertEqual(snapshot["task_status"], "SCANNING_SHELF")
+        self.assertEqual(snapshot["scan"]["active"], True)
+        self.assertEqual(snapshot["scan"]["shelf_id"], "A1")
+        self.assertEqual(snapshot["scan"]["frame_id"], "scan-1")
+        self.assertTrue(any(event["type"] == "shelf_aligned" for event in snapshot["events"]))
+
+    def test_motion_updates_do_not_clear_waiting_confirmation(self) -> None:
+        store = self.make_store()
+        store.start()
+        store.record_cycle(2, skip_shortage_detection=False)
+        store.record_scan_result("A1", [], frame_id="empty-1")
+
+        store.record_pose(1, 0, "E")
+        store.record_forbidden_zone("black-tape-end", False)
+        store.record_obstacle(None, False)
+        snapshot = store.snapshot()
+
+        self.assertEqual(snapshot["task_status"], "WAIT_CONFIRM")
+        self.assertEqual(snapshot["alarm"]["level"], "warning")
+        self.assertEqual(snapshot["pose"], {"x": 1, "y": 0, "heading": "E"})
+
     def test_finish_run_only_changes_state_after_patrol_started(self) -> None:
         store = self.make_store()
         store.finish_run()
@@ -176,6 +206,17 @@ class StoreTest(unittest.TestCase):
 
         store.stop()
         self.assertEqual(store.snapshot()["task_status"], "STOPPED")
+
+    def test_event_log_keeps_latest_thousand_events(self) -> None:
+        store = self.make_store()
+        for index in range(1005):
+            store._append_event_locked(make_event("system", event_id=f"evt-{index}", message=str(index)))
+
+        snapshot = store.snapshot()
+
+        self.assertEqual(len(snapshot["events"]), 1000)
+        self.assertEqual(snapshot["events"][0]["id"], "evt-1004")
+        self.assertEqual(snapshot["events"][-1]["id"], "evt-5")
 
     def test_write_failure_preserves_in_memory_event_and_reports_error(self) -> None:
         store = self.make_store()

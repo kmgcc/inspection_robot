@@ -27,6 +27,7 @@ DEFAULT_TAG_MAP: TagMap = {
 DEFAULT_WAREHOUSE_MAP: WarehouseMap = {
     "grid_size": [8, 6],
     "start": [0, 0],
+    "start_heading": "E",
     "home": [0, 0],
     "forbidden_cells": [[2, 2], [2, 3], [4, 3]],
     "shelf_points": {

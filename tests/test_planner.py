@@ -39,6 +39,8 @@ class PlannerTest(unittest.TestCase):
         route = plan_patrol_route(DEFAULT_WAREHOUSE_MAP, ["A1", "A2"])
 
         self.assertEqual([step["target"] for step in route if step["action"] == "scan"], ["A1_SCAN", "A2_SCAN"])
+        self.assertEqual(route[0]["heading"], "E")
+        self.assertEqual(route[-1]["heading"], None)
         self.assertEqual(route[-1]["target"], "HOME")
 
 

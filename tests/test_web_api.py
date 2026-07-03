@@ -122,11 +122,13 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(payload["current_shelf"], "A1")
         self.assertGreater(len(payload["scan"]["detections"]), 0)
         self.assertEqual(payload["events"][0]["type"], "shelf_scanned")
+        self.assertIn("shelf_aligned", {event["type"] for event in payload["events"]})
 
         abnormal = self.client.post("/api/demo/scan/A2/abnormal")
         self.assertEqual(abnormal.status_code, 200)
         payload = self.client.get("/api/status").get_json()
         event_types = {event["type"] for event in payload["events"]}
+        self.assertIn("shelf_aligned", event_types)
         self.assertIn("missing_item", event_types)
         self.assertIn("duplicate_item", event_types)
         self.assertIn("wrong_shelf", event_types)

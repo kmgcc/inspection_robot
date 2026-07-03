@@ -162,7 +162,10 @@ manual_control
 gimbal_initialized
 shelf_detected
 item_detected
+shelf_arrived
+shelf_aligned
 shelf_scanned
+scan_failed
 first_pass_observed
 cycle_started
 cycle_completed
@@ -182,6 +185,7 @@ missing_item
 duplicate_item
 wrong_shelf
 unknown_item
+untagged_evidence
 evidence_mismatch
 manual_confirm
 llm_summary
@@ -278,6 +282,8 @@ path_planned/path_step/path_replanned -> 仅软件兜底或旧演示使用
 ### 5.3 动态拓扑
 
 不要把 `warehouse_map.json` 的固定栅格作为真实地图主接口。若保留该文件，只能作为旧测试、软件兜底或未来扩展。真车主接口应使用运行中生成的 `topology`：
+
+固定栅格兜底仍可包含 `start_heading`，取值为 `N/E/S/W`，缺省为 `E`；栅格坐标约定为 `x+ = E`、`y+ = S`，与看板行列展示一致。
 
 ```json
 {

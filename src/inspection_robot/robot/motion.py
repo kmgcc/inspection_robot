@@ -67,7 +67,6 @@ def _call_motion(name: str, speed: int | None, duration_seconds: float | None) -
         if index < COMMAND_REPEAT - 1:
             time.sleep(max(0.0, COMMAND_REPEAT_GAP_SECONDS))
     time.sleep(_duration(duration_seconds))
-    stop()
 
 
 def _speed(speed: int | None) -> int:
