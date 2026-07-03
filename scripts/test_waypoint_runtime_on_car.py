@@ -21,7 +21,7 @@ def main() -> int:
     shelf_id = os.environ.get("RUNTIME_SHELF", "A1").strip().upper() or "A1"
     max_steps = int(os.environ.get("RUNTIME_MAX_STEPS", "0")) or None
     config = RobotRuntimeConfig(
-        step_seconds=float(os.environ.get("ROBOT_STEP_SECONDS", "0.35")),
+        step_seconds=float(os.environ.get("ROBOT_STEP_SECONDS", "0.12")),
         scan_timeout_seconds=float(os.environ.get("SCAN_TIMEOUT_SECONDS", "4")),
     )
     store = InspectionStore(

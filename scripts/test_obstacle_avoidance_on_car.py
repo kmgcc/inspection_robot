@@ -18,7 +18,7 @@ from inspection_robot.robot.sensors import RobotHardwareError
 def main() -> int:
     blocked_distance_mm = int(os.environ.get("BLOCKED_DISTANCE_MM", "200"))
     clear_distance_mm = int(os.environ.get("CLEAR_DISTANCE_MM", "280"))
-    wait_seconds = float(os.environ.get("OBSTACLE_WAIT_SECONDS", "3"))
+    wait_seconds = float(os.environ.get("OBSTACLE_WAIT_SECONDS", "6"))
     blocked_count = 0
     print(
         "obstacle avoidance test: "
@@ -42,11 +42,21 @@ def main() -> int:
                     alarm.clear_alarm()
                     blocked_count = 0
                 else:
-                    print("obstacle remains: conservative detour right-forward-left", flush=True)
-                    motion.strafe_right_slow(duration_seconds=0.35)
-                    motion.move_forward_slow(duration_seconds=0.35)
-                    motion.strafe_left_slow(duration_seconds=0.35)
-                    blocked_count = 0
+                    print("obstacle remains: turn left, stop, re-check before any forward move", flush=True)
+                    motion.rotate_left_slow(duration_seconds=float(os.environ.get("ROBOT_TURN_90_SECONDS", "0.45")))
+                    motion.stop()
+                    distance = sensors.read_distance_mm()
+                    print(f"after turn distance_mm={distance}", flush=True)
+                    if distance is not None and distance >= clear_distance_mm:
+                        motion.move_forward_slow(duration_seconds=float(os.environ.get("AVOIDANCE_BODY_SECONDS", "0.25")))
+                        motion.stop()
+                        motion.rotate_right_slow(duration_seconds=float(os.environ.get("ROBOT_TURN_90_SECONDS", "0.45")))
+                        motion.stop()
+                        blocked_count = 0
+                        alarm.clear_alarm()
+                    else:
+                        print("still blocked after turn: keeping stopped", flush=True)
+                        motion.stop()
             time.sleep(0.2)
     except KeyboardInterrupt:
         print("stopped by user", flush=True)

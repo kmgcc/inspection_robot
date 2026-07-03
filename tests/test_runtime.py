@@ -99,7 +99,7 @@ class RuntimeTest(unittest.TestCase):
             store,
             DEFAULT_WAREHOUSE_MAP,
             {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
-            config=RobotRuntimeConfig(step_seconds=0, poll_seconds=0, scan_timeout_seconds=0, boundary_cooldown_seconds=0),
+            config=RobotRuntimeConfig(step_seconds=0, poll_seconds=0, scan_timeout_seconds=0, boundary_cooldown_seconds=0, boundary_confirm_samples=1),
             motion_adapter=fake_motion,
             sensor_adapter=fake_sensors,
             alarm_adapter=FakeAlarm(),

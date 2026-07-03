@@ -25,7 +25,17 @@ class RobotAdapterTest(unittest.TestCase):
         finally:
             motion._motion_module = original  # type: ignore[assignment]
 
-        self.assertEqual(fake.calls, [("move_forward", 42), ("stop", None), ("move_right", 20), ("stop", None)])
+        self.assertEqual(
+            fake.calls,
+            [
+                ("move_forward", 42),
+                ("move_forward", 42),
+                ("stop", None),
+                ("move_right", 20),
+                ("move_right", 20),
+                ("stop", None),
+            ],
+        )
 
     def test_sensors_normalize_tape_state_and_direction_flags(self) -> None:
         self.assertEqual(sensors.normalize_tape_state([1, 0, 1, 0]), (1, 0, 1, 0))
@@ -42,6 +52,8 @@ class RobotAdapterTest(unittest.TestCase):
                 "any_detected": True,
             },
         )
+        self.assertFalse(sensors.tape_boundary_count_detected((1, 0, 1, 1), min_black=2))
+        self.assertTrue(sensors.tape_boundary_count_detected((1, 0, 0, 1), min_black=2))
 
     def test_ultrasonic_distance_combines_high_and_low_bytes(self) -> None:
         fake = FakeBot({sensors.ULTRASONIC_HIGH_REGISTER: [1], sensors.ULTRASONIC_LOW_REGISTER: [44]})

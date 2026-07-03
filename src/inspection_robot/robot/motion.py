@@ -9,8 +9,10 @@ from types import ModuleType
 from .sensors import RobotHardwareError
 
 
-DEFAULT_SPEED = int(os.environ.get("ROBOT_SLOW_SPEED", "30"))
-DEFAULT_STEP_SECONDS = float(os.environ.get("ROBOT_STEP_SECONDS", "0.35"))
+DEFAULT_SPEED = int(os.environ.get("ROBOT_SLOW_SPEED", "20"))
+DEFAULT_STEP_SECONDS = float(os.environ.get("ROBOT_STEP_SECONDS", "0.12"))
+COMMAND_REPEAT = max(1, int(os.environ.get("ROBOT_COMMAND_REPEAT", "2")))
+COMMAND_REPEAT_GAP_SECONDS = float(os.environ.get("ROBOT_COMMAND_REPEAT_GAP_SECONDS", "0.02"))
 VENDOR_MOTION_PATHS = (
     Path("/home/pi/project_demo/lib"),
     Path("/home/pi/project_demo/04.Car_motion_control"),
@@ -60,7 +62,10 @@ def _call_motion(name: str, speed: int | None, duration_seconds: float | None) -
     func = getattr(module, name, None)
     if not callable(func):
         raise RobotHardwareError(f"McLumk_Wheel_Sports is missing {name}()")
-    func(_speed(speed))
+    for index in range(COMMAND_REPEAT):
+        func(_speed(speed))
+        if index < COMMAND_REPEAT - 1:
+            time.sleep(max(0.0, COMMAND_REPEAT_GAP_SECONDS))
     time.sleep(_duration(duration_seconds))
     stop()
 

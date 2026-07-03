@@ -76,8 +76,18 @@ def tape_boundary_detected(state: tuple[int, int, int, int] | None) -> bool:
     return state is not None and any(value == 0 for value in state)
 
 
+def black_tape_count(state: tuple[int, int, int, int] | None) -> int:
+    if state is None:
+        return 0
+    return sum(1 for value in state if value == 0)
+
+
 def full_tape_boundary_detected(state: tuple[int, int, int, int] | None) -> bool:
     return state is not None and all(value == 0 for value in state)
+
+
+def tape_boundary_count_detected(state: tuple[int, int, int, int] | None, min_black: int = 2) -> bool:
+    return black_tape_count(state) >= max(1, min(4, int(min_black)))
 
 
 def describe_tape_boundary(state: tuple[int, int, int, int] | None) -> dict[str, bool | None]:

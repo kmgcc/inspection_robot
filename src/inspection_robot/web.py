@@ -220,8 +220,8 @@ def create_app(root: Path | None = None) -> Flask:
             return jsonify({"ok": False, "error": "当前服务是 simulate mode，请用 RUN_MODE=robot 启动小车端服务。"}), 409
         runtime = _ensure_runtime()
         payload = request.get_json(silent=True) or {}
-        speed = _int_payload(payload, "speed", 30)
-        duration = _float_payload(payload, "duration_seconds", 0.35)
+        speed = _int_payload(payload, "speed", 20)
+        duration = _float_payload(payload, "duration_seconds", 0.12)
         try:
             runtime.stop()
             _run_manual_command(command, speed=speed, duration_seconds=duration, runtime=runtime)
