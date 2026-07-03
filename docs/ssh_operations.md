@@ -183,6 +183,16 @@ fuser -k 5000/tcp
 src/inspection_robot/static/audio/youdowhatreversed.wav
 ```
 
+当前巡检固定音效：
+
+```text
+src/inspection_robot/static/audio/obstacle.wav   # 障碍物或非预期禁区
+src/inspection_robot/static/audio/first.wav      # 检测到货架
+src/inspection_robot/static/audio/following.wav  # 检测到货架上的物品，每个物品一次
+```
+
+这些文件是从 `/Users/kmg/Desktop/sounds/*.MP4` 提取音轨并转换得到的 `PCM 16-bit WAV`、`44.1 kHz`、单声道文件，优先保证 `aplay`、`paplay`、`pw-play`、`ffplay` 等树莓派端播放器稳定播放。
+
 目标效果是让树莓派本机播放声音，而不是让电脑浏览器播放。蓝牙音箱需要先连接到树莓派，并在树莓派桌面中设为默认输出设备。
 
 推荐流程：
@@ -212,12 +222,18 @@ PYTHONPATH=src python3 -m inspection_robot.audio
 
 ```bash
 paplay /home/pi/temp/inspection_robot/src/inspection_robot/static/audio/youdowhatreversed.wav
+paplay /home/pi/temp/inspection_robot/src/inspection_robot/static/audio/obstacle.wav
+paplay /home/pi/temp/inspection_robot/src/inspection_robot/static/audio/first.wav
+paplay /home/pi/temp/inspection_robot/src/inspection_robot/static/audio/following.wav
 ```
 
 如果 `paplay` 不存在，再试：
 
 ```bash
 aplay /home/pi/temp/inspection_robot/src/inspection_robot/static/audio/youdowhatreversed.wav
+aplay /home/pi/temp/inspection_robot/src/inspection_robot/static/audio/obstacle.wav
+aplay /home/pi/temp/inspection_robot/src/inspection_robot/static/audio/first.wav
+aplay /home/pi/temp/inspection_robot/src/inspection_robot/static/audio/following.wav
 ```
 
 能在 VNC 终端出声后，网页按钮也应能正常触发同一份音频。

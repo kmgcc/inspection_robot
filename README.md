@@ -1,43 +1,42 @@
-# 固定仓库场景下的麦克纳姆轮巡逻小车
+# 固定货架通道巡逻小车
 
-这是一个 RASPBOT V2 麦轮小车课程项目，目标是在固定小仓库场景中完成“路径规划、黑胶带禁区规避、超声波避障、侧向货架扫描、多模态物品识别、异常上报、网页看板展示和人工复核确认”的演示闭环。
+这是一个 RASPBOT V2 麦克纳姆轮小车课程项目。真实目标不是循线，也不是按预设栅格地图跑 A* 路径，而是在固定货架通道中自动往返巡逻：侧向扫描货架和物品，检测缺货、重复、错放、未知物品和识别证据冲突，并通过灯光、声音、网页看板和日志进行上报。
 
-项目边界：不做 SLAM，不做开放场景自动驾驶，不训练大型识别模型，不做机械臂搬运，不让 LLM 控制底盘。LLM 只可作为告警后的摘要和建议加分项。
+当前最重要的需求文档是：
 
-## 当前代码状态
+- [真实需求基准文档](docs/REAL_REQUIREMENTS.md)
 
-当前仓库已经具备可运行的软件闭环：
+如果其他文档和它冲突，以 `REAL_REQUIREMENTS.md` 为准。
 
-- Flask 入口：`app.py`
-- 共享契约：`docs/api_contract.md`
-- 状态与事件存储：`src/inspection_robot/core/store.py`
-- Web API：`src/inspection_robot/web.py`
-- 固定仓库地图：`config/warehouse_map.json`
-- 货架清单：`config/shelf_manifest.json`
-- 标签配置：`config/tag_map.json`
-- 新版看板：`src/inspection_robot/templates/dashboard.html`
-- 前端渲染：`src/inspection_robot/static/dashboard.js`
-- CSV 导出：`GET /api/export.csv`
+## 当前真实主链路
 
-3.1 已提供软件兜底演示接口，可在没有小车时演示路径、货架扫描、障碍、禁区、异常、证据冲突、确认处理和日志导出。
+1. 小车放在初始位置。
+2. 开机自启或网页点击“开始”后，小车慢速向前巡逻。
+3. 云台初始化到侧向，让摄像头面向货架。
+4. 货架通过 AprilTag 识别。
+5. 物品通过 AprilTag、文字、图形识别；颜色可选，有则记录，没有不能报错。
+6. A 列当前明确为 `A1`、`A2`、`A3`、`A4`。
+7. 小车到货架尽头遇到横向黑胶带，四路传感器全黑时顺时针原地转 90 度并继续。
+8. 第一轮只记录观察，不报缺货。
+9. 第二轮及之后开始检测并上报缺货等异常。
+10. 遇到障碍先等待 6 秒，障碍仍在再绕行。
+11. 网页显示运行模式、硬件连接、当前轮次、当前货架、事件和动态生成的巡检拓扑。
+
+推荐算法方向：传感器触发流程，AprilTag 做定位和身份，轻量检测模型只确认卡片/货架槽位是否进入扫描区，OpenCV 做透视矫正，PaddleOCR 读取局部文字，Piper 或固定音频做离线播报。第一阶段可先不训练模型，用 AprilTag + 轮廓 + OCR 完成演示；第二阶段再把少类别 YOLO 轻量模型放到 AI HAT+ 上运行。
 
 ## 文档入口
 
-- [全局规划书](docs/PROJECT_PLAN.md)：项目定位、资料依据、场景设计、模块边界和验收清单。
-- [共享 API 契约](docs/api_contract.md)：`/api/status`、事件字段、状态枚举、地图/货架/路径配置和 `InspectionStore` 方法。
-- [SSH 连接与运维手册](docs/ssh_operations.md)：小车账号、SSH/VNC、代码部署、看板运行和 ROS2 操作。
-- [演示运行手册](docs/demo_runbook.md)：真车流程、软件兜底、硬件失败兜底、网络失败兜底和 2-3 分钟答辩顺序。
-- [答辩证据清单](docs/evidence_checklist.md)：视频、截图、CSV 和 PPT 素材检查表。
-- [官方资料索引](docs/RASPBOT-V2_Clean_Docs/README.md)：精简后的 RASPBOT V2 官方文档和示例。
-
-## 执行计划入口
-
-- [0.1 基准计划](docs/plans/0.1-plan-shared-contract.md)：共享契约、配置格式和资料依据。
-- [1.1 队友计划：小车硬件与侧向感知](docs/plans/1.1-plan-robot-io.md)：麦轮运动、超声波、黑胶带传感器、侧向摄像头和 runtime。
-- [2.1 队友计划：路径规划与货架规则](docs/plans/2.1-plan-core-contract.md)：固定地图、A*、货架清单、异常规则、状态机和持久化。
-- [3.1 队友计划：看板、模拟演示、部署与答辩证据](docs/plans/3.1-plan-dashboard-demo.md)：地图看板、模拟演示、部署脚本、运行手册和证据清单。
-
-四份计划以 `docs/api_contract.md` 为边界并行推进：1.1 上报观察，2.1 产出状态和事件，3.1 展示 `/api/status` 并提供演示兜底。
+- [真实需求基准文档](docs/REAL_REQUIREMENTS.md)：当前最高优先级需求。
+- [全局规划书](docs/PROJECT_PLAN.md)：按真实需求同步后的总计划。
+- [共享 API 契约](docs/api_contract.md)：状态字段、事件、运行模式、动态拓扑和控制接口。
+- [0.1 基准计划](docs/plans/0.1-plan-shared-contract.md)：共享契约与配置格式。
+- [1.1 硬件计划](docs/plans/1.1-plan-robot-io.md)：底盘、云台、超声波、黑胶带、音频灯光和 runtime。
+- [2.1 核心计划](docs/plans/2.1-plan-core-contract.md)：轮次、货架清单、识别证据、异常规则和动态拓扑。
+- [3.1 看板计划](docs/plans/3.1-plan-dashboard-demo.md)：网页控制、运行模式、动态拓扑和演示兜底。
+- [SSH 连接与运维手册](docs/ssh_operations.md)：小车账号、SSH/VNC、部署和官方程序清理。
+- [演示运行手册](docs/demo_runbook.md)：真车演示、网页演示和兜底流程。
+- [答辩证据清单](docs/evidence_checklist.md)：需要录制或截图的证据。
+- [官方资料索引](docs/RASPBOT-V2_Clean_Docs/README.md)：保留的 RASPBOT V2 资料说明。
 
 ## 本地运行
 
@@ -45,12 +44,6 @@
 
 ```bash
 python3 -m pip install -r requirements.txt
-```
-
-Windows 上如果 `python3` 不可用：
-
-```bash
-py -3 -m pip install -r requirements.txt
 ```
 
 启动本地看板，默认端口为 `5050`：
@@ -65,18 +58,7 @@ scripts/run_local.sh
 http://127.0.0.1:5050
 ```
 
-当前看板支持：
-
-- 开始巡逻、停止、重置
-- 模拟规划路径
-- 模拟障碍等待和障碍解除
-- 模拟黑胶带禁区触发和恢复
-- 模拟扫描 A1 正常
-- 模拟扫描 A2 异常
-- 模拟识别证据冲突
-- 软件兜底全流程
-- 确认处理
-- 导出 CSV 日志
+本地模式主要用于软件兜底演示和接口检查，不应假装连接了真实底盘。
 
 ## 小车部署
 
@@ -98,13 +80,13 @@ pi@192.168.1.11
 scripts/deploy_to_car.sh
 ```
 
-启动小车看板，默认端口为 `5000`。模拟模式只启动网页和软件演示，不触碰硬件：
+模拟模式只启动网页和软件演示，不触碰硬件：
 
 ```bash
 RUN_MODE=simulate scripts/run_on_car.sh
 ```
 
-真实硬件 runtime 接入后再启用：
+真车模式应启动真实 runtime：
 
 ```bash
 RUN_MODE=robot scripts/run_on_car.sh
@@ -116,72 +98,45 @@ RUN_MODE=robot scripts/run_on_car.sh
 scripts/stop_on_car.sh
 ```
 
-如果小车 IP 或端口变化：
+## 运维要求
 
-```bash
-CAR_HOST=pi@新的IP scripts/deploy_to_car.sh
-CAR_HOST=pi@新的IP PORT=5000 RUN_MODE=simulate scripts/run_on_car.sh
-CAR_HOST=pi@新的IP PORT=5000 scripts/stop_on_car.sh
-```
+真车运行前必须确认：
+
+1. 官方 Yahboom App 主程序已禁用或启动前被清理，不占用摄像头、底盘、I2C 和端口。
+2. Raspberry Pi 开机后 Wi-Fi 正常。
+3. 网页可访问。
+4. SSH 可访问。
+5. VNC 可访问。
+6. 网页明确显示当前是 `simulate` 还是 `robot`。
+7. 急停按钮始终可用。
 
 ## 验证命令
 
 本地编译检查：
 
 ```bash
-py -3 -m py_compile app.py src/inspection_robot/*.py src/inspection_robot/core/*.py
+python3 -m py_compile app.py src/inspection_robot/*.py src/inspection_robot/core/*.py src/inspection_robot/robot/*.py src/inspection_robot/vision/*.py
 ```
 
 运行全部测试：
 
 ```bash
-py -3 -m unittest discover -s tests -v
+python3 -m unittest discover -s tests -v
 ```
 
-3.1 Web API 检查：
+文档冲突检查：
 
 ```bash
-py -3 -m unittest tests.test_web_api -v
-```
-
-文档叙事检查：
-
-```bash
-rg -n "固定仓库场景|麦克纳姆|货架|禁区" README.md docs src scripts
-```
-
-## 代码目录
-
-```text
-.
-├── app.py
-├── config/
-│   ├── shelf_manifest.json
-│   ├── tag_map.json
-│   └── warehouse_map.json
-├── data/
-├── docs/
-│   ├── PROJECT_PLAN.md
-│   ├── api_contract.md
-│   ├── demo_runbook.md
-│   ├── evidence_checklist.md
-│   ├── ssh_operations.md
-│   └── plans/
-├── scripts/
-├── src/
-│   └── inspection_robot/
-│       ├── core/
-│       ├── static/
-│       ├── templates/
-│       └── web.py
-└── tests/
+rg -n "A\\*|固定栅格|避开禁区|A1/A2/B1/B2|模拟规划路径" README.md docs
 ```
 
 ## 重要边界
 
-- 黑胶带表示禁区、边界或安全兜底线，不是主巡线路径。
-- AprilTag TAG36H11 是货架和物品的主身份来源；OCR、颜色和图像类别是复核证据。
-- 识别证据冲突进入人工复核，不自动覆盖 AprilTag 主 ID。
-- 动态避障只承诺超声波停车等待、恢复或保守重规划，不承诺开放环境自由绕障。
-- `RUN_MODE=simulate` 不触碰硬件；`RUN_MODE=robot` 留给 1.1 的真实 runtime。
-- 现场演示必须保留软件兜底，避免硬件或网络临时失败导致无法展示主链路。
+1. 黑胶带不是主巡线路径。
+2. 四路全黑表示列端或禁区触发区，主动作是顺时针原地转 90 度。
+3. 非预期禁区或局部压黑按障碍逻辑处理。
+4. 网页初始不展示假的固定地图，只展示空状态或运行中生成的拓扑/轨迹。
+5. AprilTag 是货架主身份来源。
+6. 物品识别支持 AprilTag、文字、图形；颜色可选。
+7. 第一轮不报缺货，第二轮开始检测缺货。
+8. LLM 不参与实时底盘控制。
