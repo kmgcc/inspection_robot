@@ -91,15 +91,15 @@ class RuntimeTest(unittest.TestCase):
         self.assertIn("obstacle_clear", event_types)
         self.assertIn("obstacle_wait", fake_alarm.calls)
 
-    def test_runtime_reports_forbidden_zone_from_tape_boundary(self) -> None:
+    def test_runtime_turns_right_when_all_tape_sensors_hit_end_boundary(self) -> None:
         store = self.make_store()
         fake_motion = FakeMotion()
-        fake_sensors = FakeSensors(distances=[400, 400], tapes=[(1, 0, 1, 1), (1, 1, 1, 1)])
+        fake_sensors = FakeSensors(distances=[400, 400], tapes=[(0, 0, 0, 0), (1, 1, 1, 1)])
         runtime = RobotRuntime(
             store,
             DEFAULT_WAREHOUSE_MAP,
             {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
-            config=RobotRuntimeConfig(step_seconds=0, poll_seconds=0, scan_timeout_seconds=0),
+            config=RobotRuntimeConfig(step_seconds=0, poll_seconds=0, scan_timeout_seconds=0, boundary_cooldown_seconds=0),
             motion_adapter=fake_motion,
             sensor_adapter=fake_sensors,
             alarm_adapter=FakeAlarm(),
@@ -109,8 +109,44 @@ class RuntimeTest(unittest.TestCase):
         runtime.run_patrol(shelf_order=["A1"], max_steps=1)
         snapshot = store.snapshot()
 
-        self.assertTrue(any(zone.get("blocked") for zone in snapshot["forbidden_zones"]))
-        self.assertIn("move_backward", fake_motion.calls)
+        self.assertTrue(any(event["type"] == "forbidden_zone_detected" for event in snapshot["events"]))
+        self.assertIn("rotate_right", fake_motion.calls)
+        self.assertNotIn("move_backward", fake_motion.calls)
+
+    def test_continuous_patrol_skips_first_cycle_then_scans_visible_shelf(self) -> None:
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        fake_sensors = FakeSensors(
+            distances=[400] * 12,
+            tapes=[(0, 0, 0, 0), (0, 0, 0, 0), (1, 1, 1, 1), (1, 1, 1, 1)],
+        )
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=RobotRuntimeConfig(
+                step_seconds=0,
+                poll_seconds=0,
+                scan_timeout_seconds=0,
+                scan_interval_seconds=0,
+                boundary_cooldown_seconds=0,
+                turns_per_cycle=2,
+                skip_scan_cycles=1,
+            ),
+            motion_adapter=fake_motion,
+            sensor_adapter=fake_sensors,
+            alarm_adapter=FakeAlarm(),
+            gimbal_adapter=FakeGimbal(),
+            detection_provider=fake_detection_provider,
+        )
+
+        runtime.run_continuous_patrol(max_iterations=2)
+        snapshot = store.snapshot()
+
+        self.assertIn("rotate_right", fake_motion.calls)
+        self.assertIn("move_forward", fake_motion.calls)
+        self.assertEqual(snapshot["current_shelf"], "A1")
+        self.assertTrue(any(event["type"] == "shelf_scanned" for event in snapshot["events"]))
 
 
 class FakeMotion:
@@ -128,6 +164,12 @@ class FakeMotion:
 
     def strafe_right_slow(self, **_: object) -> None:
         self.calls.append("strafe_right")
+
+    def rotate_left_slow(self, **_: object) -> None:
+        self.calls.append("rotate_left")
+
+    def rotate_right_slow(self, **_: object) -> None:
+        self.calls.append("rotate_right")
 
     def stop(self) -> None:
         self.calls.append("stop")
@@ -152,6 +194,10 @@ class FakeSensors:
     def tape_boundary_detected(state: tuple[int, int, int, int] | None) -> bool:
         return sensors.tape_boundary_detected(state)
 
+    @staticmethod
+    def full_tape_boundary_detected(state: tuple[int, int, int, int] | None) -> bool:
+        return sensors.full_tape_boundary_detected(state)
+
 
 class FakeAlarm:
     def __init__(self) -> None:
@@ -168,6 +214,11 @@ class FakeAlarm:
 
     def clear_alarm(self) -> None:
         self.calls.append("clear")
+
+
+class FakeGimbal:
+    def initialize_side_camera(self) -> None:
+        pass
 
 
 def fake_detection_provider(**_: object) -> Iterator[dict[str, object]]:

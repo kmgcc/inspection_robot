@@ -73,8 +73,17 @@
 
       <div class="actions" aria-label="巡逻操作">
         <button class="primary" type="button" data-post="/api/start">开始巡逻</button>
-        <button type="button" data-post="/api/stop">停止</button>
+        <button class="danger" type="button" data-post="/api/stop">急停</button>
         <button type="button" data-post="/api/reset">重置</button>
+        <button type="button" data-post="/api/gimbal/init">云台侧向</button>
+        <button type="button" data-post="/api/control/forward">前进</button>
+        <button type="button" data-post="/api/control/backward">后退</button>
+        <button type="button" data-post="/api/control/left">左移</button>
+        <button type="button" data-post="/api/control/right">右移</button>
+        <button type="button" data-post="/api/control/turn_left_90">左转 90</button>
+        <button type="button" data-post="/api/control/turn_right_90">右转 90</button>
+        <button type="button" data-post="/api/control/stop">电机停止</button>
+        <button type="button" data-post="/api/audio/announce">预留播报</button>
         <button type="button" data-post="/api/demo/path">模拟规划路径</button>
         <button type="button" data-post="/api/demo/obstacle">模拟障碍等待</button>
         <button type="button" data-post="/api/demo/obstacle/clear">模拟障碍解除</button>

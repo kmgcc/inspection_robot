@@ -15,5 +15,18 @@ case "$RUN_MODE" in
     ;;
 esac
 
-ssh "$CAR_HOST" "cd '$CAR_DIR' && RUN_MODE='$RUN_MODE' PORT='$PORT' nohup python3 app.py > app.log 2>&1 & echo \$!"
+ssh "$CAR_HOST" "
+cd '$CAR_DIR'
+PYTHON_CMD=\$(for candidate in python3.13 python3.12 python3.11 python3.10 python3 python; do
+  if command -v \"\$candidate\" >/dev/null 2>&1 && \"\$candidate\" -c 'import sys; raise SystemExit(sys.version_info < (3, 10))' >/dev/null 2>&1; then
+    printf '%s' \"\$candidate\"
+    exit 0
+  fi
+done)
+if [ -z \"\$PYTHON_CMD\" ]; then
+  echo '未找到可用的 Python 3.10+ 解释器。' >&2
+  exit 1
+fi
+RUN_MODE='$RUN_MODE' PORT='$PORT' nohup \"\$PYTHON_CMD\" app.py > app.log 2>&1 & echo \$!
+"
 echo "Started on $CAR_HOST:$CAR_DIR with RUN_MODE=$RUN_MODE, PORT=$PORT"

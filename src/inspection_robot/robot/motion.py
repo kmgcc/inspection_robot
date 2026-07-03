@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import sys
 import time
+from pathlib import Path
 from types import ModuleType
 
 from .sensors import RobotHardwareError
@@ -9,6 +11,10 @@ from .sensors import RobotHardwareError
 
 DEFAULT_SPEED = int(os.environ.get("ROBOT_SLOW_SPEED", "30"))
 DEFAULT_STEP_SECONDS = float(os.environ.get("ROBOT_STEP_SECONDS", "0.35"))
+VENDOR_MOTION_PATHS = (
+    Path("/home/pi/project_demo/lib"),
+    Path("/home/pi/project_demo/04.Car_motion_control"),
+)
 
 
 def move_forward_slow(speed: int | None = None, duration_seconds: float | None = None) -> None:
@@ -74,7 +80,19 @@ def _motion_module() -> ModuleType:
     try:
         import McLumk_Wheel_Sports  # type: ignore[import-not-found]
     except ImportError as exc:
-        raise RobotHardwareError(
-            "McLumk_Wheel_Sports is not available. Run this on the RASPBOT image or install the vendor library."
-        ) from exc
+        _add_vendor_paths()
+        try:
+            import McLumk_Wheel_Sports  # type: ignore[import-not-found,no-redef]
+        except ImportError as retry_exc:
+            searched = ", ".join(str(path) for path in VENDOR_MOTION_PATHS)
+            raise RobotHardwareError(
+                "McLumk_Wheel_Sports is not available. Run this on the RASPBOT image, "
+                f"or add the vendor library to PYTHONPATH. Searched: {searched}"
+            ) from retry_exc
     return McLumk_Wheel_Sports
+
+
+def _add_vendor_paths() -> None:
+    for path in VENDOR_MOTION_PATHS:
+        if path.exists() and str(path) not in sys.path:
+            sys.path.insert(0, str(path))

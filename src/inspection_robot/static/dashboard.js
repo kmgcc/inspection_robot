@@ -17,6 +17,7 @@ const STATUS_LABELS = {
   STOPPED: "已停止",
   PATROL: "移动中",
   TAG_DETECTED: "识别中",
+  TURNING: "转向中",
 };
 
 const EVENT_TYPE_LABELS = {
@@ -457,7 +458,14 @@ async function postAction(url, body = {}) {
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    throw new Error(`HTTP ${res.status}`);
+    let message = `HTTP ${res.status}`;
+    try {
+      const payload = await res.json();
+      message = payload.error || message;
+    } catch (_) {
+      // Keep the HTTP status when the server did not return JSON.
+    }
+    throw new Error(message);
   }
   await loadStatus();
 }
@@ -479,17 +487,21 @@ async function playCarAudio() {
 }
 
 document.addEventListener("click", async (event) => {
-  const action = event.target.closest("[data-post]");
-  if (action) {
-    await postAction(action.dataset.post);
-    return;
-  }
-  if (event.target.closest("[data-confirm]")) {
-    await confirmLatest();
-    return;
-  }
-  if (event.target.closest("[data-audio]")) {
-    await playCarAudio();
+  try {
+    const action = event.target.closest("[data-post]");
+    if (action) {
+      await postAction(action.dataset.post);
+      return;
+    }
+    if (event.target.closest("[data-confirm]")) {
+      await confirmLatest();
+      return;
+    }
+    if (event.target.closest("[data-audio]")) {
+      await playCarAudio();
+    }
+  } catch (error) {
+    window.alert(`操作失败：${error.message}`);
   }
 });
 

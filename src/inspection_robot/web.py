@@ -7,6 +7,8 @@ from flask import Flask, Response, jsonify, render_template, request
 from .audio import start_default_audio
 from .config import load_shelf_manifest, load_tag_map, load_warehouse_map
 from .core.planner import PlanningError, plan_patrol_route
+from .robot import gimbal, motion
+from .robot.sensors import RobotHardwareError
 from .state import InspectionStore
 
 
@@ -26,6 +28,7 @@ def create_app(root: Path | None = None) -> Flask:
     app.config["INSPECTION_STORE"] = store
     app.config["WAREHOUSE_MAP"] = store.warehouse_map
     app.config["SHELF_MANIFEST"] = store.shelf_manifest
+    app.config["RUN_MODE"] = "simulate"
 
     @app.get("/")
     def index():
@@ -37,12 +40,20 @@ def create_app(root: Path | None = None) -> Flask:
 
     @app.post("/api/start")
     def api_start():
-        store.start()
+        runtime = app.config.get("ROBOT_RUNTIME")
+        if runtime is not None:
+            runtime.start()
+        else:
+            store.start()
         return jsonify({"ok": True})
 
     @app.post("/api/stop")
     def api_stop():
-        store.stop()
+        runtime = app.config.get("ROBOT_RUNTIME")
+        if runtime is not None:
+            runtime.stop()
+        else:
+            store.stop()
         return jsonify({"ok": True})
 
     @app.post("/api/reset")
@@ -174,6 +185,38 @@ def create_app(root: Path | None = None) -> Flask:
         payload, status = start_default_audio(project_root)
         return jsonify(payload), status
 
+    @app.post("/api/audio/announce")
+    def api_audio_announce():
+        payload = request.get_json(silent=True) or {}
+        message = str(payload.get("message") or "语音播报接口已预留，等待后续音频文件接入。")
+        store.record_robot_status(store.snapshot()["task_status"], message)
+        return jsonify({"ok": True, "queued": False, "message": message})
+
+    @app.post("/api/gimbal/init")
+    def api_gimbal_init():
+        try:
+            gimbal.initialize_side_camera()
+        except RobotHardwareError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
+        store.record_robot_status(store.snapshot()["task_status"], "摄像云台已初始化到侧向货架视角。")
+        return jsonify({"ok": True})
+
+    @app.post("/api/control/<command>")
+    def api_control(command: str):
+        runtime = app.config.get("ROBOT_RUNTIME")
+        if runtime is None:
+            return jsonify({"ok": False, "error": "manual robot control requires RUN_MODE=robot"}), 409
+        payload = request.get_json(silent=True) or {}
+        speed = _int_payload(payload, "speed", 30)
+        duration = _float_payload(payload, "duration_seconds", 0.35)
+        try:
+            runtime.stop()
+            _run_manual_command(command, speed=speed, duration_seconds=duration, runtime=runtime)
+        except (RobotHardwareError, ValueError) as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        store.record_robot_status("STOPPED", f"手动控制完成：{command}")
+        return jsonify({"ok": True, "command": command})
+
     @app.get("/api/export.csv")
     def api_export_csv():
         return Response(
@@ -203,6 +246,34 @@ def create_app(root: Path | None = None) -> Flask:
             return int(value)
         except (TypeError, ValueError):
             return default
+
+    def _float_payload(payload: dict[str, object], key: str, default: float) -> float:
+        value = payload.get(key, default)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _run_manual_command(command: str, *, speed: int, duration_seconds: float, runtime: object) -> None:
+        active_motion = getattr(runtime, "motion", motion)
+        config = getattr(runtime, "config", None)
+        turn_duration = getattr(config, "turn_90_seconds", 0.55)
+        turn_speed = getattr(config, "turn_speed", speed)
+        commands = {
+            "stop": lambda: active_motion.stop(),
+            "forward": lambda: active_motion.move_forward_slow(speed=speed, duration_seconds=duration_seconds),
+            "backward": lambda: active_motion.move_backward_slow(speed=speed, duration_seconds=duration_seconds),
+            "left": lambda: active_motion.strafe_left_slow(speed=speed, duration_seconds=duration_seconds),
+            "right": lambda: active_motion.strafe_right_slow(speed=speed, duration_seconds=duration_seconds),
+            "rotate_left": lambda: active_motion.rotate_left_slow(speed=speed, duration_seconds=duration_seconds),
+            "rotate_right": lambda: active_motion.rotate_right_slow(speed=speed, duration_seconds=duration_seconds),
+            "turn_left_90": lambda: active_motion.rotate_left_slow(speed=turn_speed, duration_seconds=turn_duration),
+            "turn_right_90": lambda: active_motion.rotate_right_slow(speed=turn_speed, duration_seconds=turn_duration),
+        }
+        action = commands.get(command)
+        if action is None:
+            raise ValueError(f"unknown manual command: {command}")
+        action()
 
     def _normalize_shelf_id(shelf_id: str) -> str:
         return shelf_id.strip().upper() or "A1"

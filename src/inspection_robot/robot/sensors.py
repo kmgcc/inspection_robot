@@ -76,6 +76,10 @@ def tape_boundary_detected(state: tuple[int, int, int, int] | None) -> bool:
     return state is not None and any(value == 0 for value in state)
 
 
+def full_tape_boundary_detected(state: tuple[int, int, int, int] | None) -> bool:
+    return state is not None and all(value == 0 for value in state)
+
+
 def describe_tape_boundary(state: tuple[int, int, int, int] | None) -> dict[str, bool | None]:
     if state is None:
         return {

@@ -47,10 +47,10 @@ class InspectionStore:
     def start(self) -> None:
         with self.lock:
             self._patrol_started = True
-            self.state.task_status = "PLANNING"
-            self.state.robot_status = "规划中"
-            self.state.path["status"] = "planning"
-            self.state.last_message = "巡检任务已开始，等待固定地图路径规划。"
+            self.state.task_status = "MOVING"
+            self.state.robot_status = "移动中"
+            self.state.path["status"] = "active"
+            self.state.last_message = "自主巡检任务已开始。"
 
     def stop(self) -> None:
         with self.lock:

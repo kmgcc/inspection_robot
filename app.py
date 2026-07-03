@@ -15,7 +15,9 @@ from inspection_robot.web import create_app
 
 
 app = create_app(ROOT)
-if os.environ.get("RUN_MODE", "simulate").strip().lower() == "robot":
+RUN_MODE = os.environ.get("RUN_MODE", "simulate").strip().lower()
+app.config["RUN_MODE"] = RUN_MODE
+if RUN_MODE == "robot":
     from inspection_robot.runtime import start_background_runtime
 
     app.config["ROBOT_RUNTIME"] = start_background_runtime(

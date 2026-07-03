@@ -174,6 +174,54 @@ def _load_vision_dependencies() -> tuple[Any, Any]:
         raise VisionDependencyError("opencv-python is required for side-camera tag detection") from exc
     try:
         from dt_apriltags import Detector  # type: ignore[import-not-found]
-    except ImportError as exc:
-        raise VisionDependencyError("dt-apriltags is required for TAG36H11 detection") from exc
+    except ImportError:
+        if _opencv_apriltag_available(cv2):
+            return cv2, _OpenCVArucoAprilTagDetector
+        raise VisionDependencyError("dt-apriltags or OpenCV aruco AprilTag support is required for TAG36H11 detection")
     return cv2, Detector
+
+
+def _opencv_apriltag_available(cv2: Any) -> bool:
+    aruco = getattr(cv2, "aruco", None)
+    return (
+        aruco is not None
+        and hasattr(aruco, "DICT_APRILTAG_36h11")
+        and hasattr(aruco, "ArucoDetector")
+        and hasattr(aruco, "DetectorParameters")
+        and hasattr(aruco, "getPredefinedDictionary")
+    )
+
+
+@dataclass(slots=True)
+class _OpenCVArucoDetection:
+    tag_id: int
+    center: tuple[float, float]
+    decision_margin: float | None = None
+
+
+class _OpenCVArucoAprilTagDetector:
+    def __init__(self, families: str = "tag36h11") -> None:
+        cv2, _ = _load_cv2_only()
+        dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11)
+        parameters = cv2.aruco.DetectorParameters()
+        self._detector = cv2.aruco.ArucoDetector(dictionary, parameters)
+
+    def detect(self, gray: Any) -> list[_OpenCVArucoDetection]:
+        corners, ids, _ = self._detector.detectMarkers(gray)
+        if ids is None:
+            return []
+        detections: list[_OpenCVArucoDetection] = []
+        for marker_corners, marker_id in zip(corners, ids.flatten()):
+            points = marker_corners.reshape(-1, 2)
+            center_x = float(points[:, 0].mean())
+            center_y = float(points[:, 1].mean())
+            detections.append(_OpenCVArucoDetection(tag_id=int(marker_id), center=(center_x, center_y)))
+        return detections
+
+
+def _load_cv2_only() -> tuple[Any, None]:
+    try:
+        import cv2  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise VisionDependencyError("opencv-python is required for side-camera tag detection") from exc
+    return cv2, None
