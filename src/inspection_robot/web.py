@@ -220,8 +220,9 @@ def create_app(root: Path | None = None) -> Flask:
             return jsonify({"ok": False, "error": "当前服务是 simulate mode，请用 RUN_MODE=robot 启动小车端服务。"}), 409
         runtime = _ensure_runtime()
         payload = request.get_json(silent=True) or {}
-        speed = _int_payload(payload, "speed", 20)
-        duration = _float_payload(payload, "duration_seconds", 0.12)
+        config = getattr(runtime, "config", None)
+        speed = _int_payload(payload, "speed", int(getattr(config, "patrol_speed", 22)))
+        duration = _float_payload(payload, "duration_seconds", float(getattr(config, "step_seconds", 0.14)))
         try:
             runtime.stop()
             _run_manual_command(command, speed=speed, duration_seconds=duration, runtime=runtime)
@@ -233,6 +234,38 @@ def create_app(root: Path | None = None) -> Flask:
         status = "STOPPED" if command == "stop" else "MANUAL_CONTROL"
         store.record_robot_status(status, f"手动控制完成：{command}")
         return jsonify({"ok": True, "command": command})
+
+    @app.post("/api/calibration/turn_90")
+    def api_calibration_turn_90():
+        if not _robot_mode_enabled():
+            store.record_robot_status("IDLE", "90 degree calibration requires RUN_MODE=robot.")
+            return jsonify({"ok": False, "error": "RUN_MODE=robot required for turn calibration"}), 409
+        runtime = _ensure_runtime()
+        payload = request.get_json(silent=True) or {}
+        config = getattr(runtime, "config", None)
+        direction = str(payload.get("direction") or "right").strip().lower()
+        speed = _int_payload(payload, "speed", int(getattr(config, "turn_speed", 18)))
+        duration = _float_payload(payload, "duration_seconds", float(getattr(config, "turn_90_seconds", 0.75)))
+        if direction not in {"left", "right"}:
+            return jsonify({"ok": False, "error": f"unknown turn direction: {direction}"}), 400
+        try:
+            runtime.stop()
+            active_motion = getattr(runtime, "motion", motion)
+            if direction == "left":
+                active_motion.rotate_left_slow(speed=speed, duration_seconds=duration)
+            else:
+                active_motion.rotate_right_slow(speed=speed, duration_seconds=duration)
+            active_motion.stop()
+            settler = getattr(runtime, "_settle", None)
+            if callable(settler):
+                settler()
+        except RobotHardwareError as exc:
+            store.record_run_mode("robot", False)
+            store.record_robot_status("ERROR", str(exc))
+            return jsonify({"ok": False, "error": str(exc)}), 500
+        store.record_run_mode("robot", True)
+        store.record_robot_status("MANUAL_CONTROL", f"90 degree calibration: {direction}, speed={speed}, duration={duration}")
+        return jsonify({"ok": True, "direction": direction, "speed": speed, "duration_seconds": duration})
 
     @app.get("/api/export.csv")
     def api_export_csv():
@@ -279,11 +312,6 @@ def create_app(root: Path | None = None) -> Flask:
         commands = {
             "stop": lambda: active_motion.stop(),
             "forward": lambda: active_motion.move_forward_slow(speed=speed, duration_seconds=duration_seconds),
-            "backward": lambda: active_motion.move_backward_slow(speed=speed, duration_seconds=duration_seconds),
-            "left": lambda: active_motion.strafe_left_slow(speed=speed, duration_seconds=duration_seconds),
-            "right": lambda: active_motion.strafe_right_slow(speed=speed, duration_seconds=duration_seconds),
-            "rotate_left": lambda: active_motion.rotate_left_slow(speed=speed, duration_seconds=duration_seconds),
-            "rotate_right": lambda: active_motion.rotate_right_slow(speed=speed, duration_seconds=duration_seconds),
             "turn_left_90": lambda: active_motion.rotate_left_slow(speed=turn_speed, duration_seconds=turn_duration),
             "turn_right_90": lambda: active_motion.rotate_right_slow(speed=turn_speed, duration_seconds=turn_duration),
         }

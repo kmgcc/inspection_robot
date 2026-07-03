@@ -51,7 +51,7 @@ class RuntimeTest(unittest.TestCase):
             store,
             DEFAULT_WAREHOUSE_MAP,
             {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
-            config=RobotRuntimeConfig(step_seconds=0, poll_seconds=0, scan_timeout_seconds=0),
+            config=RobotRuntimeConfig(step_seconds=0, poll_seconds=0, scan_timeout_seconds=0, action_settle_seconds=0),
             motion_adapter=fake_motion,
             sensor_adapter=fake_sensors,
             alarm_adapter=FakeAlarm(),
@@ -66,7 +66,8 @@ class RuntimeTest(unittest.TestCase):
         self.assertGreater(len(snapshot["path"]["waypoints"]), 0)
         self.assertTrue(any(event["type"] == "shelf_scanned" for event in snapshot["events"]))
         self.assertIn("move_forward", fake_motion.calls)
-        self.assertIn("strafe_right", fake_motion.calls)
+        self.assertNotIn("strafe_right", fake_motion.calls)
+        self.assertNotIn("move_backward", fake_motion.calls)
 
     def test_runtime_reports_obstacle_wait_and_clear(self) -> None:
         store = self.make_store()
@@ -77,7 +78,7 @@ class RuntimeTest(unittest.TestCase):
             store,
             DEFAULT_WAREHOUSE_MAP,
             {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
-            config=RobotRuntimeConfig(step_seconds=0, poll_seconds=0, scan_timeout_seconds=0),
+            config=RobotRuntimeConfig(step_seconds=0, poll_seconds=0, scan_timeout_seconds=0, action_settle_seconds=0),
             motion_adapter=fake_motion,
             sensor_adapter=fake_sensors,
             alarm_adapter=fake_alarm,
@@ -99,7 +100,7 @@ class RuntimeTest(unittest.TestCase):
             store,
             DEFAULT_WAREHOUSE_MAP,
             {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
-            config=RobotRuntimeConfig(step_seconds=0, poll_seconds=0, scan_timeout_seconds=0, boundary_cooldown_seconds=0, boundary_confirm_samples=1),
+            config=RobotRuntimeConfig(step_seconds=0, poll_seconds=0, scan_timeout_seconds=0, action_settle_seconds=0, boundary_cooldown_seconds=0, boundary_confirm_samples=1),
             motion_adapter=fake_motion,
             sensor_adapter=fake_sensors,
             alarm_adapter=FakeAlarm(),
@@ -125,6 +126,7 @@ class RuntimeTest(unittest.TestCase):
                 step_seconds=0,
                 line_follow_step_seconds=0,
                 scan_timeout_seconds=0,
+                action_settle_seconds=0,
                 boundary_cooldown_seconds=0,
                 boundary_confirm_samples=1,
                 boundary_min_black_sensors=4,
@@ -139,6 +141,37 @@ class RuntimeTest(unittest.TestCase):
         runtime.run_continuous_patrol(max_iterations=2)
 
         self.assertIn("move_forward", fake_motion.calls)
+        self.assertNotIn("rotate_right", fake_motion.calls)
+        self.assertNotIn("rotate_left", fake_motion.calls)
+
+    def test_continuous_patrol_stops_when_line_is_not_centered(self) -> None:
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        fake_sensors = FakeSensors(distances=[400] * 4, tapes=[(0, 1, 1, 1), (0, 1, 1, 1)])
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=RobotRuntimeConfig(
+                step_seconds=0,
+                line_follow_step_seconds=0,
+                scan_timeout_seconds=0,
+                action_settle_seconds=0,
+                boundary_cooldown_seconds=0,
+                boundary_confirm_samples=1,
+                boundary_min_black_sensors=4,
+            ),
+            motion_adapter=fake_motion,
+            sensor_adapter=fake_sensors,
+            alarm_adapter=FakeAlarm(),
+            gimbal_adapter=FakeGimbal(),
+            detection_provider=fake_detection_provider,
+        )
+
+        runtime.run_continuous_patrol(max_iterations=1)
+
+        self.assertIn("stop", fake_motion.calls)
+        self.assertNotIn("move_forward", fake_motion.calls)
         self.assertNotIn("rotate_right", fake_motion.calls)
         self.assertNotIn("rotate_left", fake_motion.calls)
 
@@ -161,6 +194,7 @@ class RuntimeTest(unittest.TestCase):
                 step_seconds=0,
                 avoidance_body_seconds=0,
                 scan_timeout_seconds=0,
+                action_settle_seconds=0,
             ),
             motion_adapter=fake_motion,
             sensor_adapter=fake_sensors,
@@ -182,7 +216,7 @@ class RuntimeTest(unittest.TestCase):
         fake_motion = FakeMotion()
         fake_sensors = FakeSensors(
             distances=[400] * 12,
-            tapes=[(0, 0, 0, 0), (0, 0, 0, 0), (1, 1, 1, 1), (1, 1, 1, 1)],
+            tapes=[(0, 0, 0, 0), (0, 0, 0, 0), (1, 0, 0, 1), (1, 0, 0, 1)],
         )
         runtime = RobotRuntime(
             store,
@@ -193,6 +227,7 @@ class RuntimeTest(unittest.TestCase):
                 poll_seconds=0,
                 scan_timeout_seconds=0,
                 scan_interval_seconds=0,
+                action_settle_seconds=0,
                 boundary_cooldown_seconds=0,
                 turns_per_cycle=2,
                 skip_scan_cycles=1,

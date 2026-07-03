@@ -19,10 +19,11 @@ def main() -> int:
     blocked_distance_mm = int(os.environ.get("BLOCKED_DISTANCE_MM", "160"))
     clear_distance_mm = int(os.environ.get("CLEAR_DISTANCE_MM", "240"))
     wait_seconds = float(os.environ.get("OBSTACLE_WAIT_SECONDS", "6"))
-    turn_seconds = float(os.environ.get("ROBOT_TURN_90_SECONDS", "0.60"))
-    turn_speed = int(os.environ.get("ROBOT_TURN_SPEED", "25"))
-    avoidance_speed = int(os.environ.get("AVOIDANCE_SPEED", "18"))
-    body_seconds = float(os.environ.get("AVOIDANCE_BODY_SECONDS", "0.85"))
+    turn_seconds = float(os.environ.get("ROBOT_TURN_90_SECONDS", "0.75"))
+    turn_speed = int(os.environ.get("ROBOT_TURN_SPEED", "18"))
+    settle_seconds = float(os.environ.get("ROBOT_ACTION_SETTLE_SECONDS", "0.35"))
+    avoidance_speed = int(os.environ.get("AVOIDANCE_SPEED", "14"))
+    body_seconds = float(os.environ.get("AVOIDANCE_BODY_SECONDS", "1.00"))
     blocked_count = 0
     print(
         "obstacle avoidance test: "
@@ -48,7 +49,7 @@ def main() -> int:
                     blocked_count = 0
                 else:
                     print("obstacle remains: right-side detour, then restore original heading", flush=True)
-                    if _drive_right_detour(clear_distance_mm, turn_speed, turn_seconds, avoidance_speed, body_seconds):
+                    if _drive_right_detour(clear_distance_mm, turn_speed, turn_seconds, settle_seconds, avoidance_speed, body_seconds):
                         blocked_count = 0
                         alarm.clear_alarm()
                     else:
@@ -84,6 +85,7 @@ def _drive_right_detour(
     clear_distance_mm: int,
     turn_speed: int,
     turn_seconds: float,
+    settle_seconds: float,
     avoidance_speed: int,
     body_seconds: float,
 ) -> bool:
@@ -100,6 +102,7 @@ def _drive_right_detour(
         print(label, flush=True)
         action()
         motion.stop()
+        time.sleep(max(0.0, settle_seconds))
         distance = sensors.read_distance_mm()
         print(f"after {label}: distance_mm={distance}", flush=True)
         if distance is not None and distance < clear_distance_mm:

@@ -250,6 +250,31 @@ button.demo {
   color: #ffffff;
 }
 
+.calibration-field {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #b9c2cf;
+  border-radius: 7px;
+  background: #ffffff;
+  padding: 6px 9px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.calibration-field input {
+  width: 72px;
+  min-height: 26px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 3px 6px;
+  color: var(--text);
+  font: inherit;
+}
+
 .map-grid {
   --grid-columns: 8;
   display: grid;

@@ -101,12 +101,13 @@
         <button type="button" data-post="/api/reset">重置</button>
         <button type="button" data-post="/api/gimbal/init">云台侧向</button>
         <button type="button" data-post="/api/control/forward">前进</button>
-        <button type="button" data-post="/api/control/backward">后退</button>
-        <button type="button" data-post="/api/control/left">左移</button>
-        <button type="button" data-post="/api/control/right">右移</button>
         <button type="button" data-post="/api/control/turn_left_90">左转 90</button>
         <button type="button" data-post="/api/control/turn_right_90">右转 90</button>
         <button type="button" data-post="/api/control/stop">电机停止</button>
+        <label class="calibration-field">90 速度 <input id="turn_calibration_speed" type="number" min="1" max="100" step="1" value="18"></label>
+        <label class="calibration-field">90 秒数 <input id="turn_calibration_seconds" type="number" min="0.1" max="3" step="0.05" value="0.75"></label>
+        <button type="button" data-calibrate-turn="left">校准左 90</button>
+        <button type="button" data-calibrate-turn="right">校准右 90</button>
         <button type="button" data-post="/api/audio/announce">音频测试</button>
         <button type="button" data-post="/api/demo/path">模拟规划路径</button>
         <button type="button" data-post="/api/demo/obstacle">模拟障碍等待</button>

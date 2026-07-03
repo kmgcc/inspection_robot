@@ -515,11 +515,26 @@ async function playCarAudio() {
   }
 }
 
+async function calibrateTurn(direction) {
+  const speed = Number(byId("turn_calibration_speed")?.value || 18);
+  const duration = Number(byId("turn_calibration_seconds")?.value || 0.75);
+  await postAction("/api/calibration/turn_90", {
+    direction,
+    speed,
+    duration_seconds: duration,
+  });
+}
+
 document.addEventListener("click", async (event) => {
   try {
     const action = event.target.closest("[data-post]");
     if (action) {
       await postAction(action.dataset.post);
+      return;
+    }
+    const calibration = event.target.closest("[data-calibrate-turn]");
+    if (calibration) {
+      await calibrateTurn(calibration.dataset.calibrateTurn);
       return;
     }
     if (event.target.closest("[data-confirm]")) {

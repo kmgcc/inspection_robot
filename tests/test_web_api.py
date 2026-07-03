@@ -154,6 +154,67 @@ class WebApiTest(unittest.TestCase):
         self.assertIn("manual_confirm", event_types)
         self.assertFalse(any(event["status"] == "waiting_confirm" for event in payload["events"]))
 
+    def test_robot_calibration_turn_uses_payload_and_disables_backward_control(self) -> None:
+        runtime = FakeRuntime()
+        self.app.config["RUN_MODE"] = "robot"
+        self.app.config["ROBOT_RUNTIME"] = runtime
+
+        calibration = self.client.post(
+            "/api/calibration/turn_90",
+            json={"direction": "right", "speed": 17, "duration_seconds": 0.82},
+        )
+        self.assertEqual(calibration.status_code, 200)
+        self.assertEqual(calibration.get_json()["duration_seconds"], 0.82)
+        self.assertIn(("rotate_right", 17, 0.82), runtime.motion.calls)
+        self.assertIn("settle", runtime.calls)
+
+        backward = self.client.post("/api/control/backward", json={"speed": 20, "duration_seconds": 0.2})
+        self.assertEqual(backward.status_code, 400)
+        self.assertFalse(any(call[0] == "move_backward" for call in runtime.motion.calls))
+
+
+class FakeRuntime:
+    def __init__(self) -> None:
+        self.motion = FakeMotion()
+        self.config = type(
+            "Config",
+            (),
+            {
+                "patrol_speed": 22,
+                "step_seconds": 0.14,
+                "turn_speed": 18,
+                "turn_90_seconds": 0.75,
+                "action_settle_seconds": 0,
+            },
+        )()
+        self.calls: list[str] = []
+
+    def stop(self) -> None:
+        self.calls.append("stop")
+
+    def _settle(self) -> None:
+        self.calls.append("settle")
+
+
+class FakeMotion:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int | None, float | None]] = []
+
+    def move_forward_slow(self, *, speed: int, duration_seconds: float) -> None:
+        self.calls.append(("move_forward", speed, duration_seconds))
+
+    def move_backward_slow(self, *, speed: int, duration_seconds: float) -> None:
+        self.calls.append(("move_backward", speed, duration_seconds))
+
+    def rotate_left_slow(self, *, speed: int, duration_seconds: float) -> None:
+        self.calls.append(("rotate_left", speed, duration_seconds))
+
+    def rotate_right_slow(self, *, speed: int, duration_seconds: float) -> None:
+        self.calls.append(("rotate_right", speed, duration_seconds))
+
+    def stop(self) -> None:
+        self.calls.append(("stop", None, None))
+
 
 if __name__ == "__main__":
     unittest.main()

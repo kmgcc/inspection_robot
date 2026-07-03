@@ -33,8 +33,9 @@ def main() -> int:
             if sensors.tape_boundary_count_detected(state, min_black=min_black):
                 print("column-end black tape detected: stop and turn right 90", flush=True)
                 motion.stop()
-                motion.rotate_right_slow(duration_seconds=float(os.environ.get("ROBOT_TURN_90_SECONDS", "0.60")))
+                motion.rotate_right_slow(duration_seconds=float(os.environ.get("ROBOT_TURN_90_SECONDS", "0.75")))
                 motion.stop()
+                time.sleep(float(os.environ.get("ROBOT_ACTION_SETTLE_SECONDS", "0.35")))
             time.sleep(0.2)
     except KeyboardInterrupt:
         print("stopped by user", flush=True)
