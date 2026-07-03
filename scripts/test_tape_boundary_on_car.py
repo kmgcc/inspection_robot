@@ -18,9 +18,13 @@ from inspection_robot.robot.sensors import RobotHardwareError
 
 def main() -> int:
     seconds = float(os.environ.get("TAPE_TEST_SECONDS", "20"))
-    min_black = int(os.environ.get("BOUNDARY_MIN_BLACK_SENSORS", "2"))
+    min_black = int(os.environ.get("BOUNDARY_MIN_BLACK_SENSORS", "4"))
     deadline = time.monotonic() + seconds
-    print(f"tape boundary test: 0 means black tape, trigger when >= {min_black} sensors are black", flush=True)
+    print(
+        f"tape boundary test: 0 means black tape, turn only when >= {min_black} sensors are black; "
+        "middle two black is line-follow center, not a turn trigger",
+        flush=True,
+    )
     try:
         while time.monotonic() < deadline:
             state = sensors.read_tape_boundary()
@@ -29,7 +33,7 @@ def main() -> int:
             if sensors.tape_boundary_count_detected(state, min_black=min_black):
                 print("column-end black tape detected: stop and turn right 90", flush=True)
                 motion.stop()
-                motion.rotate_right_slow(duration_seconds=float(os.environ.get("ROBOT_TURN_90_SECONDS", "0.45")))
+                motion.rotate_right_slow(duration_seconds=float(os.environ.get("ROBOT_TURN_90_SECONDS", "0.60")))
                 motion.stop()
             time.sleep(0.2)
     except KeyboardInterrupt:

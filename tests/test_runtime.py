@@ -113,6 +113,70 @@ class RuntimeTest(unittest.TestCase):
         self.assertIn("rotate_right", fake_motion.calls)
         self.assertNotIn("move_backward", fake_motion.calls)
 
+    def test_continuous_patrol_treats_center_tape_as_line_follow_forward(self) -> None:
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        fake_sensors = FakeSensors(distances=[400] * 6, tapes=[(1, 0, 0, 1)] * 4)
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=RobotRuntimeConfig(
+                step_seconds=0,
+                line_follow_step_seconds=0,
+                scan_timeout_seconds=0,
+                boundary_cooldown_seconds=0,
+                boundary_confirm_samples=1,
+                boundary_min_black_sensors=4,
+            ),
+            motion_adapter=fake_motion,
+            sensor_adapter=fake_sensors,
+            alarm_adapter=FakeAlarm(),
+            gimbal_adapter=FakeGimbal(),
+            detection_provider=fake_detection_provider,
+        )
+
+        runtime.run_continuous_patrol(max_iterations=2)
+
+        self.assertIn("move_forward", fake_motion.calls)
+        self.assertNotIn("rotate_right", fake_motion.calls)
+        self.assertNotIn("rotate_left", fake_motion.calls)
+
+    def test_runtime_avoids_obstacle_to_right_with_full_body_steps(self) -> None:
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        fake_sensors = FakeSensors(
+            distances=[120, 400, 400, 400, 400, 400, 400, 400],
+            tapes=[(1, 1, 1, 1)] * 4,
+        )
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=RobotRuntimeConfig(
+                blocked_distance_mm=160,
+                clear_distance_mm=240,
+                blocked_samples=1,
+                obstacle_wait_seconds=0,
+                step_seconds=0,
+                avoidance_body_seconds=0,
+                scan_timeout_seconds=0,
+            ),
+            motion_adapter=fake_motion,
+            sensor_adapter=fake_sensors,
+            alarm_adapter=FakeAlarm(),
+            detection_provider=fake_detection_provider,
+        )
+
+        runtime.run_patrol(shelf_order=["A1"], max_steps=1)
+        event_types = [event["type"] for event in store.snapshot()["events"]]
+
+        self.assertIn("obstacle_wait", event_types)
+        self.assertIn("obstacle_avoidance_step", event_types)
+        self.assertIn("obstacle_clear", event_types)
+        self.assertLess(fake_motion.calls.index("rotate_right"), fake_motion.calls.index("rotate_left"))
+        self.assertGreaterEqual(fake_motion.calls.count("move_forward"), 4)
+
     def test_continuous_patrol_skips_first_cycle_then_scans_visible_shelf(self) -> None:
         store = self.make_store()
         fake_motion = FakeMotion()
