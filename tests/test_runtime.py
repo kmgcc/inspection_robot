@@ -54,9 +54,12 @@ class RuntimeTest(unittest.TestCase):
             "ROBOT_ACTION_SETTLE_SECONDS",
             "AVOIDANCE_SPEED",
             "AVOIDANCE_BODY_SECONDS",
+            "AVOIDANCE_SIDE_CLEARANCE_BODIES",
+            "AVOIDANCE_PARALLEL_BODIES",
             "AVOIDANCE_RETURN_BODIES",
             "BOUNDARY_MIN_BLACK_SENSORS",
             "BOUNDARY_COOLDOWN_SECONDS",
+            "MOTION_GUARD_POLL_SECONDS",
             "LINE_FOLLOW_SPEED",
             "LINE_FOLLOW_TURN_SPEED",
         ):
@@ -66,10 +69,11 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(config.step_seconds, 0.25)
         self.assertEqual(config.action_settle_seconds, 0.45)
         self.assertEqual(config.avoidance_speed, 20)
-        self.assertEqual(config.avoidance_body_seconds, 0.50)
-        self.assertEqual(config.avoidance_return_bodies, 1.0)
+        self.assertEqual(config.avoidance_body_seconds, 0.35)
+        self.assertEqual(config.avoidance_return_bodies, 0.8)
         self.assertEqual(config.boundary_min_black_sensors, 4)
-        self.assertEqual(config.boundary_cooldown_seconds, 0.10)
+        self.assertEqual(config.boundary_cooldown_seconds, 0.05)
+        self.assertEqual(config.motion_guard_poll_seconds, 0.02)
         self.assertEqual(config.line_follow_speed, 30)
         self.assertEqual(config.line_follow_turn_speed, 30)
 
@@ -343,6 +347,51 @@ class RuntimeTest(unittest.TestCase):
         self.assertIn("move_forward", fake_motion.calls)
         self.assertNotIn("rotate_right", fake_motion.calls)
 
+    def test_motion_guard_latches_fast_full_black_boundary_during_line_follow(self) -> None:
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        fake_sensors = FakeSensors(
+            distances=[400] * 12,
+            tapes=[
+                (0, 0, 0, 0),
+                (1, 0, 0, 1),
+                (0, 0, 0, 0),
+                (1, 1, 1, 1),
+                (1, 1, 1, 1),
+            ],
+        )
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=RobotRuntimeConfig(
+                step_seconds=0,
+                line_follow_enabled=True,
+                line_follow_step_seconds=0.06,
+                motion_guard_poll_seconds=0.02,
+                scan_timeout_seconds=0,
+                action_settle_seconds=0,
+                boundary_cooldown_seconds=0,
+                boundary_confirm_samples=1,
+                boundary_min_black_sensors=4,
+            ),
+            motion_adapter=fake_motion,
+            sensor_adapter=fake_sensors,
+            alarm_adapter=FakeAlarm(),
+            gimbal_adapter=FakeGimbal(),
+            detection_provider=fake_detection_provider,
+        )
+
+        runtime.run_continuous_patrol(max_iterations=2)
+        event_stages = [
+            event["evidence"].get("stage")
+            for event in store.snapshot()["events"]
+            if event["type"] == "motion_debug" and isinstance(event.get("evidence"), dict)
+        ]
+
+        self.assertGreaterEqual(fake_motion.calls.count("rotate_right"), 2)
+        self.assertIn("motion_guard_boundary_latched", event_stages)
+
     def test_continuous_patrol_safety_wrapper_records_unexpected_exception(self) -> None:
         store = self.make_store()
         runtime = RobotRuntime(
@@ -600,6 +649,34 @@ class RuntimeTest(unittest.TestCase):
 
         self.assertIn("high_priority_alarm", fake_alarm.calls)
 
+    def test_camera_failure_requests_manual_cycle_fallback_confirmation(self) -> None:
+        store = InspectionStore(
+            DEFAULT_TAG_MAP,
+            warehouse_map=DEFAULT_WAREHOUSE_MAP,
+            shelf_manifest=DEFAULT_SHELF_MANIFEST,
+            root=self.root,
+        )
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            DEFAULT_SHELF_MANIFEST,
+            config=RobotRuntimeConfig(camera_failure_scan_threshold=2, camera_failure_request_cooldown_seconds=0),
+            motion_adapter=FakeMotion(),
+            sensor_adapter=FakeSensors(distances=[400] * 4, tapes=[(1, 1, 1, 1)] * 4),
+            alarm_adapter=FakeAlarm(),
+            gimbal_adapter=FakeGimbal(),
+            detection_provider=empty_detection_provider,
+        )
+
+        runtime._record_empty_vision_scan()
+        runtime._record_empty_vision_scan()
+        waiting = [event for event in store.snapshot()["events"] if event["status"] == "waiting_confirm"]
+
+        self.assertEqual(waiting[-1]["type"], "scan_failed")
+        self.assertEqual(waiting[-1]["evidence"]["reason"], "camera_cycle_fallback_required")
+        self.assertEqual(runtime.confirm_camera_cycle_fallback(), 2)
+        self.assertEqual(store.snapshot()["patrol_cycle"], 2)
+
 
 class FakeMotion:
     def __init__(self) -> None:
@@ -718,6 +795,11 @@ def fake_detection_provider(**_: object) -> Iterator[dict[str, object]]:
 
 def shelf_tag_only_detection_provider(**_: object) -> Iterator[dict[str, object]]:
     yield {"tag_id": "101", "marker_family": "TAG36H11", "ocr_text": "A1"}
+
+
+def empty_detection_provider(**_: object) -> Iterator[dict[str, object]]:
+    return
+    yield {}
 
 
 class temporary_env:

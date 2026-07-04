@@ -132,6 +132,36 @@ class InspectionStore:
             self._persist_events_locked()
             return event
 
+    def record_camera_cycle_fallback_request(
+        self,
+        *,
+        observed_shelves: list[str],
+        expected_shelves: list[str],
+        failed_scans: int,
+    ) -> EventRecord:
+        evidence = {
+            "reason": "camera_cycle_fallback_required",
+            "observed_shelves": list(observed_shelves),
+            "expected_shelves": list(expected_shelves),
+            "failed_scans": max(0, int(failed_scans)),
+        }
+        with self.lock:
+            self.state.task_status = "WAIT_CONFIRM"
+            self.state.robot_status = "视觉兜底待确认"
+            self.state.alarm = {"level": "warning", "message": "视觉兜底待确认", "light": "red"}
+            self.state.last_message = "连续扫描未识别到货架，请人工确认是否进入下一轮。"
+            event = make_event(
+                "scan_failed",
+                priority=2,
+                status="waiting_confirm",
+                source="camera",
+                message=self.state.last_message,
+                evidence=evidence,
+            )
+            self._append_event_locked(event)
+            self._persist_events_locked()
+            return event
+
     def record_gimbal_initialized(self, yaw: int | None = None, pitch: int | None = None) -> None:
         with self.lock:
             self.state.gimbal = {"side_initialized": True, "yaw": yaw, "pitch": pitch}

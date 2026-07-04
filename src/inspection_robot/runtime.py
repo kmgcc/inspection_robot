@@ -10,7 +10,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from .audio import start_audio_cue
+from .audio import start_audio_cue, start_spoken_message
 from .config import ShelfManifest, WarehouseMap
 from .core.planner import PlanningError, RouteStep, plan_patrol_route
 from .core.events import EventRecord
@@ -73,15 +73,16 @@ class RobotRuntimeConfig:
     action_settle_seconds: float = field(default_factory=lambda: _env_float(0.45, "ROBOT_ACTION_SETTLE_SECONDS"))
     obstacle_wait_seconds: float = field(default_factory=lambda: _env_float(6.0, "OBSTACLE_WAIT_SECONDS"))
     avoidance_speed: int = field(default_factory=lambda: _env_int(20, "AVOIDANCE_SPEED"))
-    avoidance_body_seconds: float = field(default_factory=lambda: _env_float(0.50, "AVOIDANCE_BODY_SECONDS"))
-    avoidance_side_clearance_bodies: float = field(default_factory=lambda: _env_float(1.0, "AVOIDANCE_SIDE_CLEARANCE_BODIES"))
-    avoidance_parallel_bodies: float = field(default_factory=lambda: _env_float(2.0, "AVOIDANCE_PARALLEL_BODIES"))
-    avoidance_return_bodies: float = field(default_factory=lambda: _env_float(1.0, "AVOIDANCE_RETURN_BODIES"))
+    avoidance_body_seconds: float = field(default_factory=lambda: _env_float(0.35, "AVOIDANCE_BODY_SECONDS"))
+    avoidance_side_clearance_bodies: float = field(default_factory=lambda: _env_float(0.8, "AVOIDANCE_SIDE_CLEARANCE_BODIES"))
+    avoidance_parallel_bodies: float = field(default_factory=lambda: _env_float(1.4, "AVOIDANCE_PARALLEL_BODIES"))
+    avoidance_return_bodies: float = field(default_factory=lambda: _env_float(0.8, "AVOIDANCE_RETURN_BODIES"))
     avoidance_turn_direction: str = field(default_factory=lambda: _env_text("right", "AVOIDANCE_TURN_DIRECTION"))
     boundary_min_black_sensors: int = field(default_factory=lambda: _env_int(4, "BOUNDARY_MIN_BLACK_SENSORS"))
     boundary_confirm_samples: int = field(default_factory=lambda: _env_int(1, "BOUNDARY_CONFIRM_SAMPLES"))
-    boundary_confirm_gap_seconds: float = field(default_factory=lambda: _env_float(0.03, "BOUNDARY_CONFIRM_GAP_SECONDS"))
-    boundary_cooldown_seconds: float = field(default_factory=lambda: _env_float(0.10, "BOUNDARY_COOLDOWN_SECONDS"))
+    boundary_confirm_gap_seconds: float = field(default_factory=lambda: _env_float(0.0, "BOUNDARY_CONFIRM_GAP_SECONDS"))
+    boundary_cooldown_seconds: float = field(default_factory=lambda: _env_float(0.05, "BOUNDARY_COOLDOWN_SECONDS"))
+    motion_guard_poll_seconds: float = field(default_factory=lambda: _env_float(0.02, "MOTION_GUARD_POLL_SECONDS"))
     line_follow_enabled: bool = field(default_factory=lambda: _env_bool("LINE_FOLLOW_ENABLED", False))
     line_follow_speed: int = field(default_factory=lambda: _env_int(30, "LINE_FOLLOW_SPEED", "ROBOT_PATROL_SPEED", "ROBOT_SLOW_SPEED"))
     line_follow_step_seconds: float = field(default_factory=lambda: _env_float(0.14, "LINE_FOLLOW_STEP_SECONDS", "ROBOT_STEP_SECONDS"))
@@ -108,6 +109,18 @@ class RobotRuntimeConfig:
     video_width: int = 640
     video_height: int = 360
     video_fps: int = 8
+    vision_stability_enabled: bool = field(default_factory=lambda: _env_bool("VISION_STABILITY_ENABLED", False))
+    vision_min_stable_frames: int = field(default_factory=lambda: _env_int(3, "VISION_MIN_STABLE_FRAMES"))
+    vision_max_center_shift_px: float = field(default_factory=lambda: _env_float(10.0, "VISION_MAX_CENTER_SHIFT_PX"))
+    vision_max_corner_shift_px: float = field(default_factory=lambda: _env_float(14.0, "VISION_MAX_CORNER_SHIFT_PX"))
+    vision_max_angle_delta_deg: float = field(default_factory=lambda: _env_float(8.0, "VISION_MAX_ANGLE_DELTA_DEG"))
+    vision_state_machine_enabled: bool = field(default_factory=lambda: _env_bool("VISION_STATE_MACHINE_ENABLED", False))
+    image_classifier_enabled: bool = field(default_factory=lambda: _env_bool("IMAGE_CLASSIFIER_ENABLED", False))
+    camera_failure_scan_threshold: int = field(default_factory=lambda: _env_int(8, "CAMERA_FAILURE_SCAN_THRESHOLD"))
+    camera_failure_request_cooldown_seconds: float = field(
+        default_factory=lambda: _env_float(30.0, "CAMERA_FAILURE_REQUEST_COOLDOWN_SECONDS")
+    )
+    missing_alert_cooldown_seconds: float = field(default_factory=lambda: _env_float(8.0, "MISSING_ALERT_COOLDOWN_SECONDS"))
 
 
 class RobotRuntime:
@@ -151,6 +164,10 @@ class RobotRuntime:
         self._motion_step_index = 0
         self._last_motion_sensor_at = 0.0
         self._observed_shelf_sequence: list[str] = []
+        self._pending_boundary_state: tuple[int, int, int, int] | None = None
+        self._empty_vision_scans = 0
+        self._last_camera_fallback_at = 0.0
+        self._last_missing_alert_at = 0.0
 
     def start(self, shelf_order: Iterable[str] | None = None) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -309,6 +326,11 @@ class RobotRuntime:
     def _handle_tape_boundary(self, tape_state: tuple[int, int, int, int] | None = None) -> str:
         if tape_state is None:
             tape_state = self.sensors.read_tape_boundary()
+        if not self._candidate_boundary(tape_state) and self._pending_boundary_state is not None:
+            tape_state = self._pending_boundary_state
+            self._pending_boundary_state = None
+        elif self._candidate_boundary(tape_state):
+            self._pending_boundary_state = None
         if not self._candidate_boundary(tape_state):
             return "none"
         now = time.monotonic()
@@ -568,9 +590,57 @@ class RobotRuntime:
         else:
             self.motion.stop()
 
-    def _run_timed_motion(self, mover: Callable[..., None], *, speed: int, duration_seconds: float) -> None:
-        mover(speed=speed, duration_seconds=duration_seconds)
+    def _run_timed_motion(
+        self,
+        mover: Callable[..., None],
+        *,
+        speed: int,
+        duration_seconds: float,
+        watch_boundary: bool = True,
+    ) -> None:
+        duration = max(0.0, float(duration_seconds))
+        guard_interval = max(0.0, float(self.config.motion_guard_poll_seconds)) if watch_boundary else 0.0
+        if duration <= 0.0 or guard_interval <= 0.0 or duration <= guard_interval:
+            mover(speed=speed, duration_seconds=duration)
+            if watch_boundary:
+                self._poll_boundary_during_motion(duration)
+            self.motion.stop()
+            return
+
+        remaining = duration
+        elapsed = 0.0
+        while remaining > 0 and not self._stop_event.is_set():
+            chunk = min(remaining, guard_interval)
+            mover(speed=speed, duration_seconds=chunk)
+            elapsed += chunk
+            remaining -= chunk
+            if watch_boundary and self._poll_boundary_during_motion(elapsed):
+                break
         self.motion.stop()
+
+    def _poll_boundary_during_motion(self, elapsed_seconds: float) -> bool:
+        try:
+            tape_state = self.sensors.read_tape_boundary()
+        except RobotHardwareError:
+            return False
+        if not self._candidate_boundary(tape_state):
+            return False
+        self._pending_boundary_state = tape_state
+        self.motion.stop()
+        self.store.record_motion_debug(
+            "motion_guard_boundary_latched",
+            (
+                "运动过程中捕捉到四路黑胶带候选，已立即停车并锁存读数，"
+                "下一轮控制循环将执行列端/禁区动作。"
+            ),
+            status="TURNING_AT_BOUNDARY",
+            evidence={
+                "tape_state": _json_tape_state(tape_state),
+                "elapsed_seconds": round(max(0.0, float(elapsed_seconds)), 3),
+                "guard_poll_seconds": self.config.motion_guard_poll_seconds,
+            },
+        )
+        return True
 
     def _remember_line_correction(self, command: str) -> None:
         if command in {"strafe_left", "strafe_right", "turn_left", "turn_right"}:
@@ -646,7 +716,9 @@ class RobotRuntime:
         detections = self._collect_detections()
         shelf_id = self._shelf_id_from_detections(detections)
         if shelf_id is None:
+            self._record_empty_vision_scan()
             return
+        self._empty_vision_scans = 0
         self._perform_scan(shelf_id, f"{shelf_id}_SCAN", detections)
 
     def _shelf_id_from_detections(self, detections: list[dict[str, object]]) -> str | None:
@@ -697,6 +769,36 @@ class RobotRuntime:
         if normalized == order[-1]:
             self._complete_observed_cycle(order)
 
+    def _record_empty_vision_scan(self) -> None:
+        self._empty_vision_scans += 1
+        threshold = max(0, int(self.config.camera_failure_scan_threshold))
+        if threshold <= 0 or self._empty_vision_scans < threshold:
+            return
+        now = time.monotonic()
+        cooldown = max(0.0, float(self.config.camera_failure_request_cooldown_seconds))
+        if now - self._last_camera_fallback_at < cooldown:
+            return
+        self._last_camera_fallback_at = now
+        order = [str(item).strip().upper() for item in self.config.patrol_order if str(item).strip()]
+        self.store.record_camera_cycle_fallback_request(
+            observed_shelves=list(self._observed_shelf_sequence),
+            expected_shelves=order,
+            failed_scans=self._empty_vision_scans,
+        )
+
+    def confirm_camera_cycle_fallback(self) -> int:
+        order = [str(item).strip().upper() for item in self.config.patrol_order if str(item).strip()]
+        observed = list(self._observed_shelf_sequence)
+        missed = [shelf_id for shelf_id in order if shelf_id not in set(observed)]
+        cycle = self._current_cycle()
+        self.store.confirm()
+        self.store.record_cycle_completed(cycle, observed, missed)
+        next_cycle = cycle + 1
+        self.store.record_cycle(next_cycle, self._skip_shortage_for_cycle(next_cycle))
+        self._observed_shelf_sequence = []
+        self._empty_vision_scans = 0
+        return next_cycle
+
     def _complete_observed_cycle(self, order: list[str]) -> None:
         observed = list(self._observed_shelf_sequence)
         missed = [shelf_id for shelf_id in order if shelf_id not in set(observed)]
@@ -733,6 +835,26 @@ class RobotRuntime:
                 self.alarm.show_warning()
         except RobotHardwareError:
             pass
+        if high_priority:
+            self._play_missing_alert(waiting)
+
+    def _play_missing_alert(self, events: list[EventRecord]) -> None:
+        missing = [event for event in events if event.get("type") == "missing_item"]
+        if not missing:
+            return
+        now = time.monotonic()
+        cooldown = max(0.0, float(self.config.missing_alert_cooldown_seconds))
+        if now - self._last_missing_alert_at < cooldown:
+            return
+        self._last_missing_alert_at = now
+        names = [str(event.get("item") or "物品") for event in missing[:3]]
+        shelf_id = str(missing[0].get("shelf_id") or self.store.snapshot().get("current_shelf") or "当前货架")
+        if len(missing) > 3:
+            names.append(f"等 {len(missing)} 项")
+        spoken = f"检测到 {shelf_id} 缺少 {'、'.join(names)}。"
+        payload, status = start_spoken_message(self.store.root, spoken)
+        error = None if status == 200 else str(payload.get("error", "speech alert failed"))
+        self.store.record_audio_cue("missing_item", spoken if error is None else f"缺货语音报警失败: {error}", error)
 
     def _wait_for_obstacle_clear(self, shelf_id: str | None) -> bool:
         started_at = time.monotonic()
@@ -806,7 +928,7 @@ class RobotRuntime:
     def _avoidance_forward(self, step: str, body_multiplier: float = 1.0) -> bool:
         self.store.record_avoidance_step(step, nested_level=0)
         duration_seconds = self.config.avoidance_body_seconds * max(0.0, float(body_multiplier))
-        self._forward_step(speed=self.config.avoidance_speed, duration_seconds=duration_seconds)
+        self._forward_step(speed=self.config.avoidance_speed, duration_seconds=duration_seconds, watch_boundary=False)
         return self._avoidance_path_clear(f"after_{step}")
 
     def _avoidance_path_clear(self, step: str) -> bool:
@@ -904,9 +1026,13 @@ class RobotRuntime:
             return _turn_succeeded(self._turn_90("left"))
         return True
 
-    def _forward_step(self, *, speed: int, duration_seconds: float) -> None:
-        self.motion.move_forward_slow(speed=speed, duration_seconds=duration_seconds)
-        self.motion.stop()
+    def _forward_step(self, *, speed: int, duration_seconds: float, watch_boundary: bool = True) -> None:
+        self._run_timed_motion(
+            self.motion.move_forward_slow,
+            speed=speed,
+            duration_seconds=duration_seconds,
+            watch_boundary=watch_boundary,
+        )
         self._settle()
 
     def _turn_90(self, direction: str, *, speed: int | None = None, duration_seconds: float | None = None) -> dict[str, object] | None:
@@ -1052,6 +1178,13 @@ class RobotRuntime:
                 device=self.config.camera_device,
                 cooldown_seconds=0.5,
                 idle_timeout_seconds=self.config.scan_timeout_seconds,
+                stability_enabled=self.config.vision_stability_enabled,
+                stability_min_frames=self.config.vision_min_stable_frames,
+                stability_max_center_shift_px=self.config.vision_max_center_shift_px,
+                stability_max_corner_shift_px=self.config.vision_max_corner_shift_px,
+                stability_max_angle_delta_deg=self.config.vision_max_angle_delta_deg,
+                image_classifier_enabled=self.config.image_classifier_enabled,
+                vision_state_machine_enabled=self.config.vision_state_machine_enabled,
             )
         except TypeError:
             iterator = self.detection_provider(device=self.config.camera_device, cooldown_seconds=0.5)

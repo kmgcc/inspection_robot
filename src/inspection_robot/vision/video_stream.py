@@ -21,6 +21,9 @@ _LATEST: dict[str, object] = {
     "frame_id": "simulate",
     "detections": [],
     "error": None,
+    "fps": None,
+    "latency_ms": None,
+    "updated_at": None,
 }
 
 
@@ -31,10 +34,11 @@ def generate_mjpeg_frames(
     width: int = 640,
     height: int = 360,
     simulate: bool = False,
+    image_classifier_enabled: bool = False,
 ) -> Any:
     delay = 1.0 / max(1, int(fps))
     if simulate:
-        _set_latest("simulate", "simulate", [], None)
+        _set_latest("simulate", "simulate", [], None, fps=None, latency_ms=None)
         while True:
             yield _mjpeg_chunk(_SIMULATED_JPEG)
             time.sleep(delay)
@@ -43,46 +47,68 @@ def generate_mjpeg_frames(
         cv2, Detector = tag_detector._load_vision_dependencies()
         detector = Detector(families="tag36h11")
     except tag_detector.VisionDependencyError as exc:
-        _set_latest("camera", "error", [], str(exc))
+        _set_latest("camera", "error", [], str(exc), fps=None, latency_ms=None)
         while True:
             yield _mjpeg_chunk(_SIMULATED_JPEG)
             time.sleep(delay)
 
     frame_index = 0
+    previous_frame_at: float | None = None
     while True:
         frame_index += 1
         frame_id = f"video-{frame_index}"
+        started_at = time.monotonic()
         try:
             frame = read_camera_frame(device, cv2)
             if width > 0 and height > 0:
                 frame = cv2.resize(frame, (int(width), int(height)))
-            detections = tag_detector._detect_frame(frame, detector, cv2)
-            _set_latest("camera", frame_id, detections, None)
+            detections = tag_detector._detect_frame(
+                frame,
+                detector,
+                cv2,
+                image_classifier_enabled=image_classifier_enabled,
+            )
+            now = time.monotonic()
+            measured_fps = None if previous_frame_at is None else round(1.0 / max(0.001, now - previous_frame_at), 2)
+            previous_frame_at = now
+            latency_ms = round((now - started_at) * 1000.0, 1)
+            _set_latest("camera", frame_id, detections, None, fps=measured_fps, latency_ms=latency_ms)
             rendered = _draw_detections(frame, detections, cv2)
             ok, encoded = cv2.imencode(".jpg", rendered, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
             if not ok:
                 raise CameraFrameError("failed to encode video frame")
             yield _mjpeg_chunk(encoded.tobytes())
         except (CameraFrameError, tag_detector.VisionDependencyError) as exc:
-            _set_latest("camera", frame_id, [], str(exc))
+            _set_latest("camera", frame_id, [], str(exc), fps=None, latency_ms=None)
             yield _mjpeg_chunk(_SIMULATED_JPEG)
         time.sleep(delay)
 
 
 def latest_video_detections(*, simulate: bool = False) -> dict[str, object]:
     if simulate:
-        _set_latest("simulate", "simulate", [], None)
+        _set_latest("simulate", "simulate", [], None, fps=None, latency_ms=None)
     with _LATEST_LOCK:
         return dict(_LATEST)
 
 
-def _set_latest(source: str, frame_id: str, detections: list[Mapping[str, object]], error: str | None) -> None:
+def _set_latest(
+    source: str,
+    frame_id: str,
+    detections: list[Mapping[str, object]],
+    error: str | None,
+    *,
+    fps: float | None,
+    latency_ms: float | None,
+) -> None:
     payload = {
         "ok": error is None,
         "source": source,
         "frame_id": frame_id,
         "detections": [_json_safe(detection) for detection in detections],
         "error": error,
+        "fps": fps,
+        "latency_ms": latency_ms,
+        "updated_at": time.time(),
     }
     with _LATEST_LOCK:
         _LATEST.clear()

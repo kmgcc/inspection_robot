@@ -64,6 +64,7 @@ def create_app(root: Path | None = None) -> Flask:
             width=int(getattr(config, "video_width", 640)),
             height=int(getattr(config, "video_height", 360)),
             simulate=not _robot_mode_enabled(),
+            image_classifier_enabled=bool(getattr(config, "image_classifier_enabled", False)),
         )
         return Response(stream, mimetype="multipart/x-mixed-replace; boundary=frame")
 
@@ -222,6 +223,19 @@ def create_app(root: Path | None = None) -> Flask:
         payload = request.get_json(silent=True) or {}
         confirmed = store.confirm(payload.get("event_id"))
         return jsonify({"ok": True, "confirmed": confirmed})
+
+    @app.post("/api/cycle/confirm")
+    def api_cycle_confirm():
+        runtime = app.config.get("ROBOT_RUNTIME")
+        confirmer = getattr(runtime, "confirm_camera_cycle_fallback", None)
+        if callable(confirmer):
+            next_cycle = confirmer()
+        else:
+            current_cycle = int(store.snapshot().get("patrol_cycle", 1))
+            store.confirm()
+            next_cycle = current_cycle + 1
+            store.record_cycle(next_cycle, next_cycle <= 1)
+        return jsonify({"ok": True, "patrol_cycle": next_cycle})
 
     @app.post("/api/audio/play")
     def api_audio_play():

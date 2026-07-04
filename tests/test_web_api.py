@@ -186,6 +186,9 @@ class WebApiTest(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["source"], "simulate")
         self.assertIn("detections", payload)
+        self.assertIn("fps", payload)
+        self.assertIn("latency_ms", payload)
+        self.assertIn("updated_at", payload)
 
         feed = self.client.get("/api/video_feed", buffered=False)
         self.assertEqual(feed.status_code, 200)
@@ -216,6 +219,17 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(manual_turn.status_code, 200)
         self.assertEqual(runtime.turns[-1], ("right", 22, 0.85))
 
+    def test_cycle_confirm_delegates_to_runtime_fallback_confirmation(self) -> None:
+        runtime = FakeRuntime()
+        self.app.config["RUN_MODE"] = "robot"
+        self.app.config["ROBOT_RUNTIME"] = runtime
+
+        response = self.client.post("/api/cycle/confirm")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["patrol_cycle"], 3)
+        self.assertIn("confirm_cycle", runtime.calls)
+
 
 class FakeRuntime:
     def __init__(self) -> None:
@@ -242,6 +256,10 @@ class FakeRuntime:
 
     def turn_90_closed_loop(self, direction: str, *, speed: int | None = None, duration_seconds: float | None = None) -> None:
         self.turns.append((direction, speed, duration_seconds))
+
+    def confirm_camera_cycle_fallback(self) -> int:
+        self.calls.append("confirm_cycle")
+        return 3
 
 
 class FakeMotion:

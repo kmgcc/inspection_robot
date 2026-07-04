@@ -16,6 +16,8 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from inspection_robot.vision import tag_detector
+from inspection_robot.vision.stability import DetectionStabilityTracker, StabilityConfig
+from inspection_robot.vision.state_machine import VisionState, VisionStateMachine
 
 
 class VisionDetectorTest(unittest.TestCase):
@@ -83,6 +85,62 @@ class VisionDetectorTest(unittest.TestCase):
 
         self.assertIsNone(result.text)
         self.assertEqual(result.confidence, 42.0)
+
+    def test_stability_tracker_accepts_stable_frames_and_marks_repeats(self) -> None:
+        tracker = DetectionStabilityTracker(
+            StabilityConfig(
+                min_stable_frames=3,
+                max_center_shift_px=5.0,
+                max_corner_shift_px=5.0,
+                max_angle_delta_deg=4.0,
+            )
+        )
+        detection = {
+            "tag_id": "101",
+            "center": [60.0, 50.0],
+            "corners": [[40.0, 30.0], [80.0, 30.0], [80.0, 70.0], [40.0, 70.0]],
+            "angle_deg": 0.0,
+        }
+
+        self.assertIsNone(tracker.update(dict(detection)))
+        self.assertIsNone(tracker.update({**detection, "center": [61.0, 50.5]}))
+        stable = tracker.update({**detection, "center": [61.5, 51.0]})
+        repeat = tracker.update({**detection, "center": [61.8, 51.1]})
+
+        self.assertIsNotNone(stable)
+        self.assertEqual(stable["stable_frames"], 3)  # type: ignore[index]
+        self.assertFalse(stable["processed"])  # type: ignore[index]
+        self.assertTrue(repeat["processed"])  # type: ignore[index]
+
+    def test_stability_tracker_filters_large_jitter(self) -> None:
+        tracker = DetectionStabilityTracker(StabilityConfig(min_stable_frames=2, max_center_shift_px=3.0))
+
+        self.assertIsNone(tracker.update({"tag_id": "101", "center": [10.0, 10.0]}))
+        self.assertIsNone(tracker.update({"tag_id": "101", "center": [40.0, 10.0]}))
+
+    def test_vision_state_machine_reaches_done_without_driving_motion(self) -> None:
+        machine = VisionStateMachine()
+        detection = {"tag_id": "101", "center": [60.0, 50.0], "stable": True}
+
+        state = machine.run_until_done(detection)
+
+        self.assertEqual(state, VisionState.DONE)
+        self.assertIn("101", machine.processed_tags)
+        self.assertEqual(machine.history[0].current, VisionState.SEARCHING)
+
+    def test_optional_image_classifier_detects_simple_card_shape(self) -> None:
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        cv2.rectangle(frame, (25, 30), (75, 70), (255, 255, 255), -1)
+
+        result = tag_detector._classify_image_region(
+            frame,
+            center=(50.0, 50.0),
+            corners=((30.0, 30.0), (70.0, 30.0), (70.0, 70.0), (30.0, 70.0)),
+            cv2=cv2,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertIn(result.class_name, {"CARD", "BOX"})
 
 
 class FakeRawDetection:

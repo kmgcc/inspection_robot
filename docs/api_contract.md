@@ -308,6 +308,7 @@ path_planned/path_step/path_replanned -> 仅软件兜底或旧演示使用
 | `obstacle` | `src/inspection_robot/static/audio/obstacle.wav` | 障碍物或非预期禁区 |
 | `first` | `src/inspection_robot/static/audio/first.wav` | 检测到货架 |
 | `following` | `src/inspection_robot/static/audio/following.wav` | 检测到货架上的物品，每个物品一次 |
+| `missing_item` | 本地 TTS | 缺货或高优先级异常语音报警；无 TTS 命令时记录失败但不阻塞巡逻 |
 
 音频播放必须由小车端进程异步触发，通过树莓派默认音频设备输出；HTTP 请求不能等待音频完整播放结束。
 
@@ -319,9 +320,16 @@ POST /api/start
 POST /api/stop
 POST /api/reset
 POST /api/confirm
+POST /api/cycle/confirm
 GET  /api/export.csv
+GET  /api/video_feed
+GET  /api/video/detections
 GET  /health
 ```
+
+`/api/video/detections` 至少返回 `ok/source/frame_id/error/detections`，并应包含 `fps/latency_ms/updated_at` 便于真实小车验证共享帧源稳定性。
+
+`POST /api/cycle/confirm` 只用于摄像头连续未识别到货架时的人工兜底；它由操作者确认进入下一轮，不能由转向计数自动伪造视觉结果。
 
 真车控制建议：
 
@@ -344,6 +352,7 @@ POST /api/audio/announce
 ```python
 def record_run_mode(mode: str, hardware_connected: bool) -> None: ...
 def record_cycle(cycle: int, skip_shortage_detection: bool) -> None: ...
+def record_camera_cycle_fallback_request(*, observed_shelves: list[str], expected_shelves: list[str], failed_scans: int) -> None: ...
 def record_gimbal_initialized(yaw: int | None = None, pitch: int | None = None) -> None: ...
 def record_boundary(tape_state: tuple[int, int, int, int] | None, full_black: bool, kind: str) -> None: ...
 def record_boundary_turn(direction: str = "clockwise", degrees: int = 90) -> None: ...

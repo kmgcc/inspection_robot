@@ -18,11 +18,13 @@ CUED_AUDIO = {
     "default": DEFAULT_AUDIO_PATH,
 }
 PLAYER_CANDIDATES = ("paplay", "pw-play", "aplay", "ffplay")
+TTS_PLAYER_CANDIDATES = ("espeak-ng", "espeak", "spd-say")
 
 
 def _playback_env() -> dict[str, str]:
     env = os.environ.copy()
-    uid = os.getuid()
+    uid_getter = getattr(os, "getuid", None)
+    uid = uid_getter() if callable(uid_getter) else 0
     runtime_dir = f"/run/user/{uid}"
     env.setdefault("XDG_RUNTIME_DIR", runtime_dir)
     env.setdefault("PULSE_SERVER", f"unix:{runtime_dir}/pulse/native")
@@ -68,6 +70,38 @@ def start_audio_cue(project_root: Path, cue: str) -> tuple[dict[str, Any], int]:
         return {"ok": False, "error": str(exc)}, 500
 
     return {"ok": True, "cue": cue_key, "player": Path(player).name, "audio": str(audio_path)}, 200
+
+
+def start_spoken_message(project_root: Path, message: str) -> tuple[dict[str, Any], int]:
+    del project_root
+    text = _speech_text(message)
+    if not text:
+        return {"ok": False, "error": "empty speech message"}, 400
+    player = next((path for name in TTS_PLAYER_CANDIDATES if (path := shutil.which(name))), None)
+    if player is None:
+        return {"ok": False, "error": "no local TTS command found; install espeak-ng, espeak, or spd-say"}, 503
+    try:
+        subprocess.Popen(
+            _build_tts_command(player, text),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=_playback_env(),
+            start_new_session=True,
+        )
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}, 500
+    return {"ok": True, "cue": "spoken", "player": Path(player).name, "message": text}, 200
+
+
+def _speech_text(message: str) -> str:
+    return " ".join(str(message).split())[:160]
+
+
+def _build_tts_command(player: str, message: str) -> list[str]:
+    name = Path(player).name
+    if name == "spd-say":
+        return [player, message]
+    return [player, "-v", "zh", message]
 
 
 def main() -> int:

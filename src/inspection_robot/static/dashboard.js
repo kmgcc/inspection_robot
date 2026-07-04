@@ -51,6 +51,7 @@ const DIRECTION_LABELS = {
 const PATROL_ORDER = ["A1","A2","A3","A4","B4","B3","B2","B1"];
 
 let latestEventId = null;
+let latestPendingEvent = null;
 let testPollingActive = false;
 let testPollTimer = null;
 let latestVideoFrameId = null;
@@ -186,6 +187,7 @@ function renderStatus(data) {
   const motionSensor = data.motion_sensor || {};
   const pending = events.filter(isPending);
   latestEventId = pending.length > 0 ? pending[0].id : null;
+  latestPendingEvent = pending.length > 0 ? pending[0] : null;
 
   const currentShelf = data.current_shelf || data.current_zone;
   const isSimulate = !data.run_mode || data.run_mode === "simulate";
@@ -685,7 +687,12 @@ document.addEventListener("click", async (e) => {
 
   if (e.target.closest("[data-confirm]")) {
     try {
-      await postJson("/api/confirm", latestEventId ? { event_id: latestEventId } : {});
+      const evidence = latestPendingEvent && latestPendingEvent.evidence;
+      if (evidence && evidence.reason === "camera_cycle_fallback_required") {
+        await postJson("/api/cycle/confirm", latestEventId ? { event_id: latestEventId } : {});
+      } else {
+        await postJson("/api/confirm", latestEventId ? { event_id: latestEventId } : {});
+      }
       await loadStatus();
     } catch (err) {
       window.alert(`确认失败：${err.message}`);
