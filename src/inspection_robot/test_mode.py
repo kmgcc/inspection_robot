@@ -35,9 +35,10 @@ CALIBRATION_DEFAULTS: dict[str, Any] = {
     ),
     "_uncalibrated": False,
     "straight_min_speed": 12,       # 最低稳定直行速度
-    "straight_speed": 30,           # 直行测试默认速度
+    "straight_speed": 20,           # 直行测试默认速度
     "straight_step_seconds": 2.0,    # 直行测试默认时长(s)
-    "patrol_step_seconds": 0.25,
+    "patrol_step_seconds": 0.18,
+    "action_settle_seconds": 0.7,
     "turn_speed": 22,               # 转向测试默认速度
     "turn_cw90_seconds": 0.85,       # 顺时针约90°所需时间(s)
     "turn_ccw90_seconds": 0.85,      # 逆时针约90°所需时间(s)
@@ -52,6 +53,7 @@ CALIBRATION_ALLOWED_KEYS = {
     "straight_speed",
     "straight_step_seconds",
     "patrol_step_seconds",
+    "action_settle_seconds",
     "turn_speed",
     "turn_cw90_seconds",
     "turn_ccw90_seconds",
@@ -171,7 +173,14 @@ class TestSessionManager:
         """立即停止当前测试，关闭全部电机输出。"""
         self._stop_event.set()
         try:
-            self._motion.stop()
+            stopper = getattr(self._motion, "request_stop", None)
+            if callable(stopper):
+                stopper()
+            else:
+                motion.request_stop()
+                fallback_stop = getattr(self._motion, "stop", None)
+                if callable(fallback_stop):
+                    fallback_stop()
         except RobotHardwareError as exc:
             logger.warning("stop() 电机停止异常: %s", exc)
         with self._lock:
@@ -272,6 +281,11 @@ class TestSessionManager:
         # 先停止旧会话
         self.stop()
         # 清除停止事件，启动新会话
+        clearer = getattr(self._motion, "clear_stop", None)
+        if callable(clearer):
+            clearer()
+        else:
+            motion.clear_stop()
         self._stop_event.clear()
         with self._lock:
             self._status = TestStatus(

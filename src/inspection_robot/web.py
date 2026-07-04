@@ -85,11 +85,16 @@ def create_app(root: Path | None = None) -> Flask:
 
     @app.post("/api/stop")
     def api_stop():
+        _stop_test_session()
         runtime = app.config.get("ROBOT_RUNTIME")
         if runtime is not None:
             runtime.stop()
         else:
             store.stop()
+        try:
+            motion.request_stop()
+        except RobotHardwareError:
+            pass
         return jsonify({"ok": True})
 
     @app.post("/api/reset")
@@ -284,6 +289,7 @@ def create_app(root: Path | None = None) -> Flask:
         try:
             _stop_test_session()
             runtime.stop()
+            _clear_motion_stop(runtime)
             _run_manual_command(command, speed=speed, duration_seconds=duration, runtime=runtime)
         except (RobotHardwareError, ValueError) as exc:
             store.record_run_mode("robot", False)
@@ -316,6 +322,7 @@ def create_app(root: Path | None = None) -> Flask:
         try:
             runtime.stop()
             active_motion = getattr(runtime, "motion", motion)
+            _clear_motion_stop(runtime)
             if direction in {"left", "ccw"}:
                 active_motion.rotate_left_slow(speed=speed, duration_seconds=duration)
             else:
@@ -388,11 +395,10 @@ def create_app(root: Path | None = None) -> Flask:
             session.stop()
         else:
             # 尝试直接停止电机（兜底）
-            if _robot_mode_enabled():
-                try:
-                    motion.stop()
-                except RobotHardwareError:
-                    pass
+            try:
+                motion.request_stop()
+            except RobotHardwareError:
+                pass
         return jsonify({"ok": True, "stopped": True})
 
     @app.get("/api/test/status")
@@ -541,6 +547,14 @@ def create_app(root: Path | None = None) -> Flask:
                 active_motion.stop()
         else:
             raise ValueError(f"unknown manual command: {command}")
+
+    def _clear_motion_stop(runtime: object | None = None) -> None:
+        active_motion = getattr(runtime, "motion", motion) if runtime is not None else motion
+        clearer = getattr(active_motion, "clear_stop", None)
+        if callable(clearer):
+            clearer()
+            return
+        motion.clear_stop()
 
     def _stop_test_session() -> None:
         session = app.config.get("TEST_SESSION")

@@ -9,13 +9,16 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from .frame_source import get_shared_capture
+from .frame_source import get_shared_capture, read_camera_frame
 from .stability import DetectionStabilityTracker, StabilityConfig
+from .tag_detector_types import CameraFrameError
 
 
 TAG_FAMILY = "TAG36H11"
 Point = tuple[float, float]
 Corners = tuple[Point, Point, Point, Point]
+_PADDLE_OCR: Any | None = None
+_PADDLE_OCR_UNAVAILABLE = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,7 +47,9 @@ def iter_tag_ids(device: int = 0, cooldown_seconds: float = 1.5) -> Iterator[str
     """Yield stable shelf/item tag ids from the side camera."""
 
     for detection in iter_detections(device=device, cooldown_seconds=cooldown_seconds):
-        yield str(detection["tag_id"])
+        tag_id = detection.get("tag_id")
+        if tag_id is not None:
+            yield str(tag_id)
 
 
 def iter_detections(
@@ -101,13 +106,13 @@ def iter_detections(
             time.sleep(0.05)
             continue
         idle_started = time.monotonic()
-        tag_id, _ = Counter(str(item["tag_id"]) for item in detections).most_common(1)[0]
+        tag_id, _ = Counter(_detection_group_key(item) for item in detections).most_common(1)[0]
         now = time.monotonic()
         if now - last_seen.get(tag_id, 0.0) < cooldown_seconds:
             continue
         last_seen[tag_id] = now
         for detection in detections:
-            if str(detection["tag_id"]) == tag_id:
+            if _detection_group_key(detection) == tag_id:
                 if state_machine is not None:
                     state = state_machine.run_until_done(detection)
                     detection = dict(detection)
@@ -146,11 +151,11 @@ def _read_stable_detections(
         time.sleep(0.02)
     if not detections:
         return []
-    counts = Counter(str(item["tag_id"]) for item in detections)
+    counts = Counter(_detection_group_key(item) for item in detections)
     stable_ids = {tag_id for tag_id, count in counts.items() if count >= 2}
     if not stable_ids:
         stable_ids = {counts.most_common(1)[0][0]}
-    return [item for item in detections if str(item["tag_id"]) in stable_ids]
+    return [item for item in detections if _detection_group_key(item) in stable_ids]
 
 
 def _detect_frame(
@@ -189,7 +194,141 @@ def _detect_frame(
                 "processed": False,
             }
         )
+    if detections:
+        return detections
+    if not detect_object_presence(frame, cv2):
+        return []
+    ocr = _try_ocr_text(frame, cv2)
+    image_class = _classify_image_region(frame, None, None, cv2) if image_classifier_enabled else None
+    detections.append(
+        {
+            "tag_id": None,
+            "marker_family": None,
+            "ocr_text": ocr.text,
+            "color": _dominant_color_name(frame, None, cv2),
+            "image_class": image_class.class_name if image_class is not None else None,
+            "image_class_confidence": image_class.confidence if image_class is not None else None,
+            "image_class_source": image_class.source if image_class is not None else None,
+            "confidence": 0.5,
+            "center": None,
+            "corners": None,
+            "angle_deg": None,
+            "hamming": None,
+            "goodness": None,
+            "ocr_confidence": ocr.confidence,
+            "processed": False,
+            "source": "synthetic_untagged",
+        }
+    )
     return detections
+
+
+def detect_object_presence(
+    frame: Any,
+    cv2: Any,
+    roi: object = None,
+    *,
+    detector: str = "opencv",
+    model_path: str = "",
+    min_area_ratio: float = 0.015,
+) -> bool:
+    normalized = str(detector or "opencv").strip().lower()
+    if normalized in {"yolov5_lite_cpu", "hailo_yolo"} and not str(model_path or "").strip():
+        normalized = "opencv"
+    if normalized not in {"opencv", "yolov5_lite_cpu", "hailo_yolo"}:
+        normalized = "opencv"
+    crop = _presence_roi(frame, roi)
+    try:
+        height, width = crop.shape[:2]
+        if height <= 0 or width <= 0:
+            return False
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        edges = cv2.Canny(blurred, 45, 145)
+        contours: list[Any] = []
+        contours.extend(cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[-2])
+        _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+        contours.extend(cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[-2])
+        frame_area = float(width * height)
+        min_area = max(80.0, frame_area * max(0.0, float(min_area_ratio)))
+        for contour in contours:
+            area = float(cv2.contourArea(contour))
+            if area < min_area or area > frame_area * 0.92:
+                continue
+            x, y, box_w, box_h = cv2.boundingRect(contour)
+            if box_w <= 2 or box_h <= 2:
+                continue
+            aspect = box_w / max(1.0, float(box_h))
+            extent = area / max(1.0, float(box_w * box_h))
+            if 0.2 <= aspect <= 5.0 and extent >= 0.18:
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def detect_object_presence_from_camera(
+    *,
+    device: int = 0,
+    detector: str = "opencv",
+    model_path: str = "",
+    roi: object = None,
+    min_area_ratio: float = 0.015,
+) -> bool:
+    cv2, _ = _load_cv2_only()
+    try:
+        frame = read_camera_frame(device, cv2)
+    except CameraFrameError:
+        return False
+    return detect_object_presence(
+        frame,
+        cv2,
+        roi,
+        detector=detector,
+        model_path=model_path,
+        min_area_ratio=min_area_ratio,
+    )
+
+
+def _presence_roi(frame: Any, roi: object = None) -> Any:
+    if roi is None or roi == "":
+        return frame
+    try:
+        height, width = frame.shape[:2]
+        if isinstance(roi, str):
+            parts = [float(part.strip()) for part in roi.replace(";", ",").split(",") if part.strip()]
+        elif isinstance(roi, Mapping):
+            parts = [float(roi[key]) for key in ("x", "y", "w", "h")]
+        else:
+            parts = [float(value) for value in roi]  # type: ignore[operator]
+        if len(parts) != 4:
+            return frame
+        x, y, w, h = parts
+        if all(0.0 <= value <= 1.0 for value in parts):
+            x0 = int(x * width)
+            y0 = int(y * height)
+            x1 = int((x + w) * width)
+            y1 = int((y + h) * height)
+        else:
+            x0 = int(x)
+            y0 = int(y)
+            x1 = int(x + w)
+            y1 = int(y + h)
+        x0, x1 = max(0, min(x0, width)), max(0, min(x1, width))
+        y0, y1 = max(0, min(y0, height)), max(0, min(y1, height))
+        if x1 <= x0 or y1 <= y0:
+            return frame
+        crop = frame[y0:y1, x0:x1]
+        return crop if getattr(crop, "size", 0) else frame
+    except Exception:
+        return frame
+
+
+def _detection_group_key(detection: Mapping[str, object]) -> str:
+    tag_id = detection.get("tag_id")
+    if tag_id is None:
+        return "OBJ"
+    return str(tag_id)
 
 
 def _dominant_color_name(frame: Any, center: Any, cv2: Any | None = None) -> str | None:
@@ -248,6 +387,9 @@ def _try_ocr_text(
     corners: Any = None,
     min_confidence: float = 55.0,
 ) -> OcrResult:
+    paddle_result = _try_paddle_ocr_text(frame, cv2, center=center, corners=corners)
+    if paddle_result.processed and (paddle_result.text is not None or paddle_result.confidence is not None):
+        return paddle_result
     try:
         pytesseract = importlib.import_module("pytesseract")
     except ImportError:
@@ -272,6 +414,64 @@ def _try_ocr_text(
         return OcrResult(None, None, False)
     cleaned = _clean_ocr_text(text)
     return OcrResult(cleaned, None, True)
+
+
+def _try_paddle_ocr_text(frame: Any, cv2: Any, *, center: Any = None, corners: Any = None) -> OcrResult:
+    global _PADDLE_OCR, _PADDLE_OCR_UNAVAILABLE
+    if _PADDLE_OCR_UNAVAILABLE:
+        return OcrResult(None, None, False)
+    try:
+        if _PADDLE_OCR is None:
+            module = importlib.import_module("paddleocr")
+            paddle_ocr = getattr(module, "PaddleOCR")
+            try:
+                _PADDLE_OCR = paddle_ocr(lang="ch", use_angle_cls=False, show_log=False)
+            except TypeError:
+                _PADDLE_OCR = paddle_ocr(lang="ch")
+        roi = _ocr_roi(frame, center=center, corners=corners)
+        roi = _rectify_card_roi(roi, cv2)
+        rgb = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
+        try:
+            result = _PADDLE_OCR.ocr(rgb, cls=False)  # type: ignore[union-attr]
+        except TypeError:
+            result = _PADDLE_OCR.ocr(rgb)  # type: ignore[union-attr]
+    except ImportError:
+        _PADDLE_OCR_UNAVAILABLE = True
+        return OcrResult(None, None, False)
+    except Exception:
+        return OcrResult(None, None, False)
+    text, confidence = _best_paddle_text(result)
+    return OcrResult(text, confidence, True)
+
+
+def _best_paddle_text(result: object) -> tuple[str | None, float | None]:
+    candidates: list[tuple[str, float | None]] = []
+    _collect_paddle_text_candidates(result, candidates)
+    if not candidates:
+        return None, None
+    candidates.sort(key=lambda item: -1.0 if item[1] is None else item[1], reverse=True)
+    text, confidence = candidates[0]
+    return _clean_ocr_text(text), confidence
+
+
+def _collect_paddle_text_candidates(value: object, candidates: list[tuple[str, float | None]]) -> None:
+    if isinstance(value, str):
+        cleaned = _clean_ocr_text(value)
+        if cleaned:
+            candidates.append((cleaned, None))
+        return
+    if isinstance(value, tuple) and value and isinstance(value[0], str):
+        confidence = _parse_confidence(value[1]) if len(value) > 1 else None
+        cleaned = _clean_ocr_text(value[0])
+        if cleaned:
+            candidates.append((cleaned, confidence))
+        return
+    if isinstance(value, list):
+        if len(value) >= 2 and isinstance(value[1], tuple) and value[1] and isinstance(value[1][0], str):
+            _collect_paddle_text_candidates(value[1], candidates)
+            return
+        for item in value:
+            _collect_paddle_text_candidates(item, candidates)
 
 
 def _ocr_from_data(data: object, *, min_confidence: float) -> OcrResult:
@@ -435,7 +635,7 @@ def _point_distance(first: Any, second: Any) -> float:
 
 
 def _clean_ocr_text(text: str) -> str | None:
-    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "", text).upper()
+    cleaned = re.sub(r"[^A-Za-z0-9_\-\u4e00-\u9fff]+", "", text).upper()
     return cleaned or None
 
 

@@ -52,6 +52,7 @@ class RuntimeTest(unittest.TestCase):
             "ROBOT_PATROL_STEP_SECONDS",
             "ROBOT_STEP_SECONDS",
             "ROBOT_ACTION_SETTLE_SECONDS",
+            "ROBOT_SCAN_ENABLED",
             "AVOIDANCE_SPEED",
             "AVOIDANCE_BODY_SECONDS",
             "AVOIDANCE_SIDE_CLEARANCE_BODIES",
@@ -60,20 +61,31 @@ class RuntimeTest(unittest.TestCase):
             "BOUNDARY_MIN_BLACK_SENSORS",
             "BOUNDARY_COOLDOWN_SECONDS",
             "MOTION_GUARD_POLL_SECONDS",
+            "BOUNDARY_WINDOW_SECONDS",
+            "OBJECT_DETECTOR",
+            "OBJECT_TRIGGER_ENABLED",
+            "OBJECT_PRESENCE_CONFIRM_FRAMES",
+            "OBJECT_PRESENCE_COOLDOWN_SECONDS",
+            "HEADING_HOLD_ENABLED",
+            "HEADING_HOLD_TOLERANCE_DEG",
             "LINE_FOLLOW_SPEED",
             "LINE_FOLLOW_TURN_SPEED",
         ):
             config = RobotRuntimeConfig()
 
-        self.assertEqual(config.patrol_speed, 30)
-        self.assertEqual(config.step_seconds, 0.25)
-        self.assertEqual(config.action_settle_seconds, 0.45)
+        self.assertEqual(config.patrol_speed, 20)
+        self.assertEqual(config.step_seconds, 0.18)
+        self.assertEqual(config.action_settle_seconds, 0.7)
         self.assertEqual(config.avoidance_speed, 20)
         self.assertEqual(config.avoidance_body_seconds, 0.35)
         self.assertEqual(config.avoidance_return_bodies, 0.8)
         self.assertEqual(config.boundary_min_black_sensors, 4)
+        self.assertEqual(config.boundary_window_seconds, 0.15)
         self.assertEqual(config.boundary_cooldown_seconds, 0.05)
         self.assertEqual(config.motion_guard_poll_seconds, 0.02)
+        self.assertEqual(config.object_detector, "opencv")
+        self.assertEqual(config.object_presence_confirm_frames, 2)
+        self.assertTrue(config.heading_hold_enabled)
         self.assertEqual(config.line_follow_speed, 30)
         self.assertEqual(config.line_follow_turn_speed, 30)
 
@@ -124,6 +136,19 @@ class RuntimeTest(unittest.TestCase):
 
         self.assertEqual(config.patrol_speed, 30)
         self.assertEqual(config.step_seconds, 0.25)
+
+    def test_calibration_action_settle_seconds_overrides_runtime_default(self) -> None:
+        config_dir = self.root / "config"
+        config_dir.mkdir(parents=True)
+        (config_dir / "calibration.json").write_text(
+            '{"action_settle_seconds": 0.9}',
+            encoding="utf-8",
+        )
+        config = RobotRuntimeConfig(action_settle_seconds=0.2)
+
+        load_calibration_into_config(config, self.root)
+
+        self.assertEqual(config.action_settle_seconds, 0.9)
 
     def test_runtime_records_path_pose_scan_and_finish_with_fakes(self) -> None:
         store = self.make_store()
@@ -291,7 +316,7 @@ class RuntimeTest(unittest.TestCase):
         self.assertNotIn("rotate_right", fake_motion.calls)
         self.assertNotIn("rotate_left", fake_motion.calls)
 
-    def test_continuous_patrol_motion_debug_mode_does_not_scan_by_default(self) -> None:
+    def test_continuous_patrol_can_disable_visible_shelf_scans(self) -> None:
         store = self.make_store()
         fake_motion = FakeMotion()
         fake_sensors = FakeSensors(distances=[400] * 6, tapes=[(1, 1, 1, 1)] * 4)
@@ -302,6 +327,7 @@ class RuntimeTest(unittest.TestCase):
             config=RobotRuntimeConfig(
                 step_seconds=0,
                 poll_seconds=0,
+                scan_enabled=False,
                 scan_interval_seconds=0,
                 scan_timeout_seconds=0,
                 action_settle_seconds=0,
@@ -318,6 +344,56 @@ class RuntimeTest(unittest.TestCase):
 
         self.assertIn("motion_debug", event_types)
         self.assertNotIn("shelf_scanned", event_types)
+
+    def test_boundary_window_accumulates_staggered_black_sensors(self) -> None:
+        store = self.make_store()
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=RobotRuntimeConfig(boundary_window_seconds=1.0, boundary_min_black_sensors=4, action_settle_seconds=0),
+            motion_adapter=FakeMotion(),
+            sensor_adapter=FakeSensors(distances=[400], tapes=[]),
+            alarm_adapter=FakeAlarm(),
+            detection_provider=fake_detection_provider,
+        )
+
+        self.assertFalse(runtime._feed_boundary_window((0, 1, 1, 1)))
+        self.assertFalse(runtime._feed_boundary_window((1, 0, 1, 1)))
+        self.assertFalse(runtime._feed_boundary_window((1, 1, 0, 1)))
+        self.assertTrue(runtime._feed_boundary_window((1, 1, 1, 0)))
+
+        runtime._reset_boundary_window()
+
+        self.assertFalse(runtime._feed_boundary_window((1, 1, 1, 1)))
+
+    def test_heading_hold_inserts_reverse_correction_pulse(self) -> None:
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=RobotRuntimeConfig(
+                step_seconds=0,
+                action_settle_seconds=0,
+                heading_hold_enabled=True,
+                heading_hold_tolerance_deg=3.0,
+                heading_hold_gain=0.02,
+                heading_hold_min_pulse_seconds=0.03,
+                heading_hold_max_pulse_seconds=0.12,
+            ),
+            motion_adapter=fake_motion,
+            sensor_adapter=FakeSensors(distances=[400], tapes=[]),
+            alarm_adapter=FakeAlarm(),
+            imu_adapter=FakeImuHeading(6.0),
+            detection_provider=fake_detection_provider,
+        )
+
+        runtime._forward_step(speed=20, duration_seconds=0)
+
+        self.assertIn("rotate_right", fake_motion.calls)
+        self.assertIn("move_forward", fake_motion.calls)
 
     def test_continuous_patrol_ignores_three_black_boundary_by_default(self) -> None:
         store = self.make_store()
@@ -769,6 +845,26 @@ class FakeImuTurn:
             "attempts": 3,
             "message": "did not converge",
         }
+
+
+class FakeHeadingGuard:
+    def __init__(self, deviation: float) -> None:
+        self.deviation = deviation
+        self.reset_count = 0
+
+    def update(self) -> float:
+        return self.deviation
+
+    def reset(self) -> None:
+        self.reset_count += 1
+
+
+class FakeImuHeading:
+    def __init__(self, deviation: float) -> None:
+        self.guard = FakeHeadingGuard(deviation)
+
+    def open_straight_heading_guard(self) -> FakeHeadingGuard:
+        return self.guard
 
 
 def fake_detection_provider(**_: object) -> Iterator[dict[str, object]]:

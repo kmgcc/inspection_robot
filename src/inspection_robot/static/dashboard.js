@@ -629,17 +629,16 @@ function renderCalibration(cal) {
 
 function initEmergencyStop() {
   byId("btn-emergency-stop")?.addEventListener("click", async () => {
-    try {
-      await postJson("/api/test/stop");
-    } catch (_) {}
-    try {
-      await postJson("/api/stop");
-    } catch (_) {}
+    await Promise.allSettled([
+      postJson("/api/stop"),
+      postJson("/api/test/stop"),
+    ]);
     await loadStatus();
   });
 
   // 页面关闭时自动急停
   window.addEventListener("beforeunload", () => {
+    navigator.sendBeacon("/api/stop", JSON.stringify({}));
     navigator.sendBeacon("/api/test/stop", JSON.stringify({}));
   });
 }

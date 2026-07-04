@@ -151,6 +151,24 @@ class MPU6050Test(unittest.TestCase):
         self.assertEqual(result.pulses[0].speed, 20)
         self.assertTrue(any(pulse.speed == 6 for pulse in result.pulses[1:]))
 
+    def test_turn_90_with_gyro_aborts_before_motion(self) -> None:
+        gyro = FakeGyro(rate_dps=100.0)
+        motion = FakeMotion()
+        config = mpu6050.Turn90Config(
+            speed=10,
+            fallback_seconds=0.08,
+            target_degrees=12.0,
+            sample_seconds=0.0,
+            bias_samples=1,
+            settle_seconds=0,
+        )
+
+        result = mpu6050.turn_90_with_gyro("right", motion, gyro, config, should_abort=lambda: True)
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.message, "MPU6050 turn aborted before motion.")
+        self.assertEqual(motion.calls, [("stop", None, None)])
+
     def test_correction_duration_scales_rate_hint_to_correction_speed(self) -> None:
         config = mpu6050.Turn90Config(
             speed=20,
@@ -261,6 +279,21 @@ class MPU6050Test(unittest.TestCase):
             mpu6050.reset_gyro_bias_cache()
 
         self.assertEqual(bias, {"x": 0.0, "y": 0.0, "z": 0.0})
+
+    def test_straight_heading_guard_integrates_configured_yaw_axis(self) -> None:
+        guard = mpu6050.StraightHeadingGuard(
+            gyro=FakeSequenceGyro([{"x": 0.0, "y": 0.0, "z": 0.0}, {"x": 0.0, "y": 0.0, "z": 60.0}]),
+            bias_dps={"x": 0.0, "y": 0.0, "z": 0.0},
+            yaw_axis="z",
+            yaw_sign=1.0,
+            deadband_dps=0.0,
+        )
+
+        self.assertEqual(guard.update(), 0.0)
+        mpu6050.time.sleep(0.01)
+        self.assertGreater(guard.update(), 0.0)
+        guard.reset()
+        self.assertEqual(guard.heading_degrees, 0.0)
 
 
 class FakeBus:

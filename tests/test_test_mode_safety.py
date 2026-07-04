@@ -22,7 +22,9 @@ class TestModeSafetyTest(unittest.TestCase):
 
             calibration = store.load()
 
-            self.assertEqual(calibration["straight_speed"], 30)
+            self.assertEqual(calibration["straight_speed"], 20)
+            self.assertEqual(calibration["patrol_step_seconds"], 0.18)
+            self.assertEqual(calibration["action_settle_seconds"], 0.7)
             self.assertFalse((root / "config" / "calibration.json").exists())
 
     def test_line_follow_test_uses_bounded_strafe_not_in_place_rotate(self) -> None:

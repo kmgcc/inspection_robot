@@ -6,8 +6,11 @@ from collections.abc import Mapping
 from pathlib import Path
 from types import ModuleType
 
-import cv2
-import numpy as np
+try:
+    import cv2
+    import numpy as np
+except ImportError as exc:  # pragma: no cover - depends on local optional wheels
+    raise unittest.SkipTest(f"optional OpenCV/numpy vision tests skipped: {exc}") from exc
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -141,6 +144,51 @@ class VisionDetectorTest(unittest.TestCase):
 
         self.assertIsNotNone(result)
         self.assertIn(result.class_name, {"CARD", "BOX"})
+
+    def test_object_presence_detects_simple_card_without_model(self) -> None:
+        frame = np.zeros((120, 160, 3), dtype=np.uint8)
+        cv2.rectangle(frame, (50, 35), (110, 85), (255, 255, 255), -1)
+
+        self.assertTrue(tag_detector.detect_object_presence(frame, cv2, detector="opencv"))
+        self.assertTrue(tag_detector.detect_object_presence(frame, cv2, detector="yolov5_lite_cpu", model_path=""))
+
+    def test_detect_frame_emits_synthetic_evidence_without_apriltag(self) -> None:
+        frame = np.zeros((120, 160, 3), dtype=np.uint8)
+        cv2.rectangle(frame, (50, 35), (110, 85), (255, 255, 255), -1)
+        original = tag_detector._try_ocr_text
+        tag_detector._try_ocr_text = lambda *_args, **_kwargs: tag_detector.OcrResult("A1-中文", 91.0, True)  # type: ignore[assignment]
+        try:
+            detections = tag_detector._detect_frame(frame, FakeDetector([]), cv2, image_classifier_enabled=True)
+        finally:
+            tag_detector._try_ocr_text = original  # type: ignore[assignment]
+
+        self.assertEqual(len(detections), 1)
+        self.assertIsNone(detections[0]["tag_id"])
+        self.assertEqual(detections[0]["source"], "synthetic_untagged")
+        self.assertEqual(detections[0]["ocr_text"], "A1-中文")
+        self.assertIsNotNone(detections[0]["image_class"])
+
+    def test_ocr_cleaning_keeps_chinese_letters_digits_and_dashes(self) -> None:
+        self.assertEqual(tag_detector._clean_ocr_text(" 库位-a1_02! "), "库位-A1_02")
+
+    def test_ocr_falls_back_to_tesseract_when_paddle_unavailable(self) -> None:
+        frame = np.full((80, 120, 3), 255, dtype=np.uint8)
+        fake_module = FakeTesseractModule({"text": ["ITEM-01"], "conf": ["92"]})
+        previous_tesseract = sys.modules.get("pytesseract")
+        previous_paddle_unavailable = tag_detector._PADDLE_OCR_UNAVAILABLE
+        tag_detector._PADDLE_OCR_UNAVAILABLE = True
+        sys.modules["pytesseract"] = fake_module
+        try:
+            result = tag_detector._try_ocr_text(frame, cv2)
+        finally:
+            tag_detector._PADDLE_OCR_UNAVAILABLE = previous_paddle_unavailable
+            if previous_tesseract is None:
+                del sys.modules["pytesseract"]
+            else:
+                sys.modules["pytesseract"] = previous_tesseract
+
+        self.assertEqual(result.text, "ITEM-01")
+        self.assertEqual(result.confidence, 92.0)
 
 
 class FakeRawDetection:

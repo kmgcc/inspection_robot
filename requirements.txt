@@ -5,3 +5,7 @@ Flask>=2.2,<3.0
 # opencv-python>=4.8
 # dt-apriltags>=3.1
 # pytesseract>=0.3
+# paddleocr>=2.8
+# paddlepaddle>=3.0
+# YOLOv5-Lite/Hailo runtimes are optional on-car installs; do not require them
+# for local development or unit tests.

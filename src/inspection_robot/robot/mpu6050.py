@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from math import atan2, degrees, sqrt
 from types import ModuleType
-from typing import Protocol
+from typing import Callable, Protocol
 
 from .sensors import RobotHardwareError
 
@@ -134,6 +134,35 @@ class Turn90Result:
 
 
 @dataclass(slots=True)
+class StraightHeadingGuard:
+    gyro: "MPU6050Gyro"
+    bias_dps: dict[str, float]
+    yaw_axis: str
+    yaw_sign: float
+    deadband_dps: float
+    heading_degrees: float = 0.0
+    last_sample_at: float | None = None
+
+    def reset(self) -> None:
+        self.heading_degrees = 0.0
+        self.last_sample_at = None
+
+    def update(self) -> float:
+        now = time.monotonic()
+        rates = _read_corrected_gyro_dps(self.gyro, self.bias_dps)
+        rate = float(rates.get(self.yaw_axis, 0.0)) * self.yaw_sign
+        if abs(rate) < self.deadband_dps:
+            rate = 0.0
+        if self.last_sample_at is None:
+            self.last_sample_at = now
+            return self.heading_degrees
+        elapsed = max(0.0, min(now - self.last_sample_at, 0.25))
+        self.last_sample_at = now
+        self.heading_degrees = _wrap_degrees(self.heading_degrees + rate * elapsed)
+        return self.heading_degrees
+
+
+@dataclass(slots=True)
 class MPU6050Gyro:
     bus: I2CBus
     address: int = DEFAULT_ADDRESS
@@ -186,8 +215,15 @@ class MPU6050Gyro:
         return _signed_word(high, low)
 
 
-def turn_90(direction: str, motion_adapter: MotionAdapter, speed: int, fallback_seconds: float) -> bool | None:
-    result = turn_90_with_result(direction, motion_adapter, speed, fallback_seconds)
+def turn_90(
+    direction: str,
+    motion_adapter: MotionAdapter,
+    speed: int,
+    fallback_seconds: float,
+    *,
+    should_abort: Callable[[], bool] | None = None,
+) -> bool | None:
+    result = turn_90_with_result(direction, motion_adapter, speed, fallback_seconds, should_abort=should_abort)
     if result is None:
         return None
     return bool(result.get("ok"))
@@ -198,7 +234,13 @@ def turn_90_with_result(
     motion_adapter: MotionAdapter,
     speed: int,
     fallback_seconds: float,
+    *,
+    should_abort: Callable[[], bool] | None = None,
 ) -> dict[str, object] | None:
+    if _abort_requested(should_abort):
+        payload = _aborted_turn_result(direction)
+        _set_last_turn_result(payload)
+        return payload
     if os.environ.get("MPU6050_TURN_ENABLED", "1").strip().lower() in {"0", "false", "no", "off"}:
         _set_last_turn_result(_unavailable_turn_result(direction, "MPU6050 closed-loop turn disabled by MPU6050_TURN_ENABLED."))
         return None
@@ -221,7 +263,7 @@ def turn_90_with_result(
     )
     try:
         gyro = open_default_gyro()
-        result = turn_90_with_gyro(direction, motion_adapter, gyro, config)
+        result = turn_90_with_gyro(direction, motion_adapter, gyro, config, should_abort=should_abort)
         payload = result.to_dict()
         _set_last_turn_result(payload)
         return payload
@@ -235,10 +277,24 @@ def turn_90_with_gyro(
     motion_adapter: MotionAdapter,
     gyro: MPU6050Gyro,
     config: Turn90Config,
+    *,
+    should_abort: Callable[[], bool] | None = None,
 ) -> Turn90Result:
     normalized = direction.strip().lower()
     if normalized not in {"left", "right"}:
         raise RobotHardwareError(f"unsupported MPU6050 turn direction: {direction}")
+    if _abort_requested(should_abort):
+        motion_adapter.stop()
+        return _turn_result(
+            False,
+            normalized,
+            _turn_axis_label(_configured_turn_axis(config.turn_axis), config.turn_axis),
+            max(1.0, float(config.target_degrees)),
+            max(0.0, float(config.tolerance_degrees)),
+            0.0,
+            [],
+            message="MPU6050 turn aborted before motion.",
+        )
     gyro.initialize()
     identity = gyro.who_am_i()
     if identity not in {0x68, 0x69, 0x34}:
@@ -253,6 +309,9 @@ def turn_90_with_gyro(
     turn_axis = _configured_turn_axis(config.turn_axis)
 
     for attempt in range(max_attempts):
+        if _abort_requested(should_abort):
+            motion_adapter.stop()
+            return _turn_result(False, normalized, _turn_axis_label(turn_axis, config.turn_axis), target, tolerance, accumulated, pulses, message="MPU6050 turn aborted.")
         error = target - accumulated
         if abs(error) <= tolerance:
             return _turn_result(True, normalized, _turn_axis_label(turn_axis, config.turn_axis), target, tolerance, accumulated, pulses)
@@ -272,6 +331,7 @@ def turn_90_with_gyro(
             pulse_seconds,
             pulse_speed,
             turn_axis,
+            should_abort=should_abort,
         )
         if turn_axis is None and measurement.axis in {"x", "y", "z"}:
             turn_axis = measurement.axis
@@ -292,8 +352,9 @@ def turn_90_with_gyro(
                 axis_degrees=measurement.axis_degrees,
             )
         )
-        if config.settle_seconds > 0:
-            time.sleep(config.settle_seconds)
+        if config.settle_seconds > 0 and not _sleep_until_abort(config.settle_seconds, should_abort):
+            motion_adapter.stop()
+            return _turn_result(False, normalized, _turn_axis_label(turn_axis, config.turn_axis), target, tolerance, accumulated, pulses, message="MPU6050 turn aborted during settle.")
 
     return _turn_result(
         abs(target - accumulated) <= tolerance,
@@ -357,6 +418,24 @@ def read_motion_sample() -> dict[str, object]:
         }
 
 
+def open_straight_heading_guard() -> StraightHeadingGuard | None:
+    try:
+        gyro = open_default_gyro()
+        gyro.initialize()
+        identity = gyro.who_am_i()
+        if identity not in {0x68, 0x69, 0x34}:
+            raise RobotHardwareError(f"unexpected MPU6050 WHO_AM_I value: 0x{identity:02x}")
+        return StraightHeadingGuard(
+            gyro=gyro,
+            bias_dps=_cached_gyro_bias(gyro),
+            yaw_axis=_yaw_axis(),
+            yaw_sign=_yaw_sign(),
+            deadband_dps=_yaw_deadband_dps(),
+        )
+    except (ImportError, OSError, AttributeError, TypeError, ValueError, RobotHardwareError):
+        return None
+
+
 def reset_gyro_bias_cache() -> None:
     global _GYRO_BIAS_DPS
     with _GYRO_BIAS_LOCK:
@@ -373,16 +452,22 @@ def _measure_turn_pulse(
     pulse_seconds: float,
     speed: int,
     axis_hint: str | None,
+    *,
+    should_abort: Callable[[], bool] | None = None,
 ) -> TurnPulseMeasurement:
     duration = max(0.0, float(pulse_seconds))
     if duration <= 0:
+        return TurnPulseMeasurement(0.0, _turn_axis_label(axis_hint, config.turn_axis), {"x": 0.0, "y": 0.0, "z": 0.0})
+    if _abort_requested(should_abort):
+        motion_adapter.stop()
         return TurnPulseMeasurement(0.0, _turn_axis_label(axis_hint, config.turn_axis), {"x": 0.0, "y": 0.0, "z": 0.0})
 
     if config.sample_seconds <= 0:
         rates = _read_corrected_gyro_dps(gyro, bias)
         axis_degrees = {axis: rate * duration for axis, rate in rates.items()}
         try:
-            _run_turn_motion(direction, motion_adapter, speed, duration)
+            if not _abort_requested(should_abort):
+                _run_turn_motion(direction, motion_adapter, speed, duration)
         finally:
             motion_adapter.stop()
         return _turn_measurement_from_axes(axis_degrees, config, axis_hint)
@@ -394,8 +479,10 @@ def _measure_turn_pulse(
     def sample_loop() -> None:
         previous = time.monotonic()
         try:
-            while not stop_sampling.is_set():
-                time.sleep(config.sample_seconds)
+            while not stop_sampling.is_set() and not _abort_requested(should_abort):
+                if not _sleep_until_abort(config.sample_seconds, should_abort):
+                    stop_sampling.set()
+                    break
                 now = time.monotonic()
                 elapsed = max(0.0, now - previous)
                 previous = now
@@ -409,11 +496,12 @@ def _measure_turn_pulse(
     thread = threading.Thread(target=sample_loop, daemon=True)
     thread.start()
     try:
-        _run_turn_motion(direction, motion_adapter, speed, duration)
+        if not _abort_requested(should_abort):
+            _run_turn_motion(direction, motion_adapter, speed, duration)
     finally:
         motion_adapter.stop()
         if config.post_stop_sample_seconds > 0:
-            time.sleep(config.post_stop_sample_seconds)
+            _sleep_until_abort(config.post_stop_sample_seconds, should_abort)
         stop_sampling.set()
         thread.join(timeout=max(config.sample_seconds * 4.0, 0.2))
     if errors:
@@ -460,10 +548,12 @@ def _turn_result(
     tolerance_degrees: float,
     accumulated_degrees: float,
     pulses: list[TurnPulse],
+    *,
+    message: str | None = None,
 ) -> Turn90Result:
     error = target_degrees - accumulated_degrees
     attempts = len(pulses)
-    message = (
+    result_message = message or (
         f"MPU6050 turn converged: {accumulated_degrees:.1f} deg, error={error:.1f} deg."
         if ok
         else f"MPU6050 turn failed to converge: {accumulated_degrees:.1f} deg, error={error:.1f} deg."
@@ -479,9 +569,29 @@ def _turn_result(
         error_degrees=error,
         attempts=attempts,
         pulses=tuple(pulses),
-        message=message,
+        message=result_message,
         sample_time=datetime.now().isoformat(timespec="seconds"),
     )
+
+
+def _abort_requested(should_abort: Callable[[], bool] | None) -> bool:
+    if should_abort is None:
+        return False
+    try:
+        return bool(should_abort())
+    except Exception:
+        return False
+
+
+def _sleep_until_abort(seconds: float, should_abort: Callable[[], bool] | None) -> bool:
+    deadline = time.monotonic() + max(0.0, float(seconds))
+    while True:
+        if _abort_requested(should_abort):
+            return False
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return True
+        time.sleep(min(remaining, 0.01))
 
 
 def _opposite_direction(direction: str) -> str:
@@ -655,6 +765,23 @@ def _unavailable_turn_result(direction: str, message: str) -> dict[str, object]:
         "attempts": 0,
         "pulses": [],
         "message": message,
+        "sample_time": datetime.now().isoformat(timespec="seconds"),
+    }
+
+
+def _aborted_turn_result(direction: str) -> dict[str, object]:
+    return {
+        "ok": False,
+        "source": "mpu6050",
+        "direction": direction,
+        "turn_axis": os.environ.get("MPU6050_TURN_AXIS", "auto").strip().lower() or "auto",
+        "target_degrees": 90.0,
+        "tolerance_degrees": None,
+        "final_degrees": 0.0,
+        "error_degrees": 90.0,
+        "attempts": 0,
+        "pulses": [],
+        "message": "MPU6050 turn aborted.",
         "sample_time": datetime.now().isoformat(timespec="seconds"),
     }
 

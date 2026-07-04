@@ -52,6 +52,13 @@ def _env_float(default: float, *names: str) -> float:
     return float(_env_value(names, str(default)))
 
 
+def _env_optional_int(*names: str) -> int | None:
+    raw = _env_value(names, "").strip()
+    if not raw:
+        return None
+    return int(raw)
+
+
 def _env_text(default: str, *names: str) -> str:
     return _env_value(names, default)
 
@@ -61,16 +68,16 @@ class RobotRuntimeConfig:
     blocked_distance_mm: int = field(default_factory=lambda: _env_int(160, "BLOCKED_DISTANCE_MM"))
     clear_distance_mm: int = field(default_factory=lambda: _env_int(240, "CLEAR_DISTANCE_MM"))
     blocked_samples: int = field(default_factory=lambda: _env_int(2, "BLOCKED_SAMPLES"))
-    patrol_speed: int = field(default_factory=lambda: _env_int(30, "ROBOT_PATROL_SPEED", "ROBOT_SLOW_SPEED"))
-    step_seconds: float = field(default_factory=lambda: _env_float(0.25, "ROBOT_PATROL_STEP_SECONDS", "ROBOT_STEP_SECONDS"))
+    patrol_speed: int = field(default_factory=lambda: _env_int(20, "ROBOT_PATROL_SPEED", "ROBOT_SLOW_SPEED"))
+    step_seconds: float = field(default_factory=lambda: _env_float(0.18, "ROBOT_PATROL_STEP_SECONDS", "ROBOT_STEP_SECONDS"))
     poll_seconds: float = field(default_factory=lambda: _env_float(0.12, "ROBOT_POLL_SECONDS"))
-    scan_enabled: bool = field(default_factory=lambda: _env_bool("ROBOT_SCAN_ENABLED", False))
+    scan_enabled: bool = field(default_factory=lambda: _env_bool("ROBOT_SCAN_ENABLED", True))
     scan_timeout_seconds: float = 4.0
     scan_max_detections: int = 6
     scan_interval_seconds: float = field(default_factory=lambda: _env_float(0.8, "SCAN_INTERVAL_SECONDS"))
     turn_90_seconds: float = field(default_factory=lambda: _env_float(0.85, "ROBOT_TURN_90_SECONDS"))
     turn_speed: int = field(default_factory=lambda: _env_int(22, "ROBOT_TURN_SPEED"))
-    action_settle_seconds: float = field(default_factory=lambda: _env_float(0.45, "ROBOT_ACTION_SETTLE_SECONDS"))
+    action_settle_seconds: float = field(default_factory=lambda: _env_float(0.7, "ROBOT_ACTION_SETTLE_SECONDS"))
     obstacle_wait_seconds: float = field(default_factory=lambda: _env_float(6.0, "OBSTACLE_WAIT_SECONDS"))
     avoidance_speed: int = field(default_factory=lambda: _env_int(20, "AVOIDANCE_SPEED"))
     avoidance_body_seconds: float = field(default_factory=lambda: _env_float(0.35, "AVOIDANCE_BODY_SECONDS"))
@@ -81,8 +88,27 @@ class RobotRuntimeConfig:
     boundary_min_black_sensors: int = field(default_factory=lambda: _env_int(4, "BOUNDARY_MIN_BLACK_SENSORS"))
     boundary_confirm_samples: int = field(default_factory=lambda: _env_int(1, "BOUNDARY_CONFIRM_SAMPLES"))
     boundary_confirm_gap_seconds: float = field(default_factory=lambda: _env_float(0.0, "BOUNDARY_CONFIRM_GAP_SECONDS"))
+    boundary_window_seconds: float = field(default_factory=lambda: _env_float(0.15, "BOUNDARY_WINDOW_SECONDS"))
     boundary_cooldown_seconds: float = field(default_factory=lambda: _env_float(0.05, "BOUNDARY_COOLDOWN_SECONDS"))
     motion_guard_poll_seconds: float = field(default_factory=lambda: _env_float(0.02, "MOTION_GUARD_POLL_SECONDS"))
+    motion_slice_seconds: float = field(default_factory=lambda: _env_float(0.03, "ROBOT_MOTION_SLICE_SECONDS"))
+    object_trigger_enabled: bool = field(default_factory=lambda: _env_bool("OBJECT_TRIGGER_ENABLED", True))
+    object_detector: str = field(default_factory=lambda: _env_text("opencv", "OBJECT_DETECTOR"))
+    object_detector_model: str = field(default_factory=lambda: _env_text("", "OBJECT_DETECTOR_MODEL"))
+    object_roi: str = field(default_factory=lambda: _env_text("", "OBJECT_ROI"))
+    object_presence_min_area_ratio: float = field(default_factory=lambda: _env_float(0.015, "OBJECT_PRESENCE_MIN_AREA_RATIO"))
+    object_presence_confirm_frames: int = field(default_factory=lambda: _env_int(2, "OBJECT_PRESENCE_CONFIRM_FRAMES"))
+    object_presence_cooldown_seconds: float = field(default_factory=lambda: _env_float(2.0, "OBJECT_PRESENCE_COOLDOWN_SECONDS"))
+    object_yolo_min_interval_seconds: float = field(default_factory=lambda: _env_float(0.5, "OBJECT_YOLO_MIN_INTERVAL_SECONDS"))
+    object_slow_speed: int = field(default_factory=lambda: _env_int(12, "OBJECT_SLOW_SPEED"))
+    object_settle_seconds: float = field(default_factory=lambda: _env_float(0.25, "OBJECT_SETTLE_SECONDS"))
+    heading_hold_enabled: bool = field(default_factory=lambda: _env_bool("HEADING_HOLD_ENABLED", True))
+    heading_hold_tolerance_deg: float = field(default_factory=lambda: _env_float(3.0, "HEADING_HOLD_TOLERANCE_DEG"))
+    heading_hold_gain: float = field(default_factory=lambda: _env_float(0.02, "HEADING_HOLD_GAIN"))
+    heading_hold_min_pulse_seconds: float = field(default_factory=lambda: _env_float(0.03, "HEADING_HOLD_MIN_PULSE_SECONDS"))
+    heading_hold_max_pulse_seconds: float = field(default_factory=lambda: _env_float(0.12, "HEADING_HOLD_MAX_PULSE_SECONDS"))
+    heading_hold_correction_speed: int | None = field(default_factory=lambda: _env_optional_int("HEADING_HOLD_CORRECTION_SPEED"))
+    heading_hold_invert: bool = field(default_factory=lambda: _env_bool("HEADING_HOLD_INVERT", False))
     line_follow_enabled: bool = field(default_factory=lambda: _env_bool("LINE_FOLLOW_ENABLED", False))
     line_follow_speed: int = field(default_factory=lambda: _env_int(30, "LINE_FOLLOW_SPEED", "ROBOT_PATROL_SPEED", "ROBOT_SLOW_SPEED"))
     line_follow_step_seconds: float = field(default_factory=lambda: _env_float(0.14, "LINE_FOLLOW_STEP_SECONDS", "ROBOT_STEP_SECONDS"))
@@ -168,20 +194,34 @@ class RobotRuntime:
         self._empty_vision_scans = 0
         self._last_camera_fallback_at = 0.0
         self._last_missing_alert_at = 0.0
+        self._black_seen_at = [-1e9, -1e9, -1e9, -1e9]
+        self._heading_guard: Any | None = None
+        self._object_presence_hits = 0
+        self._last_object_presence_at = 0.0
+        self._last_object_yolo_at = 0.0
 
     def start(self, shelf_order: Iterable[str] | None = None) -> None:
         if self._thread is not None and self._thread.is_alive():
             return
         self._stop_event.clear()
+        clearer = getattr(self.motion, "clear_stop", None)
+        if callable(clearer):
+            clearer()
+        self._reset_boundary_window()
+        self._reset_heading_guard()
         self._thread = threading.Thread(target=self._run_continuous_patrol_safely, daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
         self._stop_event.set()
-        try:
-            self.motion.stop()
-        except RobotHardwareError:
-            pass
+        stopper = getattr(self.motion, "request_stop", None)
+        if callable(stopper):
+            stopper()
+        else:
+            try:
+                self.motion.stop()
+            except RobotHardwareError:
+                pass
         self.store.stop()
         self.store.record_motion_debug("runtime_stopped", "收到停止命令，电机已停止。", status="STOPPED")
 
@@ -206,17 +246,20 @@ class RobotRuntime:
             self.store.record_motion_debug("runtime_fatal_error", f"runtime fatal error: {exc}", status="ERROR")
 
     def run_continuous_patrol(self, max_iterations: int | None = None) -> None:
+        self._reset_boundary_window()
+        self._reset_heading_guard()
         self.store.record_run_mode("robot", True)
         self.store.start()
         self.store.record_cycle(1, self._skip_shortage_for_cycle(1))
         self.store.record_motion_debug(
             "runtime_started",
-            "运动调试巡逻启动：短步前进、列端转向、寻线过渡、禁区绕行；当前暂不做货架识别。",
+            "巡逻启动：短步前进、列端转向、寻线过渡、禁区绕行；检测到目标后停车识别。",
             evidence={
                 "patrol_speed": self.config.patrol_speed,
                 "step_seconds": self.config.step_seconds,
                 "boundary_min_black_sensors": self.config.boundary_min_black_sensors,
                 "boundary_confirm_samples": self.config.boundary_confirm_samples,
+                "boundary_window_seconds": self.config.boundary_window_seconds,
                 "scan_enabled": self.config.scan_enabled,
             },
         )
@@ -225,6 +268,7 @@ class RobotRuntime:
         self._line_lost_ticks = 0
         self._last_line_correction = None
         self._motion_step_index = 0
+        self._object_presence_hits = 0
         self._show_normal()
         self._initialize_gimbal()
         self.refresh_motion_sensor(force=True)
@@ -260,6 +304,9 @@ class RobotRuntime:
             self.store.record_cycle(current_cycle, self._skip_shortage_for_cycle(current_cycle))
 
             now = time.monotonic()
+            if self._maybe_scan_for_object_presence():
+                last_scan_at = time.monotonic()
+                continue
             if self.config.scan_enabled and now - last_scan_at >= self.config.scan_interval_seconds:
                 self._scan_visible_shelf()
                 last_scan_at = now
@@ -326,15 +373,19 @@ class RobotRuntime:
     def _handle_tape_boundary(self, tape_state: tuple[int, int, int, int] | None = None) -> str:
         if tape_state is None:
             tape_state = self.sensors.read_tape_boundary()
-        if not self._candidate_boundary(tape_state) and self._pending_boundary_state is not None:
+        candidate = self._feed_boundary_window(tape_state)
+        if not candidate and self._pending_boundary_state is not None:
             tape_state = self._pending_boundary_state
             self._pending_boundary_state = None
-        elif self._candidate_boundary(tape_state):
+            candidate = True
+        elif candidate:
             self._pending_boundary_state = None
-        if not self._candidate_boundary(tape_state):
+            tape_state = self._boundary_window_state(tape_state)
+        if not candidate:
             return "none"
         now = time.monotonic()
         if now - self._last_boundary_turn < self.config.boundary_cooldown_seconds:
+            self._reset_boundary_window()
             return "none"
         self.motion.stop()
         self.store.record_motion_debug(
@@ -346,6 +397,7 @@ class RobotRuntime:
                 "black_count": sensors.black_tape_count(tape_state),
                 "min_black": self.config.boundary_min_black_sensors,
                 "confirm_samples": self.config.boundary_confirm_samples,
+                "boundary_window_seconds": self.config.boundary_window_seconds,
             },
         )
         confirmed_state = self._confirm_boundary_state(tape_state)
@@ -385,6 +437,8 @@ class RobotRuntime:
         self._line_follow_active = action == "turn_follow" and self.config.line_follow_enabled
         self._line_lost_ticks = 0
         self._last_line_correction = None
+        self._reset_boundary_window()
+        self._reset_heading_guard()
         self.store.record_forbidden_zone(zone_id, False)
         self._advance_boundary_action()
         self.store.record_motion_debug(
@@ -419,6 +473,8 @@ class RobotRuntime:
         if self._avoid_to_safe_side(None):
             self.store.record_forbidden_zone(zone_id, False)
             self._show_normal()
+        self._reset_boundary_window()
+        self._reset_heading_guard()
         self._advance_boundary_action()
         self.store.record_motion_debug(
             "forbidden_bypass_done",
@@ -435,19 +491,39 @@ class RobotRuntime:
         detector = getattr(self.sensors, "tape_boundary_count_detected", sensors.tape_boundary_count_detected)
         return detector(tape_state, min_black=min_black)
 
+    def _reset_boundary_window(self) -> None:
+        self._black_seen_at = [-1e9, -1e9, -1e9, -1e9]
+        self._pending_boundary_state = None
+
+    def _feed_boundary_window(self, tape_state: tuple[int, int, int, int] | None) -> bool:
+        if tape_state is None:
+            return False
+        now = time.monotonic()
+        for index, value in enumerate(tape_state[:4]):
+            if int(value) == 0:
+                self._black_seen_at[index] = now
+        window = max(0.0, float(self.config.boundary_window_seconds))
+        min_black = max(1, min(4, int(self.config.boundary_min_black_sensors)))
+        recent_black = sum(1 for seen_at in self._black_seen_at if now - seen_at <= window)
+        return recent_black >= min_black
+
+    def _boundary_window_state(
+        self,
+        fallback: tuple[int, int, int, int] | None = None,
+    ) -> tuple[int, int, int, int] | None:
+        now = time.monotonic()
+        window = max(0.0, float(self.config.boundary_window_seconds))
+        if all(seen_at <= -1e8 for seen_at in self._black_seen_at):
+            return fallback
+        return tuple(0 if now - seen_at <= window else 1 for seen_at in self._black_seen_at)  # type: ignore[return-value]
+
     def _confirm_boundary_state(
         self,
         first_state: tuple[int, int, int, int] | None,
     ) -> tuple[int, int, int, int] | None:
-        state = first_state
-        samples = max(1, int(self.config.boundary_confirm_samples))
-        for index in range(samples):
-            if index > 0:
-                time.sleep(max(0.0, self.config.boundary_confirm_gap_seconds))
-                state = self.sensors.read_tape_boundary()
-            if not self._candidate_boundary(state):
-                return None
-        return state
+        if first_state is None:
+            return None
+        return first_state
 
     def _drive_patrol_step(self, tape_state: tuple[int, int, int, int] | None) -> None:
         if self._line_follow_active and self.config.line_follow_enabled:
@@ -513,7 +589,7 @@ class RobotRuntime:
                     status="STOPPED",
                     evidence=evidence,
                 )
-                time.sleep(max(0.0, self.config.line_follow_poll_seconds))
+                self._interruptible_sleep(max(0.0, self.config.line_follow_poll_seconds))
                 return
             if tape_state is None:
                 self.motion.stop()
@@ -522,7 +598,7 @@ class RobotRuntime:
                     f"{phase}：{decision.description}，传感器读数无效，先停车等下一次读数。",
                     evidence=evidence,
                 )
-                time.sleep(max(0.0, self.config.line_follow_poll_seconds))
+                self._interruptible_sleep(max(0.0, self.config.line_follow_poll_seconds))
                 return
             if self._line_lost_ticks == 1:
                 self.store.record_motion_debug(
@@ -531,12 +607,12 @@ class RobotRuntime:
                     evidence=evidence,
                 )
             self._run_line_follow_command(recovery_command, search=True)
-            time.sleep(max(0.0, self.config.line_follow_poll_seconds))
+            self._interruptible_sleep(max(0.0, self.config.line_follow_poll_seconds))
             return
 
         if decision.command in {"wait", "stop"}:
             self.motion.stop()
-            time.sleep(max(0.0, self.config.line_follow_poll_seconds))
+            self._interruptible_sleep(max(0.0, self.config.line_follow_poll_seconds))
             return
 
         self._line_lost_ticks = 0
@@ -552,7 +628,7 @@ class RobotRuntime:
             evidence=evidence,
         )
         self._run_line_follow_command(decision.command)
-        time.sleep(max(0.0, self.config.line_follow_poll_seconds))
+        self._interruptible_sleep(max(0.0, self.config.line_follow_poll_seconds))
 
     def _run_line_follow_command(self, command: str, *, search: bool = False) -> None:
         step_seconds = self.config.line_follow_search_seconds if search else self.config.line_follow_step_seconds
@@ -562,30 +638,35 @@ class RobotRuntime:
                 self.motion.move_forward_slow,
                 speed=self.config.line_follow_speed,
                 duration_seconds=step_seconds,
+                heading_hold=False,
             )
         elif command == "strafe_left":
             self._run_timed_motion(
                 self.motion.strafe_left_slow,
                 speed=self.config.line_follow_speed,
                 duration_seconds=step_seconds,
+                heading_hold=False,
             )
         elif command == "strafe_right":
             self._run_timed_motion(
                 self.motion.strafe_right_slow,
                 speed=self.config.line_follow_speed,
                 duration_seconds=step_seconds,
+                heading_hold=False,
             )
         elif command == "turn_left":
             self._run_timed_motion(
                 self.motion.rotate_left_slow,
                 speed=self.config.line_follow_turn_speed,
                 duration_seconds=turn_seconds,
+                heading_hold=False,
             )
         elif command == "turn_right":
             self._run_timed_motion(
                 self.motion.rotate_right_slow,
                 speed=self.config.line_follow_turn_speed,
                 duration_seconds=turn_seconds,
+                heading_hold=False,
             )
         else:
             self.motion.stop()
@@ -597,10 +678,13 @@ class RobotRuntime:
         speed: int,
         duration_seconds: float,
         watch_boundary: bool = True,
+        heading_hold: bool = False,
     ) -> None:
         duration = max(0.0, float(duration_seconds))
         guard_interval = max(0.0, float(self.config.motion_guard_poll_seconds)) if watch_boundary else 0.0
         if duration <= 0.0 or guard_interval <= 0.0 or duration <= guard_interval:
+            if heading_hold and watch_boundary:
+                self._apply_heading_hold()
             mover(speed=speed, duration_seconds=duration)
             if watch_boundary:
                 self._poll_boundary_during_motion(duration)
@@ -611,6 +695,10 @@ class RobotRuntime:
         elapsed = 0.0
         while remaining > 0 and not self._stop_event.is_set():
             chunk = min(remaining, guard_interval)
+            if heading_hold and watch_boundary:
+                self._apply_heading_hold()
+                if self._stop_event.is_set():
+                    break
             mover(speed=speed, duration_seconds=chunk)
             elapsed += chunk
             remaining -= chunk
@@ -623,9 +711,9 @@ class RobotRuntime:
             tape_state = self.sensors.read_tape_boundary()
         except RobotHardwareError:
             return False
-        if not self._candidate_boundary(tape_state):
+        if not self._feed_boundary_window(tape_state):
             return False
-        self._pending_boundary_state = tape_state
+        self._pending_boundary_state = self._boundary_window_state(tape_state)
         self.motion.stop()
         self.store.record_motion_debug(
             "motion_guard_boundary_latched",
@@ -635,9 +723,10 @@ class RobotRuntime:
             ),
             status="TURNING_AT_BOUNDARY",
             evidence={
-                "tape_state": _json_tape_state(tape_state),
+                "tape_state": _json_tape_state(self._pending_boundary_state),
                 "elapsed_seconds": round(max(0.0, float(elapsed_seconds)), 3),
                 "guard_poll_seconds": self.config.motion_guard_poll_seconds,
+                "boundary_window_seconds": self.config.boundary_window_seconds,
             },
         )
         return True
@@ -716,10 +805,65 @@ class RobotRuntime:
         detections = self._collect_detections()
         shelf_id = self._shelf_id_from_detections(detections)
         if shelf_id is None:
+            if detections:
+                fallback_shelf = str(self.store.snapshot().get("current_shelf") or "UNKNOWN").strip().upper() or "UNKNOWN"
+                self._perform_scan(fallback_shelf, f"{fallback_shelf}_SCAN", detections)
+                return
             self._record_empty_vision_scan()
             return
         self._empty_vision_scans = 0
         self._perform_scan(shelf_id, f"{shelf_id}_SCAN", detections)
+
+    def _maybe_scan_for_object_presence(self) -> bool:
+        if not self.config.scan_enabled or not self.config.object_trigger_enabled or self._stop_event.is_set():
+            return False
+        now = time.monotonic()
+        cooldown = max(0.0, float(self.config.object_presence_cooldown_seconds))
+        if now - self._last_object_presence_at < cooldown:
+            return False
+        detector = str(self.config.object_detector or "opencv").strip().lower()
+        if detector in {"yolov5_lite_cpu", "hailo_yolo"}:
+            yolo_interval = max(0.0, float(self.config.object_yolo_min_interval_seconds))
+            if now - self._last_object_yolo_at < yolo_interval:
+                return False
+            self._last_object_yolo_at = now
+        try:
+            present = tag_detector.detect_object_presence_from_camera(
+                device=self.config.camera_device,
+                detector=detector,
+                model_path=self.config.object_detector_model,
+                roi=self.config.object_roi,
+                min_area_ratio=self.config.object_presence_min_area_ratio,
+            )
+        except Exception:
+            self._object_presence_hits = 0
+            return False
+        if not present:
+            self._object_presence_hits = 0
+            return False
+        self._object_presence_hits += 1
+        required = max(1, int(self.config.object_presence_confirm_frames))
+        if self._object_presence_hits < required:
+            return False
+        self._object_presence_hits = 0
+        self._last_object_presence_at = now
+        self.motion.stop()
+        self.store.record_motion_debug(
+            "object_presence_triggered",
+            "object presence detected; stopped for full vision recognition.",
+            status="SCANNING_SHELF",
+            evidence={
+                "detector": detector,
+                "confirm_frames": required,
+                "roi": self.config.object_roi,
+                "min_area_ratio": self.config.object_presence_min_area_ratio,
+            },
+        )
+        self._interruptible_sleep(max(0.0, float(self.config.object_settle_seconds)))
+        if self._stop_event.is_set():
+            return True
+        self._scan_visible_shelf()
+        return True
 
     def _shelf_id_from_detections(self, detections: list[dict[str, object]]) -> str | None:
         for detection in detections:
@@ -860,7 +1004,8 @@ class RobotRuntime:
         started_at = time.monotonic()
         deadline = started_at + self.config.obstacle_wait_seconds
         while not self._stop_event.is_set() and time.monotonic() < deadline:
-            time.sleep(self.config.poll_seconds)
+            if not self._interruptible_sleep(self.config.poll_seconds):
+                return False
             distance_mm = self.sensors.read_distance_mm()
             if distance_mm is not None and distance_mm >= self.config.clear_distance_mm:
                 self._blocked_count = 0
@@ -1032,6 +1177,7 @@ class RobotRuntime:
             speed=speed,
             duration_seconds=duration_seconds,
             watch_boundary=watch_boundary,
+            heading_hold=watch_boundary,
         )
         self._settle()
 
@@ -1041,24 +1187,29 @@ class RobotRuntime:
         turn_seconds = self.config.turn_90_seconds if duration_seconds is None else duration_seconds
         imu_turn = getattr(self.imu, "turn_90_with_result", None)
         if callable(imu_turn):
+            imu_result = None
             try:
-                imu_result = imu_turn(normalized, self.motion, turn_speed, turn_seconds)
+                imu_result = imu_turn(normalized, self.motion, turn_speed, turn_seconds, should_abort=self._stop_event.is_set)
             except RobotHardwareError as exc:
                 self.store.record_robot_status("TURNING_AT_BOUNDARY", f"MPU6050 turn skipped: {exc}")
-            else:
-                if imu_result is not None:
-                    self.motion.stop()
-                    self._settle()
-                    result = dict(imu_result) if isinstance(imu_result, dict) else {"ok": bool(imu_result)}
-                    self._record_gyro_turn_result(result)
-                    self.refresh_motion_sensor(force=True)
-                    if not result.get("ok"):
-                        message = str(
-                            result.get("message")
-                            or "MPU6050 closed-loop 90 degree turn did not converge within correction attempts."
-                        )
-                        self.store.record_robot_status("ERROR", f"{message} Keeping car stopped.")
-                    return result
+            except TypeError:
+                try:
+                    imu_result = imu_turn(normalized, self.motion, turn_speed, turn_seconds)
+                except RobotHardwareError as exc:
+                    self.store.record_robot_status("TURNING_AT_BOUNDARY", f"MPU6050 turn skipped: {exc}")
+            if imu_result is not None:
+                self.motion.stop()
+                self._settle()
+                result = dict(imu_result) if isinstance(imu_result, dict) else {"ok": bool(imu_result)}
+                self._record_gyro_turn_result(result)
+                self.refresh_motion_sensor(force=True)
+                if not result.get("ok"):
+                    message = str(
+                        result.get("message")
+                        or "MPU6050 closed-loop 90 degree turn did not converge within correction attempts."
+                    )
+                    self.store.record_robot_status("ERROR", f"{message} Keeping car stopped.")
+                return result
         else:
             legacy_imu_turn = getattr(self.imu, "turn_90", None)
             if callable(legacy_imu_turn):
@@ -1118,7 +1269,80 @@ class RobotRuntime:
     def _settle(self) -> None:
         delay = max(0.0, float(self.config.action_settle_seconds))
         if delay > 0:
-            time.sleep(delay)
+            self._interruptible_sleep(delay)
+
+    def _interruptible_sleep(self, seconds: float) -> bool:
+        deadline = time.monotonic() + max(0.0, float(seconds))
+        while not self._stop_event.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return True
+            time.sleep(min(remaining, 0.01))
+        self.motion.stop()
+        return False
+
+    def _reset_heading_guard(self) -> None:
+        guard = self._heading_guard
+        if guard is not None:
+            reset = getattr(guard, "reset", None)
+            if callable(reset):
+                reset()
+
+    def _heading_guard_instance(self) -> Any | None:
+        if not self.config.heading_hold_enabled:
+            return None
+        if self._heading_guard is not None:
+            return self._heading_guard
+        opener = getattr(self.imu, "open_straight_heading_guard", None)
+        if not callable(opener):
+            return None
+        try:
+            self._heading_guard = opener()
+        except (RobotHardwareError, OSError, AttributeError, TypeError, ValueError):
+            self._heading_guard = None
+        return self._heading_guard
+
+    def _apply_heading_hold(self) -> None:
+        guard = self._heading_guard_instance()
+        if guard is None or self._stop_event.is_set():
+            return
+        updater = getattr(guard, "update", None)
+        if not callable(updater):
+            return
+        try:
+            deviation = float(updater())
+        except (RobotHardwareError, OSError, AttributeError, TypeError, ValueError):
+            self._heading_guard = None
+            return
+        tolerance = max(0.0, float(self.config.heading_hold_tolerance_deg))
+        if abs(deviation) <= tolerance:
+            return
+        pulse_seconds = min(
+            max(abs(deviation) * max(0.0, float(self.config.heading_hold_gain)), float(self.config.heading_hold_min_pulse_seconds)),
+            float(self.config.heading_hold_max_pulse_seconds),
+        )
+        if pulse_seconds <= 0:
+            return
+        turn_right = deviation > 0.0
+        if self.config.heading_hold_invert:
+            turn_right = not turn_right
+        speed = self.config.heading_hold_correction_speed or max(1, int(self.config.turn_speed))
+        mover = self.motion.rotate_right_slow if turn_right else self.motion.rotate_left_slow
+        mover(speed=speed, duration_seconds=pulse_seconds)
+        self.motion.stop()
+        reset = getattr(guard, "reset", None)
+        if callable(reset):
+            reset()
+        self.store.record_motion_debug(
+            "heading_hold_correction",
+            "heading hold correction pulse applied.",
+            evidence={
+                "deviation_degrees": round(deviation, 3),
+                "direction": "right" if turn_right else "left",
+                "pulse_seconds": round(pulse_seconds, 3),
+                "speed": speed,
+            },
+        )
 
     def _show_normal(self) -> None:
         try:
@@ -1302,6 +1526,8 @@ def load_calibration_into_config(config: RobotRuntimeConfig, root: Path) -> None
                 config.patrol_speed = int(data["straight_speed"])
             if data.get("patrol_step_seconds") is not None:
                 config.step_seconds = float(data["patrol_step_seconds"])
+            if data.get("action_settle_seconds") is not None:
+                config.action_settle_seconds = float(data["action_settle_seconds"])
             if data.get("turn_speed") is not None:
                 config.turn_speed = int(data["turn_speed"])
             if data.get("turn_cw90_seconds") is not None:

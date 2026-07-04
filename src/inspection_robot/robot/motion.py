@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 from types import ModuleType
@@ -13,10 +14,12 @@ DEFAULT_SPEED = int(os.environ.get("ROBOT_SLOW_SPEED", "22"))
 DEFAULT_STEP_SECONDS = float(os.environ.get("ROBOT_STEP_SECONDS", "0.14"))
 COMMAND_REPEAT = max(1, int(os.environ.get("ROBOT_COMMAND_REPEAT", "2")))
 COMMAND_REPEAT_GAP_SECONDS = float(os.environ.get("ROBOT_COMMAND_REPEAT_GAP_SECONDS", "0.02"))
+STOP_POLL_SECONDS = float(os.environ.get("ROBOT_STOP_POLL_SECONDS", "0.01"))
 VENDOR_MOTION_PATHS = (
     Path("/home/pi/project_demo/lib"),
     Path("/home/pi/project_demo/04.Car_motion_control"),
 )
+_ABORT = threading.Event()
 
 
 def move_forward_slow(speed: int | None = None, duration_seconds: float | None = None) -> None:
@@ -57,16 +60,40 @@ def stop() -> None:
     raise RobotHardwareError("McLumk_Wheel_Sports does not expose a stop function")
 
 
+def request_stop() -> None:
+    _ABORT.set()
+    try:
+        stop()
+    except RobotHardwareError:
+        pass
+
+
+def clear_stop() -> None:
+    _ABORT.clear()
+
+
+def is_stop_requested() -> bool:
+    return _ABORT.is_set()
+
+
 def _call_motion(name: str, speed: int | None, duration_seconds: float | None) -> None:
+    if _ABORT.is_set():
+        _stop_quietly()
+        return
     module = _motion_module()
     func = getattr(module, name, None)
     if not callable(func):
         raise RobotHardwareError(f"McLumk_Wheel_Sports is missing {name}()")
     for index in range(COMMAND_REPEAT):
+        if _ABORT.is_set():
+            _stop_quietly()
+            return
         func(_speed(speed))
         if index < COMMAND_REPEAT - 1:
-            time.sleep(max(0.0, COMMAND_REPEAT_GAP_SECONDS))
-    time.sleep(_duration(duration_seconds))
+            _interruptible_sleep(max(0.0, COMMAND_REPEAT_GAP_SECONDS))
+    _interruptible_sleep(_duration(duration_seconds))
+    if _ABORT.is_set():
+        _stop_quietly()
 
 
 def _speed(speed: int | None) -> int:
@@ -78,6 +105,22 @@ def _duration(duration_seconds: float | None) -> float:
     if duration_seconds is None:
         return DEFAULT_STEP_SECONDS
     return max(0.0, float(duration_seconds))
+
+
+def _interruptible_sleep(seconds: float) -> None:
+    deadline = time.monotonic() + max(0.0, float(seconds))
+    while not _ABORT.is_set():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        _ABORT.wait(min(STOP_POLL_SECONDS, remaining))
+
+
+def _stop_quietly() -> None:
+    try:
+        stop()
+    except RobotHardwareError:
+        pass
 
 
 def _motion_module() -> ModuleType:
