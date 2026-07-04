@@ -110,6 +110,18 @@ class RobotRuntimeConfig:
     heading_hold_max_pulse_seconds: float = field(default_factory=lambda: _env_float(0.12, "HEADING_HOLD_MAX_PULSE_SECONDS"))
     heading_hold_correction_speed: int | None = field(default_factory=lambda: _env_optional_int("HEADING_HOLD_CORRECTION_SPEED"))
     heading_hold_invert: bool = field(default_factory=lambda: _env_bool("HEADING_HOLD_INVERT", False))
+    heading_hold_rate_damping: float = field(default_factory=lambda: _env_float(0.02, "HEADING_HOLD_KD", "HEADING_HOLD_RATE_DAMPING"))
+    heading_zupt_enabled: bool = field(default_factory=lambda: _env_bool("HEADING_ZUPT_ENABLED", True))
+    heading_zupt_samples: int = field(default_factory=lambda: _env_int(15, "HEADING_ZUPT_SAMPLES"))
+    heading_zupt_sample_seconds: float = field(default_factory=lambda: _env_float(0.005, "HEADING_ZUPT_SAMPLE_SECONDS"))
+    smooth_cruise_enabled: bool = field(default_factory=lambda: _env_bool("SMOOTH_CRUISE_ENABLED", False))
+    cruise_speed: int = field(default_factory=lambda: _env_int(14, "CRUISE_SPEED", "SMOOTH_CRUISE_SPEED"))
+    cruise_tick_seconds: float = field(default_factory=lambda: _env_float(0.05, "CRUISE_TICK_SECONDS"))
+    cruise_log_interval_seconds: float = field(default_factory=lambda: _env_float(1.0, "CRUISE_LOG_INTERVAL_SECONDS"))
+    cruise_vision_enabled: bool = field(default_factory=lambda: _env_bool("CRUISE_VISION_ENABLED", True))
+    cruise_recognition_flash_seconds: float = field(default_factory=lambda: _env_float(0.12, "CRUISE_RECOGNITION_FLASH_SECONDS"))
+    cruise_recognition_cooldown_seconds: float = field(default_factory=lambda: _env_float(1.5, "CRUISE_RECOGNITION_COOLDOWN_SECONDS"))
+    cruise_vision_reopen_seconds: float = field(default_factory=lambda: _env_float(0.3, "CRUISE_VISION_REOPEN_SECONDS"))
     line_follow_enabled: bool = field(default_factory=lambda: _env_bool("LINE_FOLLOW_ENABLED", True))
     line_follow_speed: int = field(default_factory=lambda: _env_int(30, "LINE_FOLLOW_SPEED", "ROBOT_PATROL_SPEED", "ROBOT_SLOW_SPEED"))
     line_follow_step_seconds: float = field(default_factory=lambda: _env_float(0.14, "LINE_FOLLOW_STEP_SECONDS", "ROBOT_STEP_SECONDS"))
@@ -198,6 +210,10 @@ class RobotRuntime:
         self._object_presence_hits = 0
         self._last_object_presence_at = 0.0
         self._last_object_yolo_at = 0.0
+        self._orange_flash_until = 0.0
+        self._last_cruise_log_at = 0.0
+        self._recognition_last_at: dict[str, float] = {}
+        self._cruise_scanner: _CruiseVisionScanner | None = None
 
     def start(self, shelf_order: Iterable[str] | None = None) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -213,6 +229,7 @@ class RobotRuntime:
 
     def stop(self) -> None:
         self._stop_event.set()
+        self._stop_cruise_scanner()
         stopper = getattr(self.motion, "request_stop", None)
         if callable(stopper):
             stopper()
@@ -250,12 +267,18 @@ class RobotRuntime:
         self.store.record_run_mode("robot", True)
         self.store.start()
         self.store.record_cycle(1, self._skip_shortage_for_cycle(1))
+        cruise = self.config.smooth_cruise_enabled
         self.store.record_motion_debug(
             "runtime_started",
-            "巡逻启动：短步前进、列端转向、寻线过渡、禁区绕行；检测到目标后停车识别。",
+            (
+                "巡航启动：最低速匀速前进、连续陀螺仪纠偏、移动中识别亮橙灯、列端转向、禁区绕行（全程不停车识别）。"
+                if cruise
+                else "巡逻启动：短步前进、列端转向、寻线过渡、禁区绕行；检测到目标后停车识别。"
+            ),
             evidence={
-                "patrol_speed": self.config.patrol_speed,
-                "step_seconds": self.config.step_seconds,
+                "smooth_cruise_enabled": cruise,
+                "patrol_speed": self.config.cruise_speed if cruise else self.config.patrol_speed,
+                "step_seconds": self.config.cruise_tick_seconds if cruise else self.config.step_seconds,
                 "boundary_min_black_sensors": self.config.boundary_min_black_sensors,
                 "boundary_confirm_samples": self.config.boundary_confirm_samples,
                 "boundary_window_seconds": self.config.boundary_window_seconds,
@@ -268,51 +291,63 @@ class RobotRuntime:
         self._last_line_correction = None
         self._motion_step_index = 0
         self._object_presence_hits = 0
+        self._orange_flash_until = 0.0
+        self._last_cruise_log_at = 0.0
+        self._recognition_last_at = {}
         self._show_normal()
         self._initialize_gimbal()
         self.refresh_motion_sensor(force=True)
+        if cruise:
+            self._zupt_recalibrate("cruise_start")
+            self._start_cruise_scanner()
 
         iterations = 0
         last_scan_at = time.monotonic()
 
-        while not self._stop_event.is_set():
-            if max_iterations is not None and iterations >= max_iterations:
-                self.motion.stop()
-                self.store.record_motion_debug(
-                    "runtime_stopped",
-                    f"continuous patrol stopped after {iterations} iterations",
-                    status="STOPPED",
-                )
-                return
+        try:
+            while not self._stop_event.is_set():
+                if max_iterations is not None and iterations >= max_iterations:
+                    self.motion.stop()
+                    self.store.record_motion_debug(
+                        "runtime_stopped",
+                        f"continuous patrol stopped after {iterations} iterations",
+                        status="STOPPED",
+                    )
+                    return
 
-            tape_state = self.sensors.read_tape_boundary()
-            boundary_outcome = self._handle_tape_boundary(tape_state)
-            if boundary_outcome != "none":
+                tape_state = self.sensors.read_tape_boundary()
+                boundary_outcome = self._handle_tape_boundary(tape_state)
+                if boundary_outcome != "none":
+                    current_cycle = self._current_cycle()
+                    self.store.record_cycle(current_cycle, self._skip_shortage_for_cycle(current_cycle))
+                    continue
+
+                if not self._guard_obstacle(None):
+                    continue
+
+                self.refresh_motion_sensor()
+                self._drive_patrol_step(tape_state)
+                self._update_indicator_light()
+                iterations += 1
                 current_cycle = self._current_cycle()
                 self.store.record_cycle(current_cycle, self._skip_shortage_for_cycle(current_cycle))
-                continue
 
-            if not self._guard_obstacle(None):
-                continue
+                now = time.monotonic()
+                if cruise:
+                    self._handle_cruise_recognitions()
+                    continue
+                if self._maybe_scan_for_object_presence():
+                    last_scan_at = time.monotonic()
+                    continue
+                if self.config.scan_enabled and now - last_scan_at >= self.config.scan_interval_seconds:
+                    self._scan_visible_shelf()
+                    last_scan_at = now
 
-            self.refresh_motion_sensor()
-            self._drive_patrol_step(tape_state)
-            self._show_line_follow() if self._line_follow_active else self._show_normal()
-            iterations += 1
-            current_cycle = self._current_cycle()
-            self.store.record_cycle(current_cycle, self._skip_shortage_for_cycle(current_cycle))
-
-            now = time.monotonic()
-            if self._maybe_scan_for_object_presence():
-                last_scan_at = time.monotonic()
-                continue
-            if self.config.scan_enabled and now - last_scan_at >= self.config.scan_interval_seconds:
-                self._scan_visible_shelf()
-                last_scan_at = now
-
-        self.motion.stop()
-        self.store.stop()
-        self.store.record_motion_debug("runtime_stopped", "运动调试巡逻已停止。", status="STOPPED")
+            self.motion.stop()
+            self.store.stop()
+            self.store.record_motion_debug("runtime_stopped", "运动调试巡逻已停止。", status="STOPPED")
+        finally:
+            self._stop_cruise_scanner()
 
     def run_patrol(self, shelf_order: Iterable[str] | None = None, max_steps: int | None = None) -> None:
         order = list(shelf_order) if shelf_order is not None else list(self.shelf_manifest)
@@ -438,6 +473,7 @@ class RobotRuntime:
         self._last_line_correction = None
         self._reset_boundary_window()
         self._reset_heading_guard()
+        self._zupt_recalibrate("post_boundary_turn")
         self.store.record_forbidden_zone(zone_id, False)
         self._advance_boundary_action()
         self.store.record_motion_debug(
@@ -547,6 +583,9 @@ class RobotRuntime:
                 )
                 self._drive_line_follow_step(tape_state)
                 return
+        if self.config.smooth_cruise_enabled:
+            self._drive_cruise_step(tape_state)
+            return
         self._motion_step_index += 1
         self.store.record_motion_debug(
             "patrol_step",
@@ -568,6 +607,47 @@ class RobotRuntime:
             speed=self.config.patrol_speed,
             duration_seconds=self.config.step_seconds,
             settle_seconds=self.config.patrol_settle_seconds,
+        )
+
+    def _drive_cruise_step(self, tape_state: tuple[int, int, int, int] | None) -> None:
+        """One tick of the low-speed constant-velocity cruise.
+
+        Unlike the short-step patrol, the motor is never stopped between ticks:
+        we correct heading (a brief micro-pulse only when needed) and then keep
+        driving forward, so the car glides at the lowest stable speed instead of
+        lurching stop-go-stop. Boundary latching still runs inside the slice.
+        """
+
+        self._apply_heading_hold()
+        if self._stop_event.is_set():
+            self.motion.stop()
+            return
+        self._motion_step_index += 1
+        now = time.monotonic()
+        interval = max(0.0, float(self.config.cruise_log_interval_seconds))
+        if now - self._last_cruise_log_at >= interval:
+            self._last_cruise_log_at = now
+            self.store.record_motion_debug(
+                "cruise_step",
+                (
+                    f"{self._patrol_phase_label()}：匀速巡航 #{self._motion_step_index}，"
+                    f"speed={self.config.cruise_speed}, tick={self.config.cruise_tick_seconds:.2f}s, "
+                    f"tape={_format_tape_state(tape_state)}。"
+                ),
+                evidence={
+                    "phase": self._patrol_phase_label(),
+                    "speed": self.config.cruise_speed,
+                    "tick_seconds": self.config.cruise_tick_seconds,
+                    "tape_state": _json_tape_state(tape_state),
+                },
+            )
+        self._run_timed_motion(
+            self.motion.move_forward_slow,
+            speed=self.config.cruise_speed,
+            duration_seconds=self.config.cruise_tick_seconds,
+            watch_boundary=True,
+            heading_hold=False,
+            keep_running=True,
         )
 
     def _drive_line_follow_step(self, tape_state: tuple[int, int, int, int] | None) -> None:
@@ -700,20 +780,25 @@ class RobotRuntime:
         duration_seconds: float,
         watch_boundary: bool = True,
         heading_hold: bool = False,
+        keep_running: bool = False,
     ) -> None:
+        # keep_running leaves the motor energised at the end (no trailing stop) so
+        # a caller can chain motion slices into a continuous, jerk-free cruise
+        # instead of the stop-start cadence a per-step stop would produce.
         duration = max(0.0, float(duration_seconds))
         guard_interval = max(0.0, float(self.config.motion_guard_poll_seconds)) if watch_boundary else 0.0
         if duration <= 0.0 or guard_interval <= 0.0 or duration <= guard_interval:
             if heading_hold and watch_boundary:
                 self._apply_heading_hold()
             mover(speed=speed, duration_seconds=duration)
-            if watch_boundary:
-                self._poll_boundary_during_motion(duration)
-            self.motion.stop()
+            latched = self._poll_boundary_during_motion(duration) if watch_boundary else False
+            if not keep_running or latched:
+                self.motion.stop()
             return
 
         remaining = duration
         elapsed = 0.0
+        latched = False
         while remaining > 0 and not self._stop_event.is_set():
             chunk = min(remaining, guard_interval)
             if heading_hold and watch_boundary:
@@ -724,8 +809,10 @@ class RobotRuntime:
             elapsed += chunk
             remaining -= chunk
             if watch_boundary and self._poll_boundary_during_motion(elapsed):
+                latched = True
                 break
-        self.motion.stop()
+        if not keep_running or latched or self._stop_event.is_set():
+            self.motion.stop()
 
     def _poll_boundary_during_motion(self, elapsed_seconds: float) -> bool:
         try:
@@ -788,6 +875,7 @@ class RobotRuntime:
         self._obstacle_active = True
         self.motion.stop()
         self.alarm.show_obstacle_wait()
+        self._zupt_recalibrate("obstacle_stop")
         self.store.record_obstacle(distance_mm, True, waiting_seconds=int(self.config.obstacle_wait_seconds))
         self._play_cue("obstacle", "检测到障碍物，小车停车等待。")
         return self._wait_for_obstacle_clear(shelf_id)
@@ -1355,31 +1443,81 @@ class RobotRuntime:
         tolerance = max(0.0, float(self.config.heading_hold_tolerance_deg))
         if abs(deviation) <= tolerance:
             return
+        # PD control: the derivative (current yaw rate) damps the pulse so we don't
+        # keep steering once the car is already swinging back toward straight. This
+        # is what stops the correction from over-shooting and curving the other way
+        # (越纠越弯). `rate` is the same sign convention as `deviation`.
+        rate = self._heading_guard_rate(guard)
+        damping = max(0.0, float(self.config.heading_hold_rate_damping))
+        effective = deviation + damping * rate
+        # If damping has already flipped the sign, the car is recovering fast enough
+        # on its own — issuing a pulse now would push it past straight, so skip it.
+        if effective == 0.0 or (effective > 0.0) != (deviation > 0.0):
+            return
         pulse_seconds = min(
-            max(abs(deviation) * max(0.0, float(self.config.heading_hold_gain)), float(self.config.heading_hold_min_pulse_seconds)),
+            max(abs(effective) * max(0.0, float(self.config.heading_hold_gain)), float(self.config.heading_hold_min_pulse_seconds)),
             float(self.config.heading_hold_max_pulse_seconds),
         )
         if pulse_seconds <= 0:
             return
-        turn_right = deviation > 0.0
+        turn_right = effective > 0.0
         if self.config.heading_hold_invert:
             turn_right = not turn_right
         speed = self.config.heading_hold_correction_speed or max(1, int(self.config.turn_speed))
         mover = self.motion.rotate_right_slow if turn_right else self.motion.rotate_left_slow
         mover(speed=speed, duration_seconds=pulse_seconds)
         self.motion.stop()
-        reset = getattr(guard, "reset", None)
-        if callable(reset):
-            reset()
         self.store.record_motion_debug(
             "heading_hold_correction",
             "heading hold correction pulse applied.",
             evidence={
                 "deviation_degrees": round(deviation, 3),
+                "rate_dps": round(rate, 3),
+                "effective_degrees": round(effective, 3),
                 "direction": "right" if turn_right else "left",
                 "pulse_seconds": round(pulse_seconds, 3),
                 "speed": speed,
             },
+        )
+
+    @staticmethod
+    def _heading_guard_rate(guard: Any) -> float:
+        rate = getattr(guard, "last_rate_dps", 0.0)
+        try:
+            return float(rate)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _zupt_recalibrate(self, reason: str) -> None:
+        """Re-estimate gyro bias while the car is stopped (zero-velocity update).
+
+        This is the main defence against gyro zero-drift: the heading integrator's
+        bias would otherwise wander with temperature and make the car curve while
+        "holding straight". Only meaningful when a real heading guard is open.
+        """
+
+        if not (self.config.heading_zupt_enabled and self.config.heading_hold_enabled):
+            return
+        guard = self._heading_guard_instance()
+        if guard is None:
+            return
+        recalibrate = getattr(guard, "recalibrate_bias", None)
+        if not callable(recalibrate):
+            return
+        try:
+            updated = bool(
+                recalibrate(
+                    samples=self.config.heading_zupt_samples,
+                    sample_seconds=self.config.heading_zupt_sample_seconds,
+                )
+            )
+        except (RobotHardwareError, OSError, AttributeError, TypeError, ValueError):
+            self._heading_guard = None
+            return
+        self.store.record_motion_debug(
+            "heading_zupt",
+            f"陀螺仪零漂重标定（{reason}）：{'已更新偏置' if updated else '读数不稳定，跳过'}。",
+            evidence={"reason": reason, "updated": updated, "samples": self.config.heading_zupt_samples},
         )
 
     def _show_normal(self) -> None:
@@ -1397,6 +1535,93 @@ class RobotRuntime:
                 self.alarm.show_normal()
         except RobotHardwareError:
             pass
+
+    def _update_indicator_light(self) -> None:
+        """Set the base status colour, but hold the orange flash while it is active.
+
+        The orange recognition flash is applied non-blocking (a timed window) so
+        the control loop never sleeps just to blink — we simply refrain from
+        overwriting orange with the base colour until the window elapses.
+        """
+
+        if time.monotonic() < self._orange_flash_until:
+            return
+        self._show_line_follow() if self._line_follow_active else self._show_normal()
+
+    def _trigger_orange_flash(self) -> None:
+        flash = getattr(self.alarm, "show_recognition", None)
+        if not callable(flash):
+            return
+        try:
+            flash()
+        except RobotHardwareError:
+            return
+        self._orange_flash_until = time.monotonic() + max(0.0, float(self.config.cruise_recognition_flash_seconds))
+
+    def _start_cruise_scanner(self) -> None:
+        if not self.config.cruise_vision_enabled or self._cruise_scanner is not None:
+            return
+        scanner = _CruiseVisionScanner(
+            provider=self.detection_provider,
+            config=self.config,
+            enrich=self._enrich_detection,
+            stop_event=self._stop_event,
+        )
+        scanner.start()
+        self._cruise_scanner = scanner
+
+    def _stop_cruise_scanner(self) -> None:
+        scanner = self._cruise_scanner
+        if scanner is None:
+            return
+        self._cruise_scanner = None
+        scanner.stop()
+
+    def _handle_cruise_recognitions(self) -> None:
+        scanner = self._cruise_scanner
+        if scanner is None:
+            return
+        for recognition in scanner.poll_new():
+            self._handle_moving_recognition(recognition)
+
+    def _handle_moving_recognition(self, recognition: Mapping[str, object]) -> None:
+        """React to a shelf/item recognised while cruising, without stopping.
+
+        Flashes the orange marker (extra visual cue on top of the audio one),
+        keeps the perceptual cycle bookkeeping alive, and logs a lightweight
+        detection. A per-target cooldown stops a target that stays in frame from
+        re-flashing on every tick.
+        """
+
+        shelf_id = _optional_text(recognition.get("shelf_id"))
+        item_id = _optional_text(recognition.get("item_id"))
+        key = shelf_id or item_id
+        if key is None:
+            return
+        now = time.monotonic()
+        cooldown = max(0.0, float(self.config.cruise_recognition_cooldown_seconds))
+        last_at = self._recognition_last_at.get(key)
+        if last_at is not None and now - last_at < cooldown:
+            return
+        self._recognition_last_at[key] = now
+        self._trigger_orange_flash()
+        self.store.record_motion_debug(
+            "cruise_recognition",
+            (
+                f"移动中识别到{'货架 ' + shelf_id if shelf_id else '物品 ' + str(item_id)}，"
+                "闪烁橙灯并继续匀速巡航（不停车）。"
+            ),
+            evidence={
+                "shelf_id": shelf_id,
+                "item_id": item_id,
+                "tag_id": _optional_text(recognition.get("tag_id")),
+            },
+        )
+        if shelf_id is not None:
+            self._record_observed_shelf(shelf_id)
+            self._play_cue("first", f"识别到 {shelf_id} 货架。")
+        else:
+            self._play_cue("following", f"识别到物品 {item_id}。")
 
     def _scan_shelf(self, step: RouteStep, heading: str) -> str:
         shelf_id = str(step["shelf_id"])
@@ -1517,6 +1742,110 @@ class RobotRuntime:
         error = None if status == 200 else str(payload.get("error", cue))
         display_message = message if error is None else f"音频播放失败: {error}"
         self.store.record_audio_cue(cue, display_message, error)
+
+
+class _CruiseVisionScanner:
+    """Background recognition for the smooth-cruise mode.
+
+    Runs the vision detector in its own thread while the car keeps moving so the
+    control loop never has to stop or block for a scan. Each detection that
+    resolves to a known shelf/item is queued; the control loop drains the queue
+    on its own thread (single-threaded LED/audio) and reacts. On the real car the
+    camera stays open across detections; the provider is re-opened whenever it
+    idles out. All hardware errors are swallowed so a flaky camera cannot crash
+    the patrol — the car simply cruises without the extra recognition cue.
+    """
+
+    def __init__(
+        self,
+        *,
+        provider: DetectionProvider,
+        config: RobotRuntimeConfig,
+        enrich: Callable[[Mapping[str, object]], dict[str, object]],
+        stop_event: threading.Event,
+    ) -> None:
+        self._provider = provider
+        self._config = config
+        self._enrich = enrich
+        self._stop_event = stop_event
+        self._own_stop = threading.Event()
+        self._lock = threading.Lock()
+        self._pending: list[dict[str, object]] = []
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._thread = threading.Thread(target=self._run, name="cruise-vision", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._own_stop.set()
+        thread = self._thread
+        self._thread = None
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=1.0)
+
+    def _should_stop(self) -> bool:
+        return self._own_stop.is_set() or self._stop_event.is_set()
+
+    def poll_new(self) -> list[dict[str, object]]:
+        with self._lock:
+            if not self._pending:
+                return []
+            items = self._pending
+            self._pending = []
+            return items
+
+    def _run(self) -> None:
+        reopen_seconds = max(0.0, float(self._config.cruise_vision_reopen_seconds))
+        while not self._should_stop():
+            try:
+                iterator = self._open_iterator()
+                self._ingest(iterator)
+            except Exception:  # pragma: no cover - defensive against camera/vision failures
+                pass
+            if self._should_stop():
+                return
+            self._own_stop.wait(reopen_seconds)
+
+    def _open_iterator(self) -> Iterator[Mapping[str, object]]:
+        try:
+            return self._provider(
+                device=self._config.camera_device,
+                cooldown_seconds=0.5,
+                idle_timeout_seconds=self._config.scan_timeout_seconds,
+                stability_enabled=self._config.vision_stability_enabled,
+                stability_min_frames=self._config.vision_min_stable_frames,
+                stability_max_center_shift_px=self._config.vision_max_center_shift_px,
+                stability_max_corner_shift_px=self._config.vision_max_corner_shift_px,
+                stability_max_angle_delta_deg=self._config.vision_max_angle_delta_deg,
+                image_classifier_enabled=self._config.image_classifier_enabled,
+                vision_state_machine_enabled=self._config.vision_state_machine_enabled,
+            )
+        except TypeError:
+            return self._provider(device=self._config.camera_device, cooldown_seconds=0.5)
+
+    def _ingest(self, iterator: Iterator[Mapping[str, object]]) -> None:
+        for detection in iterator:
+            if self._should_stop():
+                return
+            recognition = self._recognition_from(detection)
+            if recognition is not None:
+                with self._lock:
+                    self._pending.append(recognition)
+
+    def _recognition_from(self, detection: Mapping[str, object]) -> dict[str, object] | None:
+        enriched = self._enrich(detection)
+        shelf_id = _optional_text(enriched.get("shelf_id"))
+        item_id = _optional_text(enriched.get("item_id"))
+        if shelf_id is None and item_id is None:
+            return None
+        return {
+            "shelf_id": shelf_id,
+            "item_id": item_id,
+            "tag_id": _optional_text(enriched.get("tag_id")),
+        }
 
 
 def start_background_runtime(

@@ -140,12 +140,15 @@ class StraightHeadingGuard:
     yaw_axis: str
     yaw_sign: float
     deadband_dps: float
+    leak_per_second: float = 0.0
     heading_degrees: float = 0.0
     last_sample_at: float | None = None
+    last_rate_dps: float = 0.0
 
     def reset(self) -> None:
         self.heading_degrees = 0.0
         self.last_sample_at = None
+        self.last_rate_dps = 0.0
 
     def update(self) -> float:
         now = time.monotonic()
@@ -153,13 +156,45 @@ class StraightHeadingGuard:
         rate = float(rates.get(self.yaw_axis, 0.0)) * self.yaw_sign
         if abs(rate) < self.deadband_dps:
             rate = 0.0
+        self.last_rate_dps = rate
         if self.last_sample_at is None:
             self.last_sample_at = now
             return self.heading_degrees
         elapsed = max(0.0, min(now - self.last_sample_at, 0.25))
         self.last_sample_at = now
-        self.heading_degrees = _wrap_degrees(self.heading_degrees + rate * elapsed)
+        # Leaky integrator: a residual gyro bias (zero-drift) would otherwise ramp
+        # the estimated heading forever and make the controller chase a phantom
+        # error (越纠越弯). The leak pulls the estimate back toward zero so a
+        # constant bias only produces a small, bounded offset instead of a ramp.
+        leak = max(0.0, float(self.leak_per_second)) * elapsed
+        decay = max(0.0, 1.0 - leak)
+        self.heading_degrees = _wrap_degrees(self.heading_degrees * decay + rate * elapsed)
         return self.heading_degrees
+
+    def recalibrate_bias(self, *, samples: int = 15, sample_seconds: float = 0.005) -> bool:
+        """Zero-velocity update: re-estimate gyro bias while the car is stopped.
+
+        Call this only when the robot is physically stationary (e.g. parked at a
+        boundary/obstacle). Any yaw rate measured then is bias, so we fold it into
+        the running bias estimate. Rejects the update when the readings are too
+        noisy/large to be a genuine at-rest sample, which guards against silently
+        learning a bad bias if the car is actually moving.
+        """
+
+        candidate = _stable_gyro_bias_candidate(
+            self.gyro,
+            samples=samples,
+            sample_seconds=sample_seconds,
+        )
+        if candidate is None:
+            return False
+        alpha = _zupt_alpha()
+        self.bias_dps = {
+            axis: (1.0 - alpha) * float(self.bias_dps.get(axis, 0.0)) + alpha * float(candidate.get(axis, 0.0))
+            for axis in ("x", "y", "z")
+        }
+        self.reset()
+        return True
 
 
 @dataclass(slots=True)
@@ -431,6 +466,7 @@ def open_straight_heading_guard() -> StraightHeadingGuard | None:
             yaw_axis=_yaw_axis(),
             yaw_sign=_yaw_sign(),
             deadband_dps=_yaw_deadband_dps(),
+            leak_per_second=_yaw_leak_per_second(),
         )
     except (ImportError, OSError, AttributeError, TypeError, ValueError, RobotHardwareError):
         return None
@@ -822,6 +858,22 @@ def _yaw_deadband_dps() -> float:
         return max(0.0, float(os.environ.get("MPU6050_YAW_DEADBAND_DPS", "0.25")))
     except ValueError:
         return 0.25
+
+
+def _yaw_leak_per_second() -> float:
+    """Leak rate (1/s) for the straight-heading integrator; 0 disables leaking."""
+    try:
+        return max(0.0, float(os.environ.get("MPU6050_YAW_LEAK_PER_SECOND", "0.08")))
+    except ValueError:
+        return 0.08
+
+
+def _zupt_alpha() -> float:
+    """EMA weight for zero-velocity bias updates; higher trusts new samples more."""
+    try:
+        return max(0.0, min(1.0, float(os.environ.get("MPU6050_ZUPT_ALPHA", "0.5"))))
+    except ValueError:
+        return 0.5
 
 
 def _status_bias_max_span_dps() -> float:

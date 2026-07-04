@@ -295,6 +295,85 @@ class MPU6050Test(unittest.TestCase):
         guard.reset()
         self.assertEqual(guard.heading_degrees, 0.0)
 
+    def test_straight_heading_guard_exposes_last_rate(self) -> None:
+        guard = mpu6050.StraightHeadingGuard(
+            gyro=FakeSequenceGyro([{"x": 0.0, "y": 0.0, "z": 0.0}, {"x": 0.0, "y": 0.0, "z": 40.0}]),
+            bias_dps={"x": 0.0, "y": 0.0, "z": 0.0},
+            yaw_axis="z",
+            yaw_sign=1.0,
+            deadband_dps=0.0,
+        )
+
+        guard.update()
+        guard.update()
+
+        self.assertEqual(guard.last_rate_dps, 40.0)
+
+    def test_leaky_integrator_bounds_constant_bias_drift(self) -> None:
+        # A constant (uncorrected) bias would ramp the heading forever without a
+        # leak; with a leak the estimate must saturate near rate/leak instead.
+        rate = 10.0
+        leak = 8.0
+        guard = mpu6050.StraightHeadingGuard(
+            gyro=ConstantGyro({"x": 0.0, "y": 0.0, "z": rate}),
+            bias_dps={"x": 0.0, "y": 0.0, "z": 0.0},
+            yaw_axis="z",
+            yaw_sign=1.0,
+            deadband_dps=0.0,
+            leak_per_second=leak,
+        )
+
+        guard.update()  # prime last_sample_at
+        deadline = mpu6050.time.monotonic() + 0.4
+        while mpu6050.time.monotonic() < deadline:
+            heading_first = guard.update()
+        deadline = mpu6050.time.monotonic() + 0.4
+        while mpu6050.time.monotonic() < deadline:
+            heading_second = guard.update()
+
+        steady_state = rate / leak  # 1.25 deg
+        self.assertGreater(heading_first, 0.0)
+        # Saturated: it did not keep ramping across the second window, and stayed
+        # near the analytic bound rather than integrating to ~rate*time (~8 deg).
+        self.assertLess(heading_second, steady_state * 2.0)
+        self.assertLessEqual(heading_second, heading_first + 0.2)
+
+    def test_recalibrate_bias_folds_stationary_reading_into_bias(self) -> None:
+        original_alpha = os.environ.get("MPU6050_ZUPT_ALPHA")
+        os.environ["MPU6050_ZUPT_ALPHA"] = "0.5"
+        try:
+            guard = mpu6050.StraightHeadingGuard(
+                gyro=ConstantGyro({"x": 0.0, "y": 0.0, "z": 2.0}),
+                bias_dps={"x": 0.0, "y": 0.0, "z": 0.0},
+                yaw_axis="z",
+                yaw_sign=1.0,
+                deadband_dps=0.0,
+            )
+            guard.heading_degrees = 5.0
+
+            updated = guard.recalibrate_bias(samples=6, sample_seconds=0.0)
+        finally:
+            _restore_env("MPU6050_ZUPT_ALPHA", original_alpha)
+
+        self.assertTrue(updated)
+        self.assertAlmostEqual(guard.bias_dps["z"], 1.0)  # EMA 0.5*0 + 0.5*2
+        self.assertEqual(guard.heading_degrees, 0.0)
+        self.assertIsNone(guard.last_sample_at)
+
+    def test_recalibrate_bias_rejects_moving_readings(self) -> None:
+        guard = mpu6050.StraightHeadingGuard(
+            gyro=ConstantGyro({"x": 0.0, "y": 0.0, "z": 96.0}),
+            bias_dps={"x": 0.0, "y": 0.0, "z": 0.0},
+            yaw_axis="z",
+            yaw_sign=1.0,
+            deadband_dps=0.0,
+        )
+
+        updated = guard.recalibrate_bias(samples=6, sample_seconds=0.0)
+
+        self.assertFalse(updated)
+        self.assertEqual(guard.bias_dps["z"], 0.0)
+
 
 class FakeBus:
     def __init__(self, reads: dict[int, int]) -> None:
@@ -354,6 +433,14 @@ class FakeSequenceGyro:
         if self.readings:
             return dict(self.readings.pop(0))
         return {"x": 0.0, "y": 0.0, "z": 0.0}
+
+
+class ConstantGyro:
+    def __init__(self, reading: dict[str, float]) -> None:
+        self.reading = reading
+
+    def read_gyro_dps(self) -> dict[str, float]:
+        return dict(self.reading)
 
 
 class FakeMotion:
