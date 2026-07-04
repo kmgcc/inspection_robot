@@ -51,8 +51,10 @@ def default_motion_sensor() -> MotionSensorState:
         "accel_mps2": {"x": None, "y": None, "z": None},
         "gyro_dps": {"x": None, "y": None, "z": None},
         "gyro_bias_dps": {"x": None, "y": None, "z": None},
+        "orientation_deg": {"roll": None, "pitch": None, "yaw": None},
         "zero_drift_compensated": False,
         "sample_time": None,
+        "last_turn": None,
         "last_error": None,
     }
 

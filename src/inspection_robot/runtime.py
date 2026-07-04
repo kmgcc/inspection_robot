@@ -587,6 +587,9 @@ class RobotRuntime:
         self._last_motion_sensor_at = now
         self.store.record_motion_sensor(reader())
 
+    def turn_90_closed_loop(self, direction: str, *, speed: int | None = None, duration_seconds: float | None = None) -> dict[str, object] | None:
+        return self._turn_90(direction, speed=speed, duration_seconds=duration_seconds)
+
     def _scan_visible_shelf(self) -> None:
         detections = self._collect_detections()
         shelf_id = self._shelf_id_from_detections(detections)
@@ -762,25 +765,42 @@ class RobotRuntime:
         self.motion.stop()
         self._settle()
 
-    def _turn_90(self, direction: str, *, speed: int | None = None, duration_seconds: float | None = None) -> None:
+    def _turn_90(self, direction: str, *, speed: int | None = None, duration_seconds: float | None = None) -> dict[str, object] | None:
         normalized = direction.strip().lower()
         turn_speed = self.config.turn_speed if speed is None else speed
         turn_seconds = self.config.turn_90_seconds if duration_seconds is None else duration_seconds
-        imu_turn = getattr(self.imu, "turn_90", None)
+        imu_turn = getattr(self.imu, "turn_90_with_result", None)
         if callable(imu_turn):
             try:
                 imu_result = imu_turn(normalized, self.motion, turn_speed, turn_seconds)
+            except RobotHardwareError as exc:
+                self.store.record_robot_status("TURNING_AT_BOUNDARY", f"MPU6050 turn skipped: {exc}")
+            else:
                 if imu_result is not None:
                     self.motion.stop()
                     self._settle()
-                    if not imu_result:
-                        self.store.record_robot_status(
-                            "TURNING_AT_BOUNDARY",
-                            "MPU6050 closed-loop 90 degree turn did not converge within correction attempts; keeping car stopped.",
+                    result = dict(imu_result) if isinstance(imu_result, dict) else {"ok": bool(imu_result)}
+                    self._record_gyro_turn_result(result)
+                    self.refresh_motion_sensor(force=True)
+                    if not result.get("ok"):
+                        message = str(
+                            result.get("message")
+                            or "MPU6050 closed-loop 90 degree turn did not converge within correction attempts."
                         )
-                    return
-            except RobotHardwareError as exc:
-                self.store.record_robot_status("TURNING_AT_BOUNDARY", f"MPU6050 turn skipped: {exc}")
+                        self.store.record_robot_status("ERROR", f"{message} Keeping car stopped.")
+                        raise RobotHardwareError(message)
+                    return result
+        else:
+            legacy_imu_turn = getattr(self.imu, "turn_90", None)
+            if callable(legacy_imu_turn):
+                try:
+                    legacy_result = legacy_imu_turn(normalized, self.motion, turn_speed, turn_seconds)
+                    if legacy_result is not None:
+                        self.motion.stop()
+                        self._settle()
+                        return {"ok": bool(legacy_result), "source": "mpu6050_legacy", "direction": normalized}
+                except RobotHardwareError as exc:
+                    self.store.record_robot_status("TURNING_AT_BOUNDARY", f"MPU6050 turn skipped: {exc}")
         if normalized == "left":
             self.motion.rotate_left_slow(
                 speed=turn_speed,
@@ -795,6 +815,36 @@ class RobotRuntime:
             raise ValueError(f"unsupported turn direction: {direction}")
         self.motion.stop()
         self._settle()
+        result = {
+            "ok": True,
+            "source": "open_loop",
+            "direction": normalized,
+            "target_degrees": 90.0,
+            "final_degrees": None,
+            "error_degrees": None,
+            "attempts": 0,
+            "message": "MPU6050 unavailable; used calibrated open-loop turn duration.",
+        }
+        self._record_gyro_turn_result(result)
+        self.refresh_motion_sensor(force=True)
+        return result
+
+    def _record_gyro_turn_result(self, result: Mapping[str, object]) -> None:
+        evidence = dict(result)
+        ok = bool(evidence.get("ok"))
+        direction = str(evidence.get("direction") or "-")
+        source = str(evidence.get("source") or "unknown")
+        final_degrees = evidence.get("final_degrees")
+        error_degrees = evidence.get("error_degrees")
+        self.store.record_motion_debug(
+            "gyro_turn_closed_loop",
+            (
+                f"90度转向{'收敛' if ok else '未收敛'}：direction={direction}, source={source}, "
+                f"final={final_degrees}, error={error_degrees}。"
+            ),
+            status="TURNING_AT_BOUNDARY" if ok else "ERROR",
+            evidence=evidence,
+        )
 
     def _settle(self) -> None:
         delay = max(0.0, float(self.config.action_settle_seconds))

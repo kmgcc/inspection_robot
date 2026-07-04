@@ -477,11 +477,19 @@ def create_app(root: Path | None = None) -> Flask:
             active_motion.move_backward_slow(speed=speed, duration_seconds=duration_seconds)
             active_motion.stop()
         elif command == "turn_left_90":
-            active_motion.rotate_left_slow(speed=turn_speed, duration_seconds=cal.get("turn_ccw90_seconds", 0.75))
-            active_motion.stop()
+            turner = getattr(runtime, "turn_90_closed_loop", None)
+            if callable(turner):
+                turner("left", speed=turn_speed, duration_seconds=cal.get("turn_ccw90_seconds", 0.75))
+            else:
+                active_motion.rotate_left_slow(speed=turn_speed, duration_seconds=cal.get("turn_ccw90_seconds", 0.75))
+                active_motion.stop()
         elif command == "turn_right_90":
-            active_motion.rotate_right_slow(speed=turn_speed, duration_seconds=cal.get("turn_cw90_seconds", 0.75))
-            active_motion.stop()
+            turner = getattr(runtime, "turn_90_closed_loop", None)
+            if callable(turner):
+                turner("right", speed=turn_speed, duration_seconds=cal.get("turn_cw90_seconds", 0.75))
+            else:
+                active_motion.rotate_right_slow(speed=turn_speed, duration_seconds=cal.get("turn_cw90_seconds", 0.75))
+                active_motion.stop()
         else:
             raise ValueError(f"unknown manual command: {command}")
 

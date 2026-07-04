@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -53,9 +54,10 @@ class MPU6050Test(unittest.TestCase):
             settle_seconds=0,
         )
 
-        completed = mpu6050.turn_90_with_gyro("right", motion, gyro, config)
+        result = mpu6050.turn_90_with_gyro("right", motion, gyro, config)
 
-        self.assertTrue(completed)
+        self.assertTrue(result.ok)
+        self.assertLessEqual(abs(result.error_degrees), 0.2)
         self.assertEqual(motion.calls[0], ("rotate_right", 12, 0.1))
         self.assertEqual(motion.calls[-1], ("stop", None, None))
 
@@ -74,9 +76,9 @@ class MPU6050Test(unittest.TestCase):
             settle_seconds=0,
         )
 
-        completed = mpu6050.turn_90_with_gyro("right", motion, gyro, config)
+        result = mpu6050.turn_90_with_gyro("right", motion, gyro, config)
 
-        self.assertTrue(completed)
+        self.assertTrue(result.ok)
         self.assertIn(("rotate_right", 10, 0.08), motion.calls)
         self.assertTrue(any(call[0] == "rotate_right" and call[2] > 0.03 for call in motion.calls[1:]))
         self.assertNotIn("rotate_left", [call[0] for call in motion.calls])
@@ -96,11 +98,33 @@ class MPU6050Test(unittest.TestCase):
             settle_seconds=0,
         )
 
-        completed = mpu6050.turn_90_with_gyro("right", motion, gyro, config)
+        result = mpu6050.turn_90_with_gyro("right", motion, gyro, config)
 
-        self.assertTrue(completed)
+        self.assertTrue(result.ok)
         self.assertEqual(motion.calls[0], ("rotate_right", 10, 0.15))
         self.assertIn("rotate_left", [call[0] for call in motion.calls])
+
+    def test_turn_90_with_gyro_uses_slower_correction_speed(self) -> None:
+        gyro = FakeGyro(rate_dps=100.0)
+        motion = FakeMotion()
+        config = mpu6050.Turn90Config(
+            speed=20,
+            correction_speed=6,
+            fallback_seconds=0.08,
+            target_degrees=12.0,
+            tolerance_degrees=0.1,
+            sample_seconds=0.0,
+            bias_samples=1,
+            min_pulse_seconds=0.001,
+            max_pulse_seconds=0.2,
+            settle_seconds=0,
+        )
+
+        result = mpu6050.turn_90_with_gyro("right", motion, gyro, config)
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.pulses[0].speed, 20)
+        self.assertTrue(any(pulse.speed == 6 for pulse in result.pulses[1:]))
 
     def test_motion_sample_reports_accel_and_compensated_gyro_bias(self) -> None:
         reads = {
@@ -128,6 +152,39 @@ class MPU6050Test(unittest.TestCase):
         self.assertAlmostEqual(sample["accel_mps2"]["z"], mpu6050.GRAVITY_MPS2, places=2)
         self.assertEqual(sample["gyro_bias_dps"], {"x": 1.0, "y": -2.0, "z": 3.0})
         self.assertEqual(sample["gyro_dps"], {"x": 0.0, "y": 0.0, "z": 0.0})
+        self.assertEqual(sample["orientation_deg"]["roll"], 0.0)
+        self.assertEqual(sample["orientation_deg"]["pitch"], -0.0)
+
+    def test_orientation_yaw_integrates_gyro_z_while_flat(self) -> None:
+        accel = {"x": 0.0, "y": 0.0, "z": mpu6050.GRAVITY_MPS2}
+        gyro = {"x": 0.0, "y": 0.0, "z": 45.0}
+        original_axis = os.environ.get("MPU6050_YAW_AXIS")
+        original_sign = os.environ.get("MPU6050_YAW_SIGN")
+        os.environ["MPU6050_YAW_AXIS"] = "z"
+        os.environ["MPU6050_YAW_SIGN"] = "1"
+        mpu6050._reset_orientation_state()
+        try:
+            first = mpu6050._orientation_from_sample(accel, gyro, 10.0)
+            second = mpu6050._orientation_from_sample(accel, gyro, 12.0)
+        finally:
+            _restore_env("MPU6050_YAW_AXIS", original_axis)
+            _restore_env("MPU6050_YAW_SIGN", original_sign)
+            mpu6050._reset_orientation_state()
+
+        self.assertEqual(first["yaw"], 0.0)
+        self.assertEqual(second["yaw"], 90.0)
+
+    def test_status_bias_cache_rejects_large_rotation_rate(self) -> None:
+        original_abs = os.environ.get("MPU6050_STATUS_BIAS_MAX_ABS_DPS")
+        os.environ["MPU6050_STATUS_BIAS_MAX_ABS_DPS"] = "25"
+        mpu6050.reset_gyro_bias_cache()
+        try:
+            bias = mpu6050._cached_gyro_bias(FakeSequenceGyro([{"x": 0.0, "y": 0.0, "z": 96.0}] * 4))
+        finally:
+            _restore_env("MPU6050_STATUS_BIAS_MAX_ABS_DPS", original_abs)
+            mpu6050.reset_gyro_bias_cache()
+
+        self.assertEqual(bias, {"x": 0.0, "y": 0.0, "z": 0.0})
 
 
 class FakeBus:
@@ -147,6 +204,13 @@ def _word(register: int, value: int) -> dict[int, int]:
     return {register: (encoded >> 8) & 0xFF, register + 1: encoded & 0xFF}
 
 
+def _restore_env(name: str, value: str | None) -> None:
+    if value is None:
+        os.environ.pop(name, None)
+    else:
+        os.environ[name] = value
+
+
 class FakeGyro:
     def __init__(self, rate_dps: float = 12000.0) -> None:
         self.rate_dps = rate_dps
@@ -162,6 +226,16 @@ class FakeGyro:
 
     def read_gyro_z_dps(self) -> float:
         return self.rate_dps
+
+
+class FakeSequenceGyro:
+    def __init__(self, readings: list[dict[str, float]]) -> None:
+        self.readings = list(readings)
+
+    def read_gyro_dps(self) -> dict[str, float]:
+        if self.readings:
+            return dict(self.readings.pop(0))
+        return {"x": 0.0, "y": 0.0, "z": 0.0}
 
 
 class FakeMotion:

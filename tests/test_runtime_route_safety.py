@@ -229,6 +229,28 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
         self.assertEqual(fake_imu.calls, [("right", 20, 0.6)])
         self.assertNotIn("rotate_right", fake_motion.names())
 
+    def test_failed_mpu6050_turn_does_not_fall_back_to_open_loop(self) -> None:
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=self.make_config(),
+            motion_adapter=fake_motion,
+            sensor_adapter=FakeSensors(distances=[400] * 4, tapes=[(1, 1, 1, 1)] * 3),
+            alarm_adapter=FakeAlarm(),
+            gimbal_adapter=FakeGimbal(),
+            detection_provider=fake_detection_provider,
+            imu_adapter=FakeFailedImuAdapter(),
+        )
+
+        with self.assertRaisesRegex(Exception, "failed to converge"):
+            runtime.turn_90_closed_loop("right")
+
+        self.assertNotIn("rotate_right", fake_motion.names())
+        self.assertEqual(store.snapshot()["task_status"], "ERROR")
+
     def test_runtime_refreshes_normal_led_during_patrol(self) -> None:
         store = self.make_store()
         fake_alarm = FakeAlarm()
@@ -332,6 +354,21 @@ class FakeImuAdapter:
         self.calls.append((direction, speed, fallback_seconds))
         motion_adapter.stop()
         return True
+
+
+class FakeFailedImuAdapter:
+    def turn_90_with_result(self, direction: str, motion_adapter: FakeMotion, speed: int, fallback_seconds: float) -> dict[str, object]:
+        motion_adapter.stop()
+        return {
+            "ok": False,
+            "source": "mpu6050",
+            "direction": direction,
+            "target_degrees": 90.0,
+            "final_degrees": 82.0,
+            "error_degrees": 8.0,
+            "attempts": 6,
+            "message": "MPU6050 turn failed to converge",
+        }
 
 
 def fake_detection_provider(**_: object) -> Iterator[dict[str, object]]:

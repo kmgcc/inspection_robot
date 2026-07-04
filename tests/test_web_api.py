@@ -175,6 +175,10 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(backward.status_code, 200)
         self.assertIn(("move_backward", 20, 0.2), runtime.motion.calls)
 
+        manual_turn = self.client.post("/api/control/turn_right_90", json={"speed": 20, "duration_seconds": 0.2})
+        self.assertEqual(manual_turn.status_code, 200)
+        self.assertEqual(runtime.turns[-1], ("right", 20, 0.6))
+
 
 class FakeRuntime:
     def __init__(self) -> None:
@@ -191,12 +195,16 @@ class FakeRuntime:
             },
         )()
         self.calls: list[str] = []
+        self.turns: list[tuple[str, int | None, float | None]] = []
 
     def stop(self) -> None:
         self.calls.append("stop")
 
     def _settle(self) -> None:
         self.calls.append("settle")
+
+    def turn_90_closed_loop(self, direction: str, *, speed: int | None = None, duration_seconds: float | None = None) -> None:
+        self.turns.append((direction, speed, duration_seconds))
 
 
 class FakeMotion:

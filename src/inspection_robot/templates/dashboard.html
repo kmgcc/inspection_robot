@@ -45,10 +45,10 @@
     <!-- 标签1：手动控制                                                    -->
     <!-- ================================================================ -->
     <section class="tab-panel active" id="panel-manual" role="tabpanel" aria-labelledby="tab-manual">
-      <div class="panel-row">
+      <div class="manual-grid">
 
         <!-- 手动方向控制 -->
-        <div class="panel card" style="flex:0 0 auto">
+        <div class="panel card manual-control-card">
           <h2 class="card-title">方向控制</h2>
           <p class="card-hint simulate-only-hint" id="manual-hint" hidden>
             ⚠ 当前为 simulate 模式，方向控制不会发送到底盘。请用 <code>RUN_MODE=robot</code> 在小车上启动。
@@ -71,7 +71,7 @@
         </div>
 
         <!-- 巡逻控制 -->
-        <div class="panel card">
+        <div class="panel card patrol-control-card">
           <h2 class="card-title">巡逻控制</h2>
           <div class="btn-group">
             <button class="btn btn-primary" type="button" data-post="/api/start" id="btn-start-patrol">开始巡逻</button>
@@ -112,6 +112,39 @@
             </div>
           </div>
           <p id="last_message" class="card-hint" style="margin-top:8px">-</p>
+        </div>
+
+        <!-- MPU6050 姿态预览 -->
+        <div class="panel card pose-card">
+          <h2 class="card-title">MPU6050 姿态</h2>
+          <div class="pose-scene" aria-label="小车姿态 3D 预览">
+            <div class="pose-grid"></div>
+            <div class="pose-car" id="pose-car">
+              <div class="pose-car-top"></div>
+              <div class="pose-car-front"></div>
+              <div class="pose-car-side left"></div>
+              <div class="pose-car-side right"></div>
+              <div class="pose-wheel w1"></div>
+              <div class="pose-wheel w2"></div>
+              <div class="pose-wheel w3"></div>
+              <div class="pose-wheel w4"></div>
+            </div>
+          </div>
+          <div class="metric-row pose-metrics">
+            <div class="metric-sm">
+              <label>Roll</label>
+              <strong id="pose-roll">-</strong>
+            </div>
+            <div class="metric-sm">
+              <label>Pitch</label>
+              <strong id="pose-pitch">-</strong>
+            </div>
+            <div class="metric-sm">
+              <label>Yaw</label>
+              <strong id="pose-yaw">-</strong>
+            </div>
+          </div>
+          <p class="card-hint" id="pose-turn-summary">-</p>
         </div>
 
       </div>

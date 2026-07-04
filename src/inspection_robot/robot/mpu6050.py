@@ -6,6 +6,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
+from math import atan2, degrees, sqrt
 from types import ModuleType
 from typing import Protocol
 
@@ -27,6 +28,11 @@ ACCEL_2G_SCALE = 16384.0
 GYRO_250DPS_SCALE = 131.0
 _GYRO_BIAS_LOCK = threading.Lock()
 _GYRO_BIAS_DPS: dict[str, float] | None = None
+_LAST_TURN_LOCK = threading.Lock()
+_LAST_TURN_RESULT: dict[str, object] | None = None
+_ORIENTATION_LOCK = threading.Lock()
+_YAW_DEGREES = 0.0
+_LAST_YAW_SAMPLE_MONOTONIC: float | None = None
 
 
 class I2CBus(Protocol):
@@ -57,6 +63,59 @@ class Turn90Config:
     settle_seconds: float = 0.05
     correction_gain: float = 0.9
     min_measured_degrees: float = 0.5
+    correction_speed: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TurnPulse:
+    attempt: int
+    direction: str
+    speed: int
+    duration_seconds: float
+    measured_degrees: float
+    accumulated_degrees: float
+    error_degrees: float
+
+
+@dataclass(frozen=True, slots=True)
+class Turn90Result:
+    ok: bool
+    source: str
+    direction: str
+    target_degrees: float
+    tolerance_degrees: float
+    final_degrees: float
+    error_degrees: float
+    attempts: int
+    pulses: tuple[TurnPulse, ...]
+    message: str
+    sample_time: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "ok": self.ok,
+            "source": self.source,
+            "direction": self.direction,
+            "target_degrees": round(self.target_degrees, 3),
+            "tolerance_degrees": round(self.tolerance_degrees, 3),
+            "final_degrees": round(self.final_degrees, 3),
+            "error_degrees": round(self.error_degrees, 3),
+            "attempts": self.attempts,
+            "pulses": [
+                {
+                    "attempt": pulse.attempt,
+                    "direction": pulse.direction,
+                    "speed": pulse.speed,
+                    "duration_seconds": round(pulse.duration_seconds, 3),
+                    "measured_degrees": round(pulse.measured_degrees, 3),
+                    "accumulated_degrees": round(pulse.accumulated_degrees, 3),
+                    "error_degrees": round(pulse.error_degrees, 3),
+                }
+                for pulse in self.pulses
+            ],
+            "message": self.message,
+            "sample_time": self.sample_time,
+        }
 
 
 @dataclass(slots=True)
@@ -113,7 +172,20 @@ class MPU6050Gyro:
 
 
 def turn_90(direction: str, motion_adapter: MotionAdapter, speed: int, fallback_seconds: float) -> bool | None:
+    result = turn_90_with_result(direction, motion_adapter, speed, fallback_seconds)
+    if result is None:
+        return None
+    return bool(result.get("ok"))
+
+
+def turn_90_with_result(
+    direction: str,
+    motion_adapter: MotionAdapter,
+    speed: int,
+    fallback_seconds: float,
+) -> dict[str, object] | None:
     if os.environ.get("MPU6050_TURN_ENABLED", "1").strip().lower() in {"0", "false", "no", "off"}:
+        _set_last_turn_result(_unavailable_turn_result(direction, "MPU6050 closed-loop turn disabled by MPU6050_TURN_ENABLED."))
         return None
     config = Turn90Config(
         speed=speed,
@@ -128,11 +200,16 @@ def turn_90(direction: str, motion_adapter: MotionAdapter, speed: int, fallback_
         settle_seconds=float(os.environ.get("MPU6050_TURN_SETTLE_SECONDS", "0.05")),
         correction_gain=float(os.environ.get("MPU6050_TURN_CORRECTION_GAIN", "0.9")),
         min_measured_degrees=float(os.environ.get("MPU6050_TURN_MIN_MEASURED_DEGREES", "0.5")),
+        correction_speed=int(os.environ.get("MPU6050_TURN_CORRECTION_SPEED", str(max(1, int(speed) // 2)))),
     )
     try:
         gyro = open_default_gyro()
-        return turn_90_with_gyro(direction, motion_adapter, gyro, config)
-    except (ImportError, OSError, AttributeError, RobotHardwareError):
+        result = turn_90_with_gyro(direction, motion_adapter, gyro, config)
+        payload = result.to_dict()
+        _set_last_turn_result(payload)
+        return payload
+    except (ImportError, OSError, AttributeError, RobotHardwareError) as exc:
+        _set_last_turn_result(_unavailable_turn_result(direction, str(exc)))
         return None
 
 
@@ -141,7 +218,7 @@ def turn_90_with_gyro(
     motion_adapter: MotionAdapter,
     gyro: MPU6050Gyro,
     config: Turn90Config,
-) -> bool:
+) -> Turn90Result:
     normalized = direction.strip().lower()
     if normalized not in {"left", "right"}:
         raise RobotHardwareError(f"unsupported MPU6050 turn direction: {direction}")
@@ -155,16 +232,19 @@ def turn_90_with_gyro(
     accumulated = 0.0
     rate_hint: float | None = None
     max_attempts = max(0, int(config.max_correction_attempts)) + 1
+    pulses: list[TurnPulse] = []
 
     for attempt in range(max_attempts):
         error = target - accumulated
         if abs(error) <= tolerance:
-            return True
+            return _turn_result(True, normalized, target, tolerance, accumulated, pulses)
         pulse_direction = normalized if error > 0 else _opposite_direction(normalized)
         if attempt == 0:
             pulse_seconds = max(0.0, float(config.fallback_seconds))
+            pulse_speed = config.speed
         else:
             pulse_seconds = _correction_duration(abs(error), target, rate_hint, config)
+            pulse_speed = _correction_speed(config)
         measured_degrees = _measure_turn_pulse(
             pulse_direction,
             motion_adapter,
@@ -172,16 +252,26 @@ def turn_90_with_gyro(
             bias,
             config,
             pulse_seconds,
+            pulse_speed,
         )
         if pulse_seconds > 0 and measured_degrees > 0:
             rate_hint = measured_degrees / pulse_seconds
         accumulated += measured_degrees if pulse_direction == normalized else -measured_degrees
+        pulses.append(
+            TurnPulse(
+                attempt=attempt + 1,
+                direction=pulse_direction,
+                speed=pulse_speed,
+                duration_seconds=pulse_seconds,
+                measured_degrees=measured_degrees,
+                accumulated_degrees=accumulated,
+                error_degrees=target - accumulated,
+            )
+        )
         if config.settle_seconds > 0:
             time.sleep(config.settle_seconds)
 
-    if abs(target - accumulated) <= tolerance:
-        return True
-    return False
+    return _turn_result(abs(target - accumulated) <= tolerance, normalized, target, tolerance, accumulated, pulses)
 
 
 def open_default_gyro() -> MPU6050Gyro:
@@ -198,16 +288,21 @@ def read_motion_sample() -> dict[str, object]:
         bias = _cached_gyro_bias(gyro)
         raw_gyro = gyro.read_gyro_dps()
         corrected_gyro = {axis: raw_gyro[axis] - bias[axis] for axis in raw_gyro}
+        accel = gyro.read_accel_mps2()
+        orientation = _orientation_from_sample(accel, corrected_gyro, time.monotonic())
         return {
             "ok": True,
             "source": "mpu6050",
-            "accel_mps2": _rounded_vector(gyro.read_accel_mps2()),
+            "accel_mps2": _rounded_vector(accel),
             "gyro_dps": _rounded_vector(corrected_gyro),
             "gyro_raw_dps": _rounded_vector(raw_gyro),
             "gyro_bias_dps": _rounded_vector(bias),
+            "orientation_deg": orientation,
+            "yaw_axis": _yaw_axis(),
             "temperature_c": round(gyro.read_temperature_c(), 2),
             "zero_drift_compensated": True,
             "sample_time": datetime.now().isoformat(timespec="seconds"),
+            "last_turn": _last_turn_result(),
             "last_error": None,
         }
     except (ImportError, OSError, AttributeError, TypeError, ValueError, RobotHardwareError) as exc:
@@ -218,9 +313,11 @@ def read_motion_sample() -> dict[str, object]:
             "gyro_dps": {"x": None, "y": None, "z": None},
             "gyro_raw_dps": {"x": None, "y": None, "z": None},
             "gyro_bias_dps": {"x": None, "y": None, "z": None},
+            "orientation_deg": {"roll": None, "pitch": None, "yaw": None},
             "temperature_c": None,
             "zero_drift_compensated": False,
             "sample_time": datetime.now().isoformat(timespec="seconds"),
+            "last_turn": _last_turn_result(),
             "last_error": str(exc),
         }
 
@@ -229,6 +326,7 @@ def reset_gyro_bias_cache() -> None:
     global _GYRO_BIAS_DPS
     with _GYRO_BIAS_LOCK:
         _GYRO_BIAS_DPS = None
+    _reset_orientation_state()
 
 
 def _measure_turn_pulse(
@@ -238,6 +336,7 @@ def _measure_turn_pulse(
     bias: float,
     config: Turn90Config,
     pulse_seconds: float,
+    speed: int,
 ) -> float:
     duration = max(0.0, float(pulse_seconds))
     if duration <= 0:
@@ -246,7 +345,7 @@ def _measure_turn_pulse(
     if config.sample_seconds <= 0:
         rate = abs(gyro.read_gyro_z_dps() - bias)
         try:
-            _run_turn_motion(direction, motion_adapter, config.speed, duration)
+            _run_turn_motion(direction, motion_adapter, speed, duration)
         finally:
             motion_adapter.stop()
         return rate * duration
@@ -273,7 +372,7 @@ def _measure_turn_pulse(
     thread = threading.Thread(target=sample_loop, daemon=True)
     thread.start()
     try:
-        _run_turn_motion(direction, motion_adapter, config.speed, duration)
+        _run_turn_motion(direction, motion_adapter, speed, duration)
     finally:
         stop_sampling.set()
         thread.join(timeout=max(config.sample_seconds * 4.0, 0.2))
@@ -306,6 +405,42 @@ def _correction_duration(
     return min(max(raw, config.min_pulse_seconds), config.max_pulse_seconds)
 
 
+def _correction_speed(config: Turn90Config) -> int:
+    if config.correction_speed is None:
+        return max(1, min(100, int(config.speed) // 2))
+    return max(1, min(100, int(config.correction_speed)))
+
+
+def _turn_result(
+    ok: bool,
+    direction: str,
+    target_degrees: float,
+    tolerance_degrees: float,
+    accumulated_degrees: float,
+    pulses: list[TurnPulse],
+) -> Turn90Result:
+    error = target_degrees - accumulated_degrees
+    attempts = len(pulses)
+    message = (
+        f"MPU6050 turn converged: {accumulated_degrees:.1f} deg, error={error:.1f} deg."
+        if ok
+        else f"MPU6050 turn failed to converge: {accumulated_degrees:.1f} deg, error={error:.1f} deg."
+    )
+    return Turn90Result(
+        ok=ok,
+        source="mpu6050",
+        direction=direction,
+        target_degrees=target_degrees,
+        tolerance_degrees=tolerance_degrees,
+        final_degrees=accumulated_degrees,
+        error_degrees=error,
+        attempts=attempts,
+        pulses=tuple(pulses),
+        message=message,
+        sample_time=datetime.now().isoformat(timespec="seconds"),
+    )
+
+
 def _opposite_direction(direction: str) -> str:
     return "left" if direction == "right" else "right"
 
@@ -327,11 +462,154 @@ def _cached_gyro_bias(gyro: MPU6050Gyro) -> dict[str, float]:
     global _GYRO_BIAS_DPS
     with _GYRO_BIAS_LOCK:
         if _GYRO_BIAS_DPS is None:
-            _GYRO_BIAS_DPS = gyro.calibrate_gyro_bias(
+            candidate = _stable_gyro_bias_candidate(
+                gyro,
                 samples=int(os.environ.get("MPU6050_STATUS_BIAS_SAMPLES", "20")),
                 sample_seconds=float(os.environ.get("MPU6050_STATUS_BIAS_SAMPLE_SECONDS", "0.01")),
             )
-        return dict(_GYRO_BIAS_DPS)
+            if candidate is not None:
+                _GYRO_BIAS_DPS = candidate
+        return dict(_GYRO_BIAS_DPS) if _GYRO_BIAS_DPS is not None else {"x": 0.0, "y": 0.0, "z": 0.0}
+
+
+def _stable_gyro_bias_candidate(
+    gyro: MPU6050Gyro,
+    *,
+    samples: int,
+    sample_seconds: float,
+) -> dict[str, float] | None:
+    count = max(1, int(samples))
+    readings: list[dict[str, float]] = []
+    for _ in range(count):
+        readings.append(gyro.read_gyro_dps())
+        if sample_seconds > 0:
+            time.sleep(sample_seconds)
+    axes = ("x", "y", "z")
+    average = {axis: sum(reading[axis] for reading in readings) / count for axis in axes}
+    max_span = max(max(reading[axis] for reading in readings) - min(reading[axis] for reading in readings) for axis in axes)
+    max_abs_average = max(abs(value) for value in average.values())
+    if max_span > _status_bias_max_span_dps() or max_abs_average > _status_bias_max_abs_dps():
+        return None
+    return average
+
+
+def _orientation_from_accel(accel: dict[str, float]) -> dict[str, float]:
+    return _orientation_from_sample(accel, {"x": 0.0, "y": 0.0, "z": 0.0}, None)
+
+
+def _orientation_from_sample(
+    accel: dict[str, float],
+    gyro_dps: dict[str, float],
+    monotonic_time: float | None,
+) -> dict[str, float]:
+    ax = float(accel["x"])
+    ay = float(accel["y"])
+    az = float(accel["z"])
+    roll = degrees(atan2(ay, az))
+    pitch = degrees(atan2(-ax, sqrt(ay * ay + az * az)))
+    yaw = _integrated_yaw_degrees(gyro_dps, monotonic_time)
+    return {"roll": round(roll, 2), "pitch": round(pitch, 2), "yaw": round(yaw, 2)}
+
+
+def _integrated_yaw_degrees(gyro_dps: dict[str, float], monotonic_time: float | None) -> float:
+    global _LAST_YAW_SAMPLE_MONOTONIC, _YAW_DEGREES
+    now = time.monotonic() if monotonic_time is None else monotonic_time
+    axis = _yaw_axis()
+    rate = float(gyro_dps.get(axis, 0.0)) * _yaw_sign()
+    if abs(rate) < _yaw_deadband_dps():
+        rate = 0.0
+    with _ORIENTATION_LOCK:
+        if _LAST_YAW_SAMPLE_MONOTONIC is None:
+            _LAST_YAW_SAMPLE_MONOTONIC = now
+            return _YAW_DEGREES
+        elapsed = max(0.0, min(now - _LAST_YAW_SAMPLE_MONOTONIC, 2.0))
+        _LAST_YAW_SAMPLE_MONOTONIC = now
+        _YAW_DEGREES = _wrap_degrees(_YAW_DEGREES + rate * elapsed)
+        return _YAW_DEGREES
+
+
+def _set_last_turn_result(result: dict[str, object]) -> None:
+    global _LAST_TURN_RESULT
+    with _LAST_TURN_LOCK:
+        _LAST_TURN_RESULT = dict(result)
+    _sync_yaw_from_turn_result(result)
+
+
+def _last_turn_result() -> dict[str, object] | None:
+    with _LAST_TURN_LOCK:
+        return dict(_LAST_TURN_RESULT) if _LAST_TURN_RESULT is not None else None
+
+
+def _unavailable_turn_result(direction: str, message: str) -> dict[str, object]:
+    return {
+        "ok": False,
+        "source": "mpu6050",
+        "direction": direction,
+        "target_degrees": 90.0,
+        "tolerance_degrees": None,
+        "final_degrees": None,
+        "error_degrees": None,
+        "attempts": 0,
+        "pulses": [],
+        "message": message,
+        "sample_time": datetime.now().isoformat(timespec="seconds"),
+    }
+
+
+def _sync_yaw_from_turn_result(result: dict[str, object]) -> None:
+    global _LAST_YAW_SAMPLE_MONOTONIC, _YAW_DEGREES
+    if not result.get("ok") or result.get("final_degrees") is None:
+        return
+    direction = str(result.get("direction") or "")
+    sign = -1.0 if direction == "right" else 1.0
+    with _ORIENTATION_LOCK:
+        _YAW_DEGREES = _wrap_degrees(sign * float(result["final_degrees"]))
+        _LAST_YAW_SAMPLE_MONOTONIC = time.monotonic()
+
+
+def _reset_orientation_state() -> None:
+    global _LAST_YAW_SAMPLE_MONOTONIC, _YAW_DEGREES
+    with _ORIENTATION_LOCK:
+        _YAW_DEGREES = 0.0
+        _LAST_YAW_SAMPLE_MONOTONIC = None
+
+
+def _yaw_axis() -> str:
+    axis = os.environ.get("MPU6050_YAW_AXIS", "z").strip().lower()
+    return axis if axis in {"x", "y", "z"} else "z"
+
+
+def _yaw_sign() -> float:
+    try:
+        value = float(os.environ.get("MPU6050_YAW_SIGN", "1"))
+    except ValueError:
+        return 1.0
+    return -1.0 if value < 0 else 1.0
+
+
+def _yaw_deadband_dps() -> float:
+    try:
+        return max(0.0, float(os.environ.get("MPU6050_YAW_DEADBAND_DPS", "0.25")))
+    except ValueError:
+        return 0.25
+
+
+def _status_bias_max_span_dps() -> float:
+    try:
+        return max(0.0, float(os.environ.get("MPU6050_STATUS_BIAS_MAX_SPAN_DPS", "5.0")))
+    except ValueError:
+        return 5.0
+
+
+def _status_bias_max_abs_dps() -> float:
+    try:
+        return max(0.0, float(os.environ.get("MPU6050_STATUS_BIAS_MAX_ABS_DPS", "25.0")))
+    except ValueError:
+        return 25.0
+
+
+def _wrap_degrees(value: float) -> float:
+    return ((float(value) + 180.0) % 360.0) - 180.0
 
 
 def _rounded_vector(values: dict[str, float]) -> dict[str, float]:

@@ -180,6 +180,7 @@ function renderStatus(data) {
   setText("motion_sensor_ok", motionSensor.ok ? "可用" : "不可用");
   setText("motion_accel", formatVector3(motionSensor.accel_mps2));
   setText("motion_gyro", formatVector3(motionSensor.gyro_dps));
+  renderPosePreview(motionSensor);
   setText("last_message", data.last_message);
 
   // simulate 模式提示
@@ -213,6 +214,47 @@ function renderStatus(data) {
   renderShelves(data, events);
   renderDetections(scan, events);
   renderEvents(events);
+}
+
+function renderPosePreview(sensor) {
+  const orientation = sensor.orientation_deg || {};
+  const roll = numericOrZero(orientation.roll);
+  const pitch = numericOrZero(orientation.pitch);
+  const yaw = numericOrZero(orientation.yaw);
+  const car = byId("pose-car");
+  if (car) {
+    car.style.setProperty("--roll", `${clamp(roll, -35, 35)}deg`);
+    car.style.setProperty("--pitch", `${clamp(pitch, -35, 35)}deg`);
+    car.style.setProperty("--yaw", `${yaw}deg`);
+    car.classList.toggle("unavailable", !sensor.ok);
+  }
+  setText("pose-roll", sensor.ok ? `${roll.toFixed(1)}°` : "-");
+  setText("pose-pitch", sensor.ok ? `${pitch.toFixed(1)}°` : "-");
+  setText("pose-yaw", sensor.ok ? `${yaw.toFixed(1)}°` : "-");
+
+  const lastTurn = sensor.last_turn || {};
+  if (lastTurn && Object.keys(lastTurn).length > 0) {
+    const okText = lastTurn.ok ? "收敛" : "未收敛";
+    const finalDeg = lastTurn.final_degrees == null ? "-" : `${Number(lastTurn.final_degrees).toFixed(1)}°`;
+    const errorDeg = lastTurn.error_degrees == null ? "-" : `${Number(lastTurn.error_degrees).toFixed(1)}°`;
+    setText(
+      "pose-turn-summary",
+      `最近转向：${okText} / ${lastTurn.direction || "-"} / ${lastTurn.attempts || 0} 次 / 角度 ${finalDeg} / 误差 ${errorDeg}`
+    );
+  } else if (sensor.ok) {
+    setText("pose-turn-summary", `采样时间：${textOrDash(sensor.sample_time)}，温度：${textOrDash(sensor.temperature_c)}°C`);
+  } else {
+    setText("pose-turn-summary", sensor.last_error || "MPU6050 不可用");
+  }
+}
+
+function numericOrZero(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function clamp(value, minValue, maxValue) {
+  return Math.min(maxValue, Math.max(minValue, value));
 }
 
 function obstacleLine(obstacle) {
