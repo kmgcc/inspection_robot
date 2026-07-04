@@ -10,6 +10,7 @@ echo "Deploying warehouse patrol dashboard to $CAR_HOST:$CAR_DIR"
 ssh "$CAR_HOST" "mkdir -p '$CAR_DIR'"
 rsync -av --delete \
   --exclude '.git/' \
+  --exclude '.venv/' \
   --exclude '__pycache__/' \
   --exclude '*.pyc' \
   --exclude '*.log' \
