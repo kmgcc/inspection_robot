@@ -104,6 +104,30 @@ class MPU6050Test(unittest.TestCase):
         self.assertEqual(motion.calls[0], ("rotate_right", 10, 0.15))
         self.assertIn("rotate_left", [call[0] for call in motion.calls])
 
+    def test_turn_90_auto_detects_non_z_yaw_axis(self) -> None:
+        gyro = FakeGyro(rate_dps=0.0, vector_rate_dps={"x": 120.0, "y": 0.0, "z": 0.0})
+        motion = FakeMotion()
+        config = mpu6050.Turn90Config(
+            speed=12,
+            fallback_seconds=0.1,
+            target_degrees=12.0,
+            tolerance_degrees=0.2,
+            sample_seconds=0.0,
+            bias_samples=1,
+            min_pulse_seconds=0.001,
+            max_pulse_seconds=0.2,
+            settle_seconds=0,
+            turn_axis="auto",
+        )
+
+        result = mpu6050.turn_90_with_gyro("right", motion, gyro, config)
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.turn_axis, "x")
+        self.assertEqual(result.pulses[0].axis, "x")
+        self.assertEqual(result.to_dict()["turn_axis"], "x")
+        self.assertEqual(result.to_dict()["pulses"][0]["axis_degrees"], {"x": 12.0, "y": 0.0, "z": 0.0})
+
     def test_turn_90_with_gyro_uses_slower_correction_speed(self) -> None:
         gyro = FakeGyro(rate_dps=100.0)
         motion = FakeMotion()
@@ -212,8 +236,9 @@ def _restore_env(name: str, value: str | None) -> None:
 
 
 class FakeGyro:
-    def __init__(self, rate_dps: float = 12000.0) -> None:
+    def __init__(self, rate_dps: float = 12000.0, vector_rate_dps: dict[str, float] | None = None) -> None:
         self.rate_dps = rate_dps
+        self.vector_rate_dps = vector_rate_dps
 
     def initialize(self) -> None:
         pass
@@ -224,8 +249,16 @@ class FakeGyro:
     def calibrate_z_bias(self, *, samples: int, sample_seconds: float) -> float:
         return 0.0
 
+    def calibrate_gyro_bias(self, *, samples: int, sample_seconds: float) -> dict[str, float]:
+        return {"x": 0.0, "y": 0.0, "z": 0.0}
+
     def read_gyro_z_dps(self) -> float:
         return self.rate_dps
+
+    def read_gyro_dps(self) -> dict[str, float]:
+        if self.vector_rate_dps is not None:
+            return dict(self.vector_rate_dps)
+        return {"x": 0.0, "y": 0.0, "z": self.rate_dps}
 
 
 class FakeSequenceGyro:

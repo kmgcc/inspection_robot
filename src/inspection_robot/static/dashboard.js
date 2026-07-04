@@ -239,7 +239,7 @@ function renderPosePreview(sensor) {
     const errorDeg = lastTurn.error_degrees == null ? "-" : `${Number(lastTurn.error_degrees).toFixed(1)}°`;
     setText(
       "pose-turn-summary",
-      `最近转向：${okText} / ${lastTurn.direction || "-"} / ${lastTurn.attempts || 0} 次 / 角度 ${finalDeg} / 误差 ${errorDeg}`
+      `最近转向：${okText} / ${lastTurn.direction || "-"} / axis ${lastTurn.turn_axis || "-"} / ${lastTurn.attempts || 0} 次 / 角度 ${finalDeg} / 误差 ${errorDeg}`
     );
   } else if (sensor.ok) {
     setText("pose-turn-summary", `采样时间：${textOrDash(sensor.sample_time)}，温度：${textOrDash(sensor.temperature_c)}°C`);

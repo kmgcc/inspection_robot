@@ -64,17 +64,27 @@ class Turn90Config:
     correction_gain: float = 0.9
     min_measured_degrees: float = 0.5
     correction_speed: int | None = None
+    turn_axis: str = "auto"
 
 
 @dataclass(frozen=True, slots=True)
 class TurnPulse:
     attempt: int
     direction: str
+    axis: str
     speed: int
     duration_seconds: float
     measured_degrees: float
     accumulated_degrees: float
     error_degrees: float
+    axis_degrees: dict[str, float]
+
+
+@dataclass(frozen=True, slots=True)
+class TurnPulseMeasurement:
+    measured_degrees: float
+    axis: str
+    axis_degrees: dict[str, float]
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +92,7 @@ class Turn90Result:
     ok: bool
     source: str
     direction: str
+    turn_axis: str
     target_degrees: float
     tolerance_degrees: float
     final_degrees: float
@@ -96,6 +107,7 @@ class Turn90Result:
             "ok": self.ok,
             "source": self.source,
             "direction": self.direction,
+            "turn_axis": self.turn_axis,
             "target_degrees": round(self.target_degrees, 3),
             "tolerance_degrees": round(self.tolerance_degrees, 3),
             "final_degrees": round(self.final_degrees, 3),
@@ -105,11 +117,13 @@ class Turn90Result:
                 {
                     "attempt": pulse.attempt,
                     "direction": pulse.direction,
+                    "axis": pulse.axis,
                     "speed": pulse.speed,
                     "duration_seconds": round(pulse.duration_seconds, 3),
                     "measured_degrees": round(pulse.measured_degrees, 3),
                     "accumulated_degrees": round(pulse.accumulated_degrees, 3),
                     "error_degrees": round(pulse.error_degrees, 3),
+                    "axis_degrees": dict(pulse.axis_degrees),
                 }
                 for pulse in self.pulses
             ],
@@ -201,6 +215,7 @@ def turn_90_with_result(
         correction_gain=float(os.environ.get("MPU6050_TURN_CORRECTION_GAIN", "0.9")),
         min_measured_degrees=float(os.environ.get("MPU6050_TURN_MIN_MEASURED_DEGREES", "0.5")),
         correction_speed=int(os.environ.get("MPU6050_TURN_CORRECTION_SPEED", str(max(1, int(speed) // 2)))),
+        turn_axis=os.environ.get("MPU6050_TURN_AXIS", "auto"),
     )
     try:
         gyro = open_default_gyro()
@@ -226,18 +241,19 @@ def turn_90_with_gyro(
     identity = gyro.who_am_i()
     if identity not in {0x68, 0x69, 0x34}:
         raise RobotHardwareError(f"unexpected MPU6050 WHO_AM_I value: 0x{identity:02x}")
-    bias = gyro.calibrate_z_bias(samples=config.bias_samples, sample_seconds=config.sample_seconds)
+    bias = _calibrate_turn_bias(gyro, config)
     target = max(1.0, float(config.target_degrees))
     tolerance = max(0.0, float(config.tolerance_degrees))
     accumulated = 0.0
     rate_hint: float | None = None
     max_attempts = max(0, int(config.max_correction_attempts)) + 1
     pulses: list[TurnPulse] = []
+    turn_axis = _configured_turn_axis(config.turn_axis)
 
     for attempt in range(max_attempts):
         error = target - accumulated
         if abs(error) <= tolerance:
-            return _turn_result(True, normalized, target, tolerance, accumulated, pulses)
+            return _turn_result(True, normalized, _turn_axis_label(turn_axis, config.turn_axis), target, tolerance, accumulated, pulses)
         pulse_direction = normalized if error > 0 else _opposite_direction(normalized)
         if attempt == 0:
             pulse_seconds = max(0.0, float(config.fallback_seconds))
@@ -245,7 +261,7 @@ def turn_90_with_gyro(
         else:
             pulse_seconds = _correction_duration(abs(error), target, rate_hint, config)
             pulse_speed = _correction_speed(config)
-        measured_degrees = _measure_turn_pulse(
+        measurement = _measure_turn_pulse(
             pulse_direction,
             motion_adapter,
             gyro,
@@ -253,7 +269,11 @@ def turn_90_with_gyro(
             config,
             pulse_seconds,
             pulse_speed,
+            turn_axis,
         )
+        if turn_axis is None and measurement.axis in {"x", "y", "z"}:
+            turn_axis = measurement.axis
+        measured_degrees = measurement.measured_degrees
         if pulse_seconds > 0 and measured_degrees > 0:
             rate_hint = measured_degrees / pulse_seconds
         accumulated += measured_degrees if pulse_direction == normalized else -measured_degrees
@@ -261,17 +281,27 @@ def turn_90_with_gyro(
             TurnPulse(
                 attempt=attempt + 1,
                 direction=pulse_direction,
+                axis=measurement.axis,
                 speed=pulse_speed,
                 duration_seconds=pulse_seconds,
                 measured_degrees=measured_degrees,
                 accumulated_degrees=accumulated,
                 error_degrees=target - accumulated,
+                axis_degrees=measurement.axis_degrees,
             )
         )
         if config.settle_seconds > 0:
             time.sleep(config.settle_seconds)
 
-    return _turn_result(abs(target - accumulated) <= tolerance, normalized, target, tolerance, accumulated, pulses)
+    return _turn_result(
+        abs(target - accumulated) <= tolerance,
+        normalized,
+        _turn_axis_label(turn_axis, config.turn_axis),
+        target,
+        tolerance,
+        accumulated,
+        pulses,
+    )
 
 
 def open_default_gyro() -> MPU6050Gyro:
@@ -299,6 +329,7 @@ def read_motion_sample() -> dict[str, object]:
             "gyro_bias_dps": _rounded_vector(bias),
             "orientation_deg": orientation,
             "yaw_axis": _yaw_axis(),
+            "turn_axis": os.environ.get("MPU6050_TURN_AXIS", "auto").strip().lower() or "auto",
             "temperature_c": round(gyro.read_temperature_c(), 2),
             "zero_drift_compensated": True,
             "sample_time": datetime.now().isoformat(timespec="seconds"),
@@ -314,6 +345,8 @@ def read_motion_sample() -> dict[str, object]:
             "gyro_raw_dps": {"x": None, "y": None, "z": None},
             "gyro_bias_dps": {"x": None, "y": None, "z": None},
             "orientation_deg": {"roll": None, "pitch": None, "yaw": None},
+            "yaw_axis": _yaw_axis(),
+            "turn_axis": os.environ.get("MPU6050_TURN_AXIS", "auto").strip().lower() or "auto",
             "temperature_c": None,
             "zero_drift_compensated": False,
             "sample_time": datetime.now().isoformat(timespec="seconds"),
@@ -333,29 +366,30 @@ def _measure_turn_pulse(
     direction: str,
     motion_adapter: MotionAdapter,
     gyro: MPU6050Gyro,
-    bias: float,
+    bias: dict[str, float],
     config: Turn90Config,
     pulse_seconds: float,
     speed: int,
-) -> float:
+    axis_hint: str | None,
+) -> TurnPulseMeasurement:
     duration = max(0.0, float(pulse_seconds))
     if duration <= 0:
-        return 0.0
+        return TurnPulseMeasurement(0.0, _turn_axis_label(axis_hint, config.turn_axis), {"x": 0.0, "y": 0.0, "z": 0.0})
 
     if config.sample_seconds <= 0:
-        rate = abs(gyro.read_gyro_z_dps() - bias)
+        rates = _read_corrected_gyro_dps(gyro, bias)
+        axis_degrees = {axis: rate * duration for axis, rate in rates.items()}
         try:
             _run_turn_motion(direction, motion_adapter, speed, duration)
         finally:
             motion_adapter.stop()
-        return rate * duration
+        return _turn_measurement_from_axes(axis_degrees, config, axis_hint)
 
     stop_sampling = threading.Event()
     errors: list[BaseException] = []
-    accumulated = 0.0
+    accumulated_axes = {"x": 0.0, "y": 0.0, "z": 0.0}
 
     def sample_loop() -> None:
-        nonlocal accumulated
         previous = time.monotonic()
         try:
             while not stop_sampling.is_set():
@@ -363,8 +397,9 @@ def _measure_turn_pulse(
                 now = time.monotonic()
                 elapsed = max(0.0, now - previous)
                 previous = now
-                rate = gyro.read_gyro_z_dps() - bias
-                accumulated += abs(rate) * elapsed
+                rates = _read_corrected_gyro_dps(gyro, bias)
+                for axis in accumulated_axes:
+                    accumulated_axes[axis] += rates[axis] * elapsed
         except BaseException as exc:  # pragma: no cover - defensive against I2C thread failures
             errors.append(exc)
             stop_sampling.set()
@@ -379,7 +414,7 @@ def _measure_turn_pulse(
         motion_adapter.stop()
     if errors:
         raise RobotHardwareError(f"MPU6050 gyro read failed during turn: {errors[0]}")
-    return accumulated
+    return _turn_measurement_from_axes(accumulated_axes, config, axis_hint)
 
 
 def _run_turn_motion(direction: str, motion_adapter: MotionAdapter, speed: int, duration_seconds: float) -> None:
@@ -414,6 +449,7 @@ def _correction_speed(config: Turn90Config) -> int:
 def _turn_result(
     ok: bool,
     direction: str,
+    turn_axis: str,
     target_degrees: float,
     tolerance_degrees: float,
     accumulated_degrees: float,
@@ -430,6 +466,7 @@ def _turn_result(
         ok=ok,
         source="mpu6050",
         direction=direction,
+        turn_axis=turn_axis,
         target_degrees=target_degrees,
         tolerance_degrees=tolerance_degrees,
         final_degrees=accumulated_degrees,
@@ -443,6 +480,65 @@ def _turn_result(
 
 def _opposite_direction(direction: str) -> str:
     return "left" if direction == "right" else "right"
+
+
+def _calibrate_turn_bias(gyro: MPU6050Gyro, config: Turn90Config) -> dict[str, float]:
+    calibrate_all = getattr(gyro, "calibrate_gyro_bias", None)
+    if callable(calibrate_all):
+        bias = calibrate_all(samples=config.bias_samples, sample_seconds=config.sample_seconds)
+        return {axis: float(bias.get(axis, 0.0)) for axis in ("x", "y", "z")}
+    return {
+        "x": 0.0,
+        "y": 0.0,
+        "z": float(gyro.calibrate_z_bias(samples=config.bias_samples, sample_seconds=config.sample_seconds)),
+    }
+
+
+def _read_corrected_gyro_dps(gyro: MPU6050Gyro, bias: dict[str, float]) -> dict[str, float]:
+    read_all = getattr(gyro, "read_gyro_dps", None)
+    if callable(read_all):
+        raw = read_all()
+        return {axis: float(raw.get(axis, 0.0)) - float(bias.get(axis, 0.0)) for axis in ("x", "y", "z")}
+    return {
+        "x": 0.0,
+        "y": 0.0,
+        "z": float(gyro.read_gyro_z_dps()) - float(bias.get("z", 0.0)),
+    }
+
+
+def _turn_measurement_from_axes(
+    axis_degrees: dict[str, float],
+    config: Turn90Config,
+    axis_hint: str | None,
+) -> TurnPulseMeasurement:
+    normalized = str(config.turn_axis).strip().lower()
+    rounded_axes = {axis: round(float(axis_degrees.get(axis, 0.0)), 3) for axis in ("x", "y", "z")}
+    if normalized == "vector":
+        measured = sqrt(sum(float(axis_degrees.get(axis, 0.0)) ** 2 for axis in ("x", "y", "z")))
+        return TurnPulseMeasurement(measured, "vector", rounded_axes)
+    if normalized in {"x", "y", "z"}:
+        axis = normalized
+    elif axis_hint in {"x", "y", "z"}:
+        axis = str(axis_hint)
+    else:
+        axis = max(("x", "y", "z"), key=lambda item: abs(float(axis_degrees.get(item, 0.0))))
+    return TurnPulseMeasurement(abs(float(axis_degrees.get(axis, 0.0))), axis, rounded_axes)
+
+
+def _configured_turn_axis(value: str) -> str | None:
+    normalized = str(value).strip().lower()
+    if normalized in {"x", "y", "z"}:
+        return normalized
+    return None
+
+
+def _turn_axis_label(axis: str | None, configured: str) -> str:
+    normalized = str(configured).strip().lower()
+    if normalized == "vector":
+        return "vector"
+    if axis in {"x", "y", "z"}:
+        return str(axis)
+    return "auto"
 
 
 def _open_bus(bus_id: int) -> I2CBus:
@@ -545,6 +641,7 @@ def _unavailable_turn_result(direction: str, message: str) -> dict[str, object]:
         "ok": False,
         "source": "mpu6050",
         "direction": direction,
+        "turn_axis": os.environ.get("MPU6050_TURN_AXIS", "auto").strip().lower() or "auto",
         "target_degrees": 90.0,
         "tolerance_degrees": None,
         "final_degrees": None,
