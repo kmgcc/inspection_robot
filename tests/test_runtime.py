@@ -4,6 +4,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 from typing import Iterator
 
@@ -631,23 +632,27 @@ class RuntimeTest(unittest.TestCase):
         )
         store.record_cycle(2, False)
 
-        runtime._perform_scan(
-            "A1",
-            "A1_SCAN",
-            detections=[
-                {
-                    "tag_id": "1",
-                    "kind": "item",
-                    "item_id": "item_01",
-                    "marker_family": "TAG36H11",
-                    "color": "RED",
-                    "ocr_text": "ITEM-01",
-                    "image_class": "BOTTLE",
-                }
-            ],
-        )
+        with mock.patch("inspection_robot.runtime.start_spoken_message", return_value=({"ok": True}, 200)) as speak:
+            runtime._perform_scan(
+                "A1",
+                "A1_SCAN",
+                detections=[
+                    {
+                        "tag_id": "1",
+                        "kind": "item",
+                        "item_id": "item_01",
+                        "marker_family": "TAG36H11",
+                        "color": "RED",
+                        "ocr_text": "ITEM-01",
+                        "image_class": "BOTTLE",
+                    }
+                ],
+            )
 
         self.assertIn("high_priority_alarm", fake_alarm.calls)
+        speak.assert_called_once()
+        self.assertIn("检测到 A1 缺少", speak.call_args.args[1])
+        self.assertEqual(store.snapshot()["audio"]["last_cue"], "missing_item")
 
     def test_camera_failure_requests_manual_cycle_fallback_confirmation(self) -> None:
         store = InspectionStore(

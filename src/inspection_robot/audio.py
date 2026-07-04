@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -25,12 +26,20 @@ TTS_PLAYER_CANDIDATES = ("espeak-ng", "espeak", "spd-say")
 # 单条 cue 播放超时，避免某次播放卡死阻塞后续所有 cue。
 _PLAYBACK_TIMEOUT_SECONDS = 15.0
 
-# 单线程播放队列：避免并发 Popen 与 PulseAudio 冲突，保证 cue 顺序播放。
+# 单线程播放队列：避免并发子进程与 PulseAudio 冲突，保证 cue/TTS 顺序播放。
 # 之前用 Popen fire-and-forget，引用丢失 + 多进程抢 PulseAudio，导致只有第一遍出声。
-_queue: "queue.Queue[tuple[str, Path] | None]" = queue.Queue()
+@dataclass(frozen=True)
+class AudioJob:
+    cue: str
+    command: list[str]
+    timeout_seconds: float = _PLAYBACK_TIMEOUT_SECONDS
+
+
+_queue: "queue.Queue[AudioJob | None]" = queue.Queue()
 _thread: threading.Thread | None = None
 _thread_lock = threading.Lock()
 _player_cache: str | None = None
+_tts_player_cache: str | None = None
 
 
 def _find_player() -> str | None:
@@ -44,6 +53,17 @@ def _find_player() -> str | None:
             return path
     return None
 
+
+def _find_tts_player() -> str | None:
+    global _tts_player_cache
+    if _tts_player_cache is not None:
+        return _tts_player_cache
+    for name in TTS_PLAYER_CANDIDATES:
+        path = shutil.which(name)
+        if path:
+            _tts_player_cache = path
+            return path
+    return None
 
 
 def _playback_env() -> dict[str, str]:
@@ -68,18 +88,14 @@ def _worker() -> None:
         item = _queue.get()
         if item is None:
             return
-        _cue, audio_path = item
-        player = _find_player()
-        if player is None:
-            continue
         try:
             subprocess.run(
-                _build_command(player, audio_path),
+                item.command,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 stdin=subprocess.DEVNULL,
                 env=_playback_env(),
-                timeout=_PLAYBACK_TIMEOUT_SECONDS,
+                timeout=item.timeout_seconds,
                 check=False,
             )
         except (OSError, subprocess.TimeoutExpired):
@@ -119,7 +135,7 @@ def start_audio_cue(project_root: Path, cue: str) -> tuple[dict[str, Any], int]:
         }, 503
 
     _ensure_worker()
-    _queue.put((cue_key, audio_path))
+    _queue.put(AudioJob(cue=cue_key, command=_build_command(player, audio_path)))
 
     return {
         "ok": True,
@@ -142,20 +158,14 @@ def start_spoken_message(project_root: Path, message: str) -> tuple[dict[str, An
     text = _speech_text(message)
     if not text:
         return {"ok": False, "error": "empty speech message"}, 400
-    player = next((path for name in TTS_PLAYER_CANDIDATES if (path := shutil.which(name))), None)
+    player = _find_tts_player()
     if player is None:
         return {"ok": False, "error": "no local TTS command found; install espeak-ng, espeak, or spd-say"}, 503
-    try:
-        subprocess.Popen(
-            _build_tts_command(player, text),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            env=_playback_env(),
-            start_new_session=True,
-        )
-    except OSError as exc:
-        return {"ok": False, "error": str(exc)}, 500
-    return {"ok": True, "cue": "spoken", "player": Path(player).name, "message": text}, 200
+
+    _ensure_worker()
+    _queue.put(AudioJob(cue="spoken", command=_build_tts_command(player, text)))
+
+    return {"ok": True, "cue": "spoken", "player": Path(player).name, "message": text, "queued": True}, 200
 
 
 def _speech_text(message: str) -> str:
