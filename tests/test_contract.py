@@ -36,6 +36,7 @@ EXTENSION_FIELDS = {
     "forbidden_zones",
     "shelves",
     "scan",
+    "motion_sensor",
     "llm_summary",
 }
 
@@ -92,6 +93,7 @@ class ContractTest(unittest.TestCase):
         self.assertTrue({"level", "message", "light"}.issubset(payload["alarm"]))
         self.assertEqual(payload["scan"]["detections"], [])
         self.assertEqual(payload["path"]["waypoints"], [])
+        self.assertTrue({"ok", "accel_mps2", "gyro_dps", "gyro_bias_dps"}.issubset(payload["motion_sensor"]))
 
     def test_start_when_posted_returns_ok(self) -> None:
         response = self.client.post("/api/start")

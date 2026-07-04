@@ -24,11 +24,19 @@ def decide_line_follow_motion(tape: TapeState | None) -> LineFollowDecision:
         return LineFollowDecision("wait", "丢线（全白），等待重新检测", False)
     if left == 0 and left_center == 0 and right_center == 0 and right == 0:
         return LineFollowDecision("stop", "全路黑胶带（列端/禁区候选）", True, boundary_candidate=True)
+    if (left_center == 0 or left == 0) and right == 0:
+        return LineFollowDecision("turn_right", describe_tape(tape), True)
+    if left == 0 and (right_center == 0 or right == 0):
+        return LineFollowDecision("turn_left", describe_tape(tape), True)
     if left_center == 0 and right_center == 0:
         return LineFollowDecision("forward", "正常居中，短步前进", True, centered=True)
-    if left == 0 or left_center == 0:
+    if left == 0:
         return LineFollowDecision("strafe_left", describe_tape(tape), True)
-    if right == 0 or right_center == 0:
+    if right == 0:
+        return LineFollowDecision("strafe_right", describe_tape(tape), True)
+    if left_center == 0:
+        return LineFollowDecision("strafe_left", describe_tape(tape), True)
+    if right_center == 0:
         return LineFollowDecision("strafe_right", describe_tape(tape), True)
     return LineFollowDecision("stop", describe_tape(tape), any(value == 0 for value in tape))
 

@@ -13,6 +13,7 @@ AlarmState: TypeAlias = dict[str, str]
 BoundaryState: TypeAlias = dict[str, JsonValue]
 AudioState: TypeAlias = dict[str, JsonValue]
 GimbalState: TypeAlias = dict[str, JsonValue]
+MotionSensorState: TypeAlias = dict[str, JsonValue]
 TopologyState: TypeAlias = dict[str, JsonValue]
 ZoneState: TypeAlias = dict[str, JsonValue]
 PoseState: TypeAlias = dict[str, int | str]
@@ -41,6 +42,19 @@ def default_audio() -> AudioState:
 
 def default_gimbal() -> GimbalState:
     return {"side_initialized": False, "yaw": None, "pitch": None}
+
+
+def default_motion_sensor() -> MotionSensorState:
+    return {
+        "ok": False,
+        "source": "mpu6050",
+        "accel_mps2": {"x": None, "y": None, "z": None},
+        "gyro_dps": {"x": None, "y": None, "z": None},
+        "gyro_bias_dps": {"x": None, "y": None, "z": None},
+        "zero_drift_compensated": False,
+        "sample_time": None,
+        "last_error": None,
+    }
 
 
 def default_topology() -> TopologyState:
@@ -77,6 +91,7 @@ class DashboardState:
     boundary: BoundaryState = field(default_factory=default_boundary)
     audio: AudioState = field(default_factory=default_audio)
     gimbal: GimbalState = field(default_factory=default_gimbal)
+    motion_sensor: MotionSensorState = field(default_factory=default_motion_sensor)
     topology: TopologyState = field(default_factory=default_topology)
     llm_summary: str | None = None
     last_message: str = "系统已启动，等待开始巡检。"

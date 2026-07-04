@@ -97,6 +97,20 @@
               <strong id="patrol_cycle">-</strong>
             </div>
           </div>
+          <div class="metric-row" style="margin-top:8px">
+            <div class="metric-sm">
+              <label>MPU6050</label>
+              <strong id="motion_sensor_ok">-</strong>
+            </div>
+            <div class="metric-sm">
+              <label>加速度</label>
+              <strong id="motion_accel">-</strong>
+            </div>
+            <div class="metric-sm">
+              <label>角速度</label>
+              <strong id="motion_gyro">-</strong>
+            </div>
+          </div>
           <p id="last_message" class="card-hint" style="margin-top:8px">-</p>
         </div>
 
@@ -338,6 +352,23 @@
             <label>超声波测距</label>
             <strong id="status-distance">-</strong>
           </div>
+          <div class="metric" style="margin-top:10px">
+            <label>MPU6050 状态</label>
+            <strong id="status-motion-ok">-</strong>
+          </div>
+          <div class="metric" style="margin-top:10px">
+            <label>加速度 m/s²</label>
+            <strong id="status-motion-accel">-</strong>
+          </div>
+          <div class="metric" style="margin-top:10px">
+            <label>角速度 °/s</label>
+            <strong id="status-motion-gyro">-</strong>
+          </div>
+          <div class="metric" style="margin-top:10px">
+            <label>陀螺仪零漂 °/s</label>
+            <strong id="status-motion-bias">-</strong>
+          </div>
+          <p class="card-hint" style="margin-top:8px" id="status-motion-error">-</p>
         </div>
 
       </div>

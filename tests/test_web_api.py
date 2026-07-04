@@ -33,6 +33,7 @@ CONTRACT_FIELDS = {
     "forbidden_zones",
     "shelves",
     "scan",
+    "motion_sensor",
     "llm_summary",
 }
 

@@ -104,6 +104,16 @@ function formatElapsed(seconds) {
   return `${Math.floor(s / 60)}m${s % 60}s`;
 }
 
+function formatVector3(v, unit = "") {
+  if (!v || typeof v !== "object") return "-";
+  const parts = ["x", "y", "z"].map((axis) => {
+    const value = v[axis];
+    if (value === null || value === undefined || Number.isNaN(Number(value))) return `${axis}:-`;
+    return `${axis}:${Number(value).toFixed(2)}`;
+  });
+  return `${parts.join(" / ")}${unit ? ` ${unit}` : ""}`;
+}
+
 // ============================================================
 // 1. 标签页切换
 // ============================================================
@@ -153,6 +163,7 @@ function renderStatus(data) {
   const boundary = data.boundary || {};
   const audio = data.audio || {};
   const gimbal = data.gimbal || {};
+  const motionSensor = data.motion_sensor || {};
   const pending = events.filter(isPending);
   latestEventId = pending.length > 0 ? pending[0].id : null;
 
@@ -166,6 +177,9 @@ function renderStatus(data) {
   setText("hardware_connected", data.hardware_connected ? "已连接" : "未连接");
   setText("task_status", labelFrom(STATUS_LABELS, data.task_status));
   setText("patrol_cycle", `${data.patrol_cycle || 1} / ${data.skip_shortage_detection ? "跳过缺货" : "检测缺货"}`);
+  setText("motion_sensor_ok", motionSensor.ok ? "可用" : "不可用");
+  setText("motion_accel", formatVector3(motionSensor.accel_mps2));
+  setText("motion_gyro", formatVector3(motionSensor.gyro_dps));
   setText("last_message", data.last_message);
 
   // simulate 模式提示
@@ -184,6 +198,11 @@ function renderStatus(data) {
   setText("s-alarm_state", alarm.message ? `${alarm.level} / ${alarm.message}` : alarm.level);
   setText("s-gimbal_state", gimbal.side_initialized ? `侧向 ${textOrDash(gimbal.yaw)}°/${textOrDash(gimbal.pitch)}°` : "未初始化");
   setText("s-pending_count", pending.length);
+  setText("status-motion-ok", motionSensor.ok ? `可用 / ${motionSensor.zero_drift_compensated ? "已扣零漂" : "未补偿"}` : "不可用");
+  setText("status-motion-accel", formatVector3(motionSensor.accel_mps2));
+  setText("status-motion-gyro", formatVector3(motionSensor.gyro_dps));
+  setText("status-motion-bias", formatVector3(motionSensor.gyro_bias_dps));
+  setText("status-motion-error", motionSensor.last_error || `采样时间：${textOrDash(motionSensor.sample_time)}，温度：${textOrDash(motionSensor.temperature_c)}°C`);
 
   document.body.dataset.alarm = pending.length > 0 ? "warning" : alarm.level || "normal";
 

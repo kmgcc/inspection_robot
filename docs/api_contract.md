@@ -24,6 +24,7 @@
 | `alarm` | `object` | 灯光和告警状态。 |
 | `audio` | `object` | 最近音频提示或语音播报状态。 |
 | `gimbal` | `object` | 云台方向和初始化状态。 |
+| `motion_sensor` | `object` | MPU6050 加速度/陀螺仪读数、零漂偏置和补偿状态；不可用时需给出 `ok=false` 和错误原因，不阻塞主流程。 |
 | `topology` | `object` | 运行中生成的巡检拓扑、货架节点、转向点和边界。 |
 | `shelves` | `array` | 货架摘要。 |
 | `scan` | `object` | 当前扫描状态。 |

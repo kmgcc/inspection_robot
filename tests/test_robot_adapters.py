@@ -11,6 +11,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from inspection_robot.robot import alarm, motion, sensors
+from inspection_robot.robot.line_following import decide_line_follow_motion
 from inspection_robot.vision import tag_detector
 
 
@@ -54,6 +55,17 @@ class RobotAdapterTest(unittest.TestCase):
         )
         self.assertFalse(sensors.tape_boundary_count_detected((1, 0, 1, 1), min_black=2))
         self.assertTrue(sensors.tape_boundary_count_detected((1, 0, 0, 1), min_black=2))
+
+    def test_line_follow_decision_handles_offsets_bends_and_lost_line(self) -> None:
+        self.assertEqual(decide_line_follow_motion((1, 0, 0, 1)).command, "forward")
+        self.assertEqual(decide_line_follow_motion((0, 1, 1, 1)).command, "strafe_left")
+        self.assertEqual(decide_line_follow_motion((1, 1, 1, 0)).command, "strafe_right")
+        self.assertEqual(decide_line_follow_motion((1, 0, 1, 0)).command, "turn_right")
+        self.assertEqual(decide_line_follow_motion((0, 1, 0, 1)).command, "turn_left")
+
+        lost = decide_line_follow_motion((1, 1, 1, 1))
+        self.assertEqual(lost.command, "wait")
+        self.assertFalse(lost.line_seen)
 
     def test_ultrasonic_distance_combines_high_and_low_bytes(self) -> None:
         fake = FakeBot({sensors.ULTRASONIC_HIGH_REGISTER: [1], sensors.ULTRASONIC_LOW_REGISTER: [44]})

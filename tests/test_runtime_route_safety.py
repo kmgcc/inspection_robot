@@ -48,6 +48,8 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
             boundary_min_black_sensors=4,
             line_follow_speed=7,
             line_follow_step_seconds=0,
+            line_follow_turn_seconds=0,
+            line_follow_search_seconds=0,
             obstacle_wait_seconds=0,
             avoidance_body_seconds=0,
         )
@@ -98,6 +100,53 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
         self.assertIn(("move_forward", 7, 0), fake_motion.calls)
         self.assertIn(("move_forward", 5, 0), fake_motion.calls)
 
+    def test_line_follow_searches_by_last_correction_when_line_is_temporarily_lost(self) -> None:
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        fake_sensors = FakeSensors(
+            distances=[400] * 10,
+            tapes=[(0, 0, 0, 0), (0, 1, 1, 1), (1, 1, 1, 1), (1, 0, 0, 1)],
+        )
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=self.make_config(),
+            motion_adapter=fake_motion,
+            sensor_adapter=fake_sensors,
+            alarm_adapter=FakeAlarm(),
+            gimbal_adapter=FakeGimbal(),
+            detection_provider=fake_detection_provider,
+        )
+
+        runtime.run_continuous_patrol(max_iterations=3)
+
+        self.assertGreaterEqual(fake_motion.calls.count(("strafe_left", 7, 0)), 2)
+        self.assertIn(("move_forward", 7, 0), fake_motion.calls)
+
+    def test_line_follow_uses_short_turn_for_sharp_bend(self) -> None:
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        fake_sensors = FakeSensors(
+            distances=[400] * 6,
+            tapes=[(0, 0, 0, 0), (1, 0, 1, 0)],
+        )
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=self.make_config(),
+            motion_adapter=fake_motion,
+            sensor_adapter=fake_sensors,
+            alarm_adapter=FakeAlarm(),
+            gimbal_adapter=FakeGimbal(),
+            detection_provider=fake_detection_provider,
+        )
+
+        runtime.run_continuous_patrol(max_iterations=1)
+
+        self.assertIn(("rotate_right", 7, 0), fake_motion.calls)
+
     def test_third_route_forbidden_zone_is_bypassed_not_line_followed(self) -> None:
         store = self.make_store()
         fake_motion = FakeMotion()
@@ -129,6 +178,33 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
 
         self.assertIn("obstacle_avoidance_step", event_types)
         self.assertIn(("move_forward", 5, 0), fake_motion.calls)
+
+    def test_forbidden_bypass_uses_one_two_two_body_distances(self) -> None:
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        fake_sensors = FakeSensors(
+            distances=[120, 400, 400, 400, 400, 400, 400, 400, 400],
+            tapes=[(1, 1, 1, 1)] * 4,
+        )
+        config = self.make_config()
+        config.blocked_samples = 1
+        config.avoidance_body_seconds = 1.25
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=config,
+            motion_adapter=fake_motion,
+            sensor_adapter=fake_sensors,
+            alarm_adapter=FakeAlarm(),
+            gimbal_adapter=FakeGimbal(),
+            detection_provider=fake_detection_provider,
+        )
+
+        runtime.run_patrol(shelf_order=["A1"], max_steps=1)
+
+        self.assertEqual(fake_motion.calls.count(("move_forward", 14, 1.25)), 1)
+        self.assertEqual(fake_motion.calls.count(("move_forward", 14, 2.5)), 2)
 
     def test_planned_boundary_turn_delegates_to_mpu6050_adapter_when_available(self) -> None:
         store = self.make_store()

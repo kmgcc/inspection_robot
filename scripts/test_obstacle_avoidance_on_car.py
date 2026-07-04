@@ -24,11 +24,15 @@ def main() -> int:
     settle_seconds = float(os.environ.get("ROBOT_ACTION_SETTLE_SECONDS", "0.35"))
     avoidance_speed = int(os.environ.get("AVOIDANCE_SPEED", "14"))
     body_seconds = float(os.environ.get("AVOIDANCE_BODY_SECONDS", "1.00"))
+    side_clearance_bodies = float(os.environ.get("AVOIDANCE_SIDE_CLEARANCE_BODIES", "1.0"))
+    parallel_bodies = float(os.environ.get("AVOIDANCE_PARALLEL_BODIES", "2.0"))
+    return_bodies = float(os.environ.get("AVOIDANCE_RETURN_BODIES", "2.0"))
     blocked_count = 0
     print(
         "obstacle avoidance test: "
         f"blocked<{blocked_distance_mm}mm, clear>={clear_distance_mm}mm, wait={wait_seconds}s, "
-        f"right detour body={body_seconds}s speed={avoidance_speed}",
+        f"right detour body={body_seconds}s speed={avoidance_speed}, "
+        f"steps={side_clearance_bodies:g}/{parallel_bodies:g}/{return_bodies:g} bodies",
         flush=True,
     )
     try:
@@ -49,7 +53,17 @@ def main() -> int:
                     blocked_count = 0
                 else:
                     print("obstacle remains: right-side detour, then restore original heading", flush=True)
-                    if _drive_right_detour(clear_distance_mm, turn_speed, turn_seconds, settle_seconds, avoidance_speed, body_seconds):
+                    if _drive_right_detour(
+                        clear_distance_mm,
+                        turn_speed,
+                        turn_seconds,
+                        settle_seconds,
+                        avoidance_speed,
+                        body_seconds,
+                        side_clearance_bodies,
+                        parallel_bodies,
+                        return_bodies,
+                    ):
                         blocked_count = 0
                         alarm.clear_alarm()
                     else:
@@ -88,14 +102,26 @@ def _drive_right_detour(
     settle_seconds: float,
     avoidance_speed: int,
     body_seconds: float,
+    side_clearance_bodies: float,
+    parallel_bodies: float,
+    return_bodies: float,
 ) -> bool:
     steps = [
         ("turn right 90", lambda: motion.rotate_right_slow(speed=turn_speed, duration_seconds=turn_seconds)),
-        ("forward one body to the right side", lambda: motion.move_forward_slow(speed=avoidance_speed, duration_seconds=body_seconds)),
+        (
+            f"forward {side_clearance_bodies:g} body to the right side",
+            lambda: motion.move_forward_slow(speed=avoidance_speed, duration_seconds=body_seconds * max(0.0, side_clearance_bodies)),
+        ),
         ("turn left 90 to original heading", lambda: motion.rotate_left_slow(speed=turn_speed, duration_seconds=turn_seconds)),
-        ("forward one body past obstacle", lambda: motion.move_forward_slow(speed=avoidance_speed, duration_seconds=body_seconds)),
+        (
+            f"forward {parallel_bodies:g} bodies parallel past obstacle",
+            lambda: motion.move_forward_slow(speed=avoidance_speed, duration_seconds=body_seconds * max(0.0, parallel_bodies)),
+        ),
         ("turn left 90 back toward patrol line", lambda: motion.rotate_left_slow(speed=turn_speed, duration_seconds=turn_seconds)),
-        ("forward one body return to patrol line", lambda: motion.move_forward_slow(speed=avoidance_speed, duration_seconds=body_seconds)),
+        (
+            f"forward {return_bodies:g} bodies return to patrol line",
+            lambda: motion.move_forward_slow(speed=avoidance_speed, duration_seconds=body_seconds * max(0.0, return_bodies)),
+        ),
         ("turn right 90 restore heading", lambda: motion.rotate_right_slow(speed=turn_speed, duration_seconds=turn_seconds)),
     ]
     for label, action in steps:

@@ -41,6 +41,10 @@ def create_app(root: Path | None = None) -> Flask:
 
     @app.get("/api/status")
     def api_status():
+        runtime = app.config.get("ROBOT_RUNTIME")
+        refresher = getattr(runtime, "refresh_motion_sensor", None)
+        if _robot_mode_enabled() and callable(refresher):
+            refresher()
         return jsonify(store.snapshot())
 
     @app.post("/api/start")

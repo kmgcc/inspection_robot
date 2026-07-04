@@ -38,7 +38,7 @@ class RobotRuntimeConfig:
     blocked_distance_mm: int = int(os.environ.get("BLOCKED_DISTANCE_MM", "160"))
     clear_distance_mm: int = int(os.environ.get("CLEAR_DISTANCE_MM", "240"))
     blocked_samples: int = int(os.environ.get("BLOCKED_SAMPLES", "2"))
-    patrol_speed: int = int(os.environ.get("ROBOT_PATROL_SPEED", os.environ.get("ROBOT_SLOW_SPEED", "5")))
+    patrol_speed: int = int(os.environ.get("ROBOT_PATROL_SPEED", os.environ.get("ROBOT_SLOW_SPEED", "7")))
     step_seconds: float = float(os.environ.get("ROBOT_PATROL_STEP_SECONDS", os.environ.get("ROBOT_STEP_SECONDS", "0.16")))
     poll_seconds: float = float(os.environ.get("ROBOT_POLL_SECONDS", "0.12"))
     scan_enabled: bool = _env_bool("ROBOT_SCAN_ENABLED", False)
@@ -51,16 +51,23 @@ class RobotRuntimeConfig:
     obstacle_wait_seconds: float = float(os.environ.get("OBSTACLE_WAIT_SECONDS", "6.0"))
     avoidance_speed: int = int(os.environ.get("AVOIDANCE_SPEED", "14"))
     avoidance_body_seconds: float = float(os.environ.get("AVOIDANCE_BODY_SECONDS", "1.00"))
+    avoidance_side_clearance_bodies: float = float(os.environ.get("AVOIDANCE_SIDE_CLEARANCE_BODIES", "1.0"))
+    avoidance_parallel_bodies: float = float(os.environ.get("AVOIDANCE_PARALLEL_BODIES", "2.0"))
+    avoidance_return_bodies: float = float(os.environ.get("AVOIDANCE_RETURN_BODIES", "2.0"))
     avoidance_turn_direction: str = os.environ.get("AVOIDANCE_TURN_DIRECTION", "right")
     boundary_min_black_sensors: int = int(os.environ.get("BOUNDARY_MIN_BLACK_SENSORS", "3"))
     boundary_confirm_samples: int = int(os.environ.get("BOUNDARY_CONFIRM_SAMPLES", "1"))
     boundary_confirm_gap_seconds: float = float(os.environ.get("BOUNDARY_CONFIRM_GAP_SECONDS", "0.03"))
     boundary_cooldown_seconds: float = float(os.environ.get("BOUNDARY_COOLDOWN_SECONDS", "0.60"))
     line_follow_enabled: bool = _env_bool("LINE_FOLLOW_ENABLED", True)
-    line_follow_speed: int = int(os.environ.get("LINE_FOLLOW_SPEED", os.environ.get("ROBOT_PATROL_SPEED", os.environ.get("ROBOT_SLOW_SPEED", "5"))))
+    line_follow_speed: int = int(os.environ.get("LINE_FOLLOW_SPEED", os.environ.get("ROBOT_PATROL_SPEED", os.environ.get("ROBOT_SLOW_SPEED", "7"))))
     line_follow_step_seconds: float = float(os.environ.get("LINE_FOLLOW_STEP_SECONDS", os.environ.get("ROBOT_STEP_SECONDS", "0.14")))
+    line_follow_turn_speed: int = int(os.environ.get("LINE_FOLLOW_TURN_SPEED", os.environ.get("LINE_FOLLOW_SPEED", os.environ.get("ROBOT_PATROL_SPEED", os.environ.get("ROBOT_SLOW_SPEED", "7")))))
+    line_follow_turn_seconds: float = float(os.environ.get("LINE_FOLLOW_TURN_SECONDS", "0.08"))
+    line_follow_search_seconds: float = float(os.environ.get("LINE_FOLLOW_SEARCH_SECONDS", "0.08"))
     line_follow_poll_seconds: float = float(os.environ.get("LINE_FOLLOW_POLL_SECONDS", "0.01"))
     line_follow_max_lost_ticks: int = int(os.environ.get("LINE_FOLLOW_MAX_LOST_TICKS", "15"))
+    motion_sensor_interval_seconds: float = float(os.environ.get("MOTION_SENSOR_INTERVAL_SECONDS", "0.5"))
     boundary_action_pattern: str = os.environ.get("BOUNDARY_ACTION_PATTERN", DEFAULT_BOUNDARY_ACTION_PATTERN)
     turns_per_cycle: int = 2
     skip_scan_cycles: int = 1
@@ -102,7 +109,9 @@ class RobotRuntime:
         self._boundary_action_index = 0
         self._line_follow_active = False
         self._line_lost_ticks = 0
+        self._last_line_correction: str | None = None
         self._motion_step_index = 0
+        self._last_motion_sensor_at = 0.0
 
     def start(self, shelf_order: Iterable[str] | None = None) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -155,9 +164,11 @@ class RobotRuntime:
         self._boundary_action_index = 0
         self._line_follow_active = False
         self._line_lost_ticks = 0
+        self._last_line_correction = None
         self._motion_step_index = 0
         self._show_normal()
         self._initialize_gimbal()
+        self.refresh_motion_sensor(force=True)
 
         iterations = 0
         turn_count = 0
@@ -190,6 +201,7 @@ class RobotRuntime:
             if not self._guard_obstacle(None):
                 continue
 
+            self.refresh_motion_sensor()
             self._drive_patrol_step(tape_state)
             self._show_line_follow() if self._line_follow_active else self._show_normal()
             iterations += 1
@@ -315,6 +327,7 @@ class RobotRuntime:
         self.store.record_boundary_turn("clockwise", 90)
         self._line_follow_active = action == "turn_follow" and self.config.line_follow_enabled
         self._line_lost_ticks = 0
+        self._last_line_correction = None
         self.store.record_forbidden_zone(zone_id, False)
         self._advance_boundary_action()
         self.store.record_motion_debug(
@@ -428,25 +441,45 @@ class RobotRuntime:
 
         if decision.command in {"wait", "stop"} and not decision.line_seen:
             self._line_lost_ticks += 1
-            self.motion.stop()
             evidence["lost_ticks"] = self._line_lost_ticks
+            recovery_command = self._line_recovery_command()
+            evidence["recovery_command"] = recovery_command
             if self._line_lost_ticks >= self.config.line_follow_max_lost_ticks:
+                self.motion.stop()
                 self.store.record_motion_debug(
                     "line_follow_lost",
                     f"{phase}：寻线丢线超过 {self.config.line_follow_max_lost_ticks} 次，已停车等待。",
                     status="STOPPED",
                     evidence=evidence,
                 )
-            elif self._line_lost_ticks == 1:
+                time.sleep(max(0.0, self.config.line_follow_poll_seconds))
+                return
+            if tape_state is None:
+                self.motion.stop()
                 self.store.record_motion_debug(
                     "line_follow_wait",
-                    f"{phase}：{decision.description}，先停车等下一次传感器读数。",
+                    f"{phase}：{decision.description}，传感器读数无效，先停车等下一次读数。",
                     evidence=evidence,
                 )
+                time.sleep(max(0.0, self.config.line_follow_poll_seconds))
+                return
+            if self._line_lost_ticks == 1:
+                self.store.record_motion_debug(
+                    "line_follow_search",
+                    f"{phase}：{decision.description}，按最近纠偏方向 {recovery_command} 短步找线。",
+                    evidence=evidence,
+                )
+            self._run_line_follow_command(recovery_command, search=True)
+            time.sleep(max(0.0, self.config.line_follow_poll_seconds))
+            return
+
+        if decision.command in {"wait", "stop"}:
+            self.motion.stop()
             time.sleep(max(0.0, self.config.line_follow_poll_seconds))
             return
 
         self._line_lost_ticks = 0
+        self._remember_line_correction(decision.command)
         self._motion_step_index += 1
         self.store.record_motion_debug(
             "line_follow_step",
@@ -457,27 +490,48 @@ class RobotRuntime:
             ),
             evidence=evidence,
         )
-        if decision.command == "forward":
+        self._run_line_follow_command(decision.command)
+        time.sleep(max(0.0, self.config.line_follow_poll_seconds))
+
+    def _run_line_follow_command(self, command: str, *, search: bool = False) -> None:
+        if command == "forward":
             self.motion.move_forward_slow(
                 speed=self.config.line_follow_speed,
-                duration_seconds=self.config.line_follow_step_seconds,
+                duration_seconds=self.config.line_follow_search_seconds if search else self.config.line_follow_step_seconds,
             )
-        elif decision.command == "strafe_left":
+        elif command == "strafe_left":
             self.motion.strafe_left_slow(
                 speed=self.config.line_follow_speed,
-                duration_seconds=self.config.line_follow_step_seconds,
+                duration_seconds=self.config.line_follow_search_seconds if search else self.config.line_follow_step_seconds,
             )
-        elif decision.command == "strafe_right":
+        elif command == "strafe_right":
             self.motion.strafe_right_slow(
                 speed=self.config.line_follow_speed,
-                duration_seconds=self.config.line_follow_step_seconds,
+                duration_seconds=self.config.line_follow_search_seconds if search else self.config.line_follow_step_seconds,
+            )
+        elif command == "turn_left":
+            self.motion.rotate_left_slow(
+                speed=self.config.line_follow_turn_speed,
+                duration_seconds=self.config.line_follow_search_seconds if search else self.config.line_follow_turn_seconds,
+            )
+        elif command == "turn_right":
+            self.motion.rotate_right_slow(
+                speed=self.config.line_follow_turn_speed,
+                duration_seconds=self.config.line_follow_search_seconds if search else self.config.line_follow_turn_seconds,
             )
         else:
             self.motion.stop()
-            time.sleep(max(0.0, self.config.line_follow_poll_seconds))
             return
         self.motion.stop()
-        time.sleep(max(0.0, self.config.line_follow_poll_seconds))
+
+    def _remember_line_correction(self, command: str) -> None:
+        if command in {"strafe_left", "strafe_right", "turn_left", "turn_right"}:
+            self._last_line_correction = command
+
+    def _line_recovery_command(self) -> str:
+        if self._last_line_correction in {"strafe_left", "strafe_right", "turn_left", "turn_right"}:
+            return self._last_line_correction
+        return "forward"
 
     @staticmethod
     def _line_is_centered(tape_state: tuple[int, int, int, int] | None) -> bool:
@@ -522,6 +576,17 @@ class RobotRuntime:
         except RobotHardwareError as exc:
             self.store.record_robot_status("PATROLLING", f"camera gimbal init skipped: {exc}")
 
+    def refresh_motion_sensor(self, *, force: bool = False) -> None:
+        interval = max(0.0, float(self.config.motion_sensor_interval_seconds))
+        now = time.monotonic()
+        if not force and now - self._last_motion_sensor_at < interval:
+            return
+        reader = getattr(self.imu, "read_motion_sample", None)
+        if not callable(reader):
+            return
+        self._last_motion_sensor_at = now
+        self.store.record_motion_sensor(reader())
+
     def _scan_visible_shelf(self) -> None:
         detections = self._collect_detections()
         shelf_id = self._shelf_id_from_detections(detections)
@@ -563,7 +628,7 @@ class RobotRuntime:
         if not self._avoidance_path_clear("after_first_turn"):
             return False
 
-        if not self._avoidance_forward("side_clearance_forward"):
+        if not self._avoidance_forward("side_clearance_forward", self.config.avoidance_side_clearance_bodies):
             return False
 
         self.store.record_avoidance_step(f"turn_{back_label}_to_original_heading", nested_level=0)
@@ -571,7 +636,7 @@ class RobotRuntime:
         if not self._avoidance_path_clear("after_restore_heading"):
             return False
 
-        if not self._avoidance_forward("forward_past_obstacle"):
+        if not self._avoidance_forward("forward_past_obstacle", self.config.avoidance_parallel_bodies):
             return False
 
         self.store.record_avoidance_step(f"turn_{back_label}_return_to_line", nested_level=0)
@@ -579,7 +644,7 @@ class RobotRuntime:
         if not self._avoidance_path_clear("after_return_turn"):
             return False
 
-        if not self._avoidance_forward("return_to_patrol_line"):
+        if not self._avoidance_forward("return_to_patrol_line", self.config.avoidance_return_bodies):
             return False
 
         self.store.record_avoidance_step(f"turn_{away_label}_restore_heading", nested_level=0)
@@ -594,9 +659,10 @@ class RobotRuntime:
         self.store.record_obstacle(distance_mm, True, waiting_seconds=0)
         return False
 
-    def _avoidance_forward(self, step: str) -> bool:
+    def _avoidance_forward(self, step: str, body_multiplier: float = 1.0) -> bool:
         self.store.record_avoidance_step(step, nested_level=0)
-        self._forward_step(speed=self.config.avoidance_speed, duration_seconds=self.config.avoidance_body_seconds)
+        duration_seconds = self.config.avoidance_body_seconds * max(0.0, float(body_multiplier))
+        self._forward_step(speed=self.config.avoidance_speed, duration_seconds=duration_seconds)
         return self._avoidance_path_clear(f"after_{step}")
 
     def _avoidance_path_clear(self, step: str) -> bool:
@@ -703,9 +769,15 @@ class RobotRuntime:
         imu_turn = getattr(self.imu, "turn_90", None)
         if callable(imu_turn):
             try:
-                if imu_turn(normalized, self.motion, turn_speed, turn_seconds):
+                imu_result = imu_turn(normalized, self.motion, turn_speed, turn_seconds)
+                if imu_result is not None:
                     self.motion.stop()
                     self._settle()
+                    if not imu_result:
+                        self.store.record_robot_status(
+                            "TURNING_AT_BOUNDARY",
+                            "MPU6050 closed-loop 90 degree turn did not converge within correction attempts; keeping car stopped.",
+                        )
                     return
             except RobotHardwareError as exc:
                 self.store.record_robot_status("TURNING_AT_BOUNDARY", f"MPU6050 turn skipped: {exc}")

@@ -25,6 +25,7 @@ def build_status_snapshot(state: DashboardState) -> StatusSnapshot:
         "boundary": copy_json_dict(state.boundary),
         "audio": copy_json_dict(state.audio),
         "gimbal": copy_json_dict(state.gimbal),
+        "motion_sensor": copy_json_dict(state.motion_sensor),
         "topology": copy_json_dict(state.topology),
         "llm_summary": state.llm_summary,
         "last_message": state.last_message,

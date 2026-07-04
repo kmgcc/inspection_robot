@@ -126,6 +126,10 @@ class InspectionStore:
             )
             self._persist_events_locked()
 
+    def record_motion_sensor(self, sample: Mapping[str, JsonValue]) -> None:
+        with self.lock:
+            self.state.motion_sensor = dict(sample)
+
     def record_boundary(self, tape_state: tuple[int, int, int, int] | None, full_black: bool, kind: str) -> None:
         state = list(tape_state) if tape_state is not None else None
         with self.lock:
