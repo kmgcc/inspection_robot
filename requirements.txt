@@ -5,7 +5,15 @@ Flask>=2.2,<3.0
 # opencv-python>=4.8
 # dt-apriltags>=3.1
 # pytesseract>=0.3
-# paddleocr>=2.8
-# paddlepaddle>=3.0
+#
+# Raspberry Pi 5 validated OCR stack, installed in /home/pi/temp/inspection_robot/.venv:
+# paddlepaddle==2.6.2
+# paddleocr==2.7.3
+# numpy==1.26.4
+#
+# PP-OCRv4 mobile Chinese models are cached under /home/pi/.paddleocr.
+# PP-OCRv5 mobile models are cached under /home/pi/.paddlex, but PaddleOCR 3.x
+# segfaulted during inference on the current Pi image, so keep PP-OCRv4 as the
+# runtime OCR backend unless that stack is revalidated.
 # YOLOv5-Lite/Hailo runtimes are optional on-car installs; do not require them
 # for local development or unit tests.
