@@ -30,7 +30,7 @@ const STATUS_LABELS = {
 
 const EVENT_TYPE_LABELS = {
   system: "系统", runtime_started: "运行启动", runtime_stopped: "运行停止",
-  manual_control: "手动控制", gimbal_initialized: "云台初始化",
+  manual_control: "手动控制", motion_debug: "运动调试", gimbal_initialized: "云台初始化",
   cycle_started: "轮次开始", cycle_completed: "轮次完成",
   boundary_full_black: "四路全黑", boundary_turn: "列端转向", unexpected_boundary: "非预期黑胶带",
   obstacle_avoidance_started: "开始绕行", obstacle_avoidance_step: "绕行动作",

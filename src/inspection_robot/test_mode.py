@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from .robot import motion, sensors
+from .robot.line_following import decide_line_follow_motion, describe_tape
 from .robot.sensors import RobotHardwareError
 
 logger = logging.getLogger(__name__)
@@ -371,10 +372,9 @@ class TestSessionManager:
                     time.sleep(poll_interval)
                     continue
 
-                left, left_center, right_center, right = tape
+                decision = decide_line_follow_motion(tape)
 
-                # 1. 丢线检测（全白）
-                if left == 1 and left_center == 1 and right_center == 1 and right == 1:
+                if decision.command == "wait":
                     lost_counter += 1
                     if lost_counter >= max_lost_ticks:
                         self._motion.stop()
@@ -385,11 +385,11 @@ class TestSessionManager:
                 else:
                     lost_counter = 0  # 重新检测到线，计数器清零
 
-                if left_center == 0 and right_center == 0:
+                if decision.command == "forward":
                     self._motion.move_forward_slow(speed=speed, duration_seconds=step_seconds)
-                elif left == 0 or left_center == 0:
+                elif decision.command == "strafe_left":
                     self._motion.strafe_left_slow(speed=speed, duration_seconds=step_seconds)
-                elif right == 0 or right_center == 0:
+                elif decision.command == "strafe_right":
                     self._motion.strafe_right_slow(speed=speed, duration_seconds=step_seconds)
                 else:
                     self._motion.stop()
@@ -430,28 +430,4 @@ class TestSessionManager:
 
 def _tape_description(tape: tuple[int, int, int, int] | None) -> str:
     """将4路传感器状态转换为人类可读描述。"""
-    if tape is None:
-        return "传感器异常或无有效读数"
-    left, left_center, right_center, right = tape
-
-    if all(v == 1 for v in tape):
-        return "丢线（全白）"
-    if all(v == 0 for v in tape):
-        return "全路黑胶带（直行 crossing）"
-
-    if left_center == 0 and right_center == 0:
-        return "正常居中"
-    if (left_center == 0 or left == 0) and right == 0:
-        return "右大弯/右锐角（右转）"
-    if left == 0 and (right == 0 or right_center == 0):
-        return "左大弯/左锐角（左急弯）"
-    if left == 0:
-        return "最左侧偏线（左转修正）"
-    if right == 0:
-        return "最右侧偏线（右转修正）"
-    if left_center == 0 and right_center == 1:
-        return "微偏右（左转微调）"
-    if left_center == 1 and right_center == 0:
-        return "微偏左（右转微调）"
-
-    return f"复合触发（左={left}/左中={left_center}/右中={right_center}/右={right}）"
+    return describe_tape(tape)

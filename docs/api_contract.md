@@ -159,6 +159,7 @@ system
 runtime_started
 runtime_stopped
 manual_control
+motion_debug
 gimbal_initialized
 shelf_detected
 item_detected

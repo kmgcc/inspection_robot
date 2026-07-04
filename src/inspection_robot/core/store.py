@@ -131,9 +131,11 @@ class InspectionStore:
         with self.lock:
             self.state.boundary = {"tape_state": state, "full_black": bool(full_black), "kind": kind}
             if full_black:
+                is_exact_full_black = tape_state is not None and all(value == 0 for value in tape_state)
+                trigger_text = "四路黑胶带同时触发" if is_exact_full_black else "黑胶带达到列端阈值"
                 self.state.task_status = "TURNING_AT_BOUNDARY"
                 self.state.robot_status = "列端转向"
-                self.state.last_message = "四路黑胶带同时触发，执行列端顺时针转向。"
+                self.state.last_message = f"{trigger_text}，执行列端/禁区动作。"
                 self._append_event_locked(
                     make_event(
                         "boundary_full_black",
@@ -142,7 +144,7 @@ class InspectionStore:
                         status="info",
                         source="line_sensor",
                         message=self.state.last_message,
-                        evidence={"tape_state": state, "kind": kind},
+                        evidence={"tape_state": state, "kind": kind, "exact_full_black": is_exact_full_black},
                     )
                 )
             elif tape_state is not None and any(value == 0 for value in tape_state):
@@ -355,6 +357,42 @@ class InspectionStore:
                     source="light",
                     message=reason or f"灯光提示：{color}",
                     evidence={"color": color},
+                )
+            )
+            self._persist_events_locked()
+
+    def record_motion_debug(
+        self,
+        stage: str,
+        message: str,
+        *,
+        status: str = "PATROLLING",
+        evidence: Mapping[str, JsonValue] | None = None,
+    ) -> None:
+        with self.lock:
+            self.state.task_status = status
+            self.state.robot_status = {
+                "PATROLLING": "巡逻中",
+                "TURNING_AT_BOUNDARY": "列端转向",
+                "FORBIDDEN_ZONE_WAIT": "禁区等待",
+                "OBSTACLE_WAIT": "障碍等待",
+                "AVOIDING_OBSTACLE": "绕行避障",
+                "STOPPED": "停车",
+                "ERROR": "错误",
+            }.get(status, status)
+            self.state.last_message = message
+            detail = dict(evidence or {})
+            detail["stage"] = stage
+            self._append_event_locked(
+                make_event(
+                    "motion_debug",
+                    shelf_id=self.state.current_shelf,
+                    target=self.state.current_target,
+                    priority=1,
+                    status="info" if status not in {"ERROR", "FORBIDDEN_ZONE_WAIT", "OBSTACLE_WAIT"} else "warning",
+                    source="runtime",
+                    message=message,
+                    evidence=detail,
                 )
             )
             self._persist_events_locked()

@@ -16,7 +16,7 @@ from inspection_robot.config import DEFAULT_TAG_MAP
 from inspection_robot.config_defaults import DEFAULT_SHELF_MANIFEST, DEFAULT_WAREHOUSE_MAP
 from inspection_robot.core.store import InspectionStore
 from inspection_robot.robot import sensors
-from inspection_robot.runtime import RobotRuntime, RobotRuntimeConfig, flatten_route, heading_for_delta
+from inspection_robot.runtime import RobotRuntime, RobotRuntimeConfig, flatten_route, heading_for_delta, load_calibration_into_config
 from inspection_robot.core.planner import plan_patrol_route
 
 
@@ -42,6 +42,22 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(flatten_route(route)[0], (0, 0))
         self.assertEqual(heading_for_delta((0, 0), (1, 0)), "E")
         self.assertEqual(heading_for_delta((1, 0), (1, 1)), "S")
+
+    def test_calibration_straight_duration_does_not_override_patrol_step(self) -> None:
+        config_dir = self.root / "config"
+        config_dir.mkdir(parents=True)
+        (config_dir / "calibration.json").write_text(
+            '{"straight_speed": 6, "straight_step_seconds": 2.0, "line_follow_speed": 7, "line_follow_step_seconds": 0.11}',
+            encoding="utf-8",
+        )
+        config = RobotRuntimeConfig(patrol_speed=5, step_seconds=0.16, line_follow_speed=5, line_follow_step_seconds=0.14)
+
+        load_calibration_into_config(config, self.root)
+
+        self.assertEqual(config.patrol_speed, 6)
+        self.assertEqual(config.step_seconds, 0.16)
+        self.assertEqual(config.line_follow_speed, 7)
+        self.assertEqual(config.line_follow_step_seconds, 0.11)
 
     def test_runtime_records_path_pose_scan_and_finish_with_fakes(self) -> None:
         store = self.make_store()
@@ -209,6 +225,61 @@ class RuntimeTest(unittest.TestCase):
         self.assertNotIn("rotate_right", fake_motion.calls)
         self.assertNotIn("rotate_left", fake_motion.calls)
 
+    def test_continuous_patrol_motion_debug_mode_does_not_scan_by_default(self) -> None:
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        fake_sensors = FakeSensors(distances=[400] * 6, tapes=[(1, 1, 1, 1)] * 4)
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=RobotRuntimeConfig(
+                step_seconds=0,
+                poll_seconds=0,
+                scan_interval_seconds=0,
+                scan_timeout_seconds=0,
+                action_settle_seconds=0,
+            ),
+            motion_adapter=fake_motion,
+            sensor_adapter=fake_sensors,
+            alarm_adapter=FakeAlarm(),
+            gimbal_adapter=FakeGimbal(),
+            detection_provider=fake_detection_provider,
+        )
+
+        runtime.run_continuous_patrol(max_iterations=1)
+        event_types = [event["type"] for event in store.snapshot()["events"]]
+
+        self.assertIn("motion_debug", event_types)
+        self.assertNotIn("shelf_scanned", event_types)
+
+    def test_continuous_patrol_turns_on_single_three_black_boundary_sample(self) -> None:
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        fake_sensors = FakeSensors(distances=[400] * 6, tapes=[(0, 0, 0, 1)])
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=RobotRuntimeConfig(
+                step_seconds=0,
+                line_follow_step_seconds=0,
+                poll_seconds=0,
+                scan_timeout_seconds=0,
+                action_settle_seconds=0,
+                boundary_cooldown_seconds=0,
+            ),
+            motion_adapter=fake_motion,
+            sensor_adapter=fake_sensors,
+            alarm_adapter=FakeAlarm(),
+            gimbal_adapter=FakeGimbal(),
+            detection_provider=fake_detection_provider,
+        )
+
+        runtime.run_continuous_patrol(max_iterations=1)
+
+        self.assertIn("rotate_right", fake_motion.calls)
+
     def test_runtime_avoids_obstacle_to_right_with_full_body_steps(self) -> None:
         store = self.make_store()
         fake_motion = FakeMotion()
@@ -259,6 +330,7 @@ class RuntimeTest(unittest.TestCase):
             config=RobotRuntimeConfig(
                 step_seconds=0,
                 poll_seconds=0,
+                scan_enabled=True,
                 scan_timeout_seconds=0,
                 scan_interval_seconds=0,
                 action_settle_seconds=0,
