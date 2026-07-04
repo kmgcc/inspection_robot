@@ -171,8 +171,8 @@ class WebApiTest(unittest.TestCase):
         self.assertIn("settle", runtime.calls)
 
         backward = self.client.post("/api/control/backward", json={"speed": 20, "duration_seconds": 0.2})
-        self.assertEqual(backward.status_code, 400)
-        self.assertFalse(any(call[0] == "move_backward" for call in runtime.motion.calls))
+        self.assertEqual(backward.status_code, 200)
+        self.assertIn(("move_backward", 20, 0.2), runtime.motion.calls)
 
 
 class FakeRuntime:

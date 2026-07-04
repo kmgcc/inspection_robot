@@ -1,0 +1,491 @@
+"""
+test_mode.py — 运动测试模式（标定参数管理 + 测试会话执行）
+
+设计原则：
+- 所有电机操作均在 daemon 线程执行，stop_event 随时可中断
+- 无论何种停止原因（正常结束 / 手动停止 / 异常），finally 块确保调用 motion.stop()
+- 测试会话由 TestSessionManager 通过 Lock 串行化，防止并发冲突
+- 标定参数持久化到 config/calibration.json，带合理默认值
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import threading
+import time
+from dataclasses import dataclass, field, asdict
+from pathlib import Path
+from typing import Any
+
+from .robot import motion, sensors
+from .robot.sensors import RobotHardwareError
+
+logger = logging.getLogger(__name__)
+
+# --------------------------------------------------------------------------- #
+# 标定参数
+# --------------------------------------------------------------------------- #
+
+CALIBRATION_DEFAULTS: dict[str, Any] = {
+    "_note": (
+        "此文件由运动测试页面保存。首次使用前请在测试模式中完成实测标定，"
+        "_uncalibrated 为 true 时界面会显示醒目提示。"
+    ),
+    "_uncalibrated": False,
+    "straight_min_speed": 5,        # 最低稳定直行速度
+    "straight_speed": 5,            # 直行测试默认速度
+    "straight_step_seconds": 2.0,    # 直行测试默认时长(s)
+    "turn_speed": 7,                # 转向测试默认速度
+    "turn_cw90_seconds": 1.15,       # 顺时针约90°所需时间(s)
+    "turn_ccw90_seconds": 1.15,      # 逆时针约90°所需时间(s)
+    "cw_compensation": 1.0,          # 顺时针左右轮补偿系数
+    "ccw_compensation": 1.0,         # 逆时针左右轮补偿系数
+    "line_follow_speed": 5,          # 寻线测试速度
+    "line_follow_step_seconds": 0.14, # 寻线每步时长(s)
+}
+
+CALIBRATION_ALLOWED_KEYS = {
+    "straight_min_speed",
+    "straight_speed",
+    "straight_step_seconds",
+    "turn_speed",
+    "turn_cw90_seconds",
+    "turn_ccw90_seconds",
+    "cw_compensation",
+    "ccw_compensation",
+    "line_follow_speed",
+    "line_follow_step_seconds",
+    "_uncalibrated",
+}
+
+
+class CalibrationStore:
+    """读写 config/calibration.json，提供线程安全的访问接口。"""
+
+    def __init__(self, root: Path) -> None:
+        self._path = root / "config" / "calibration.json"
+        self._lock = threading.Lock()
+
+    def load(self) -> dict[str, Any]:
+        """加载标定参数，文件不存在时返回默认值并写入。"""
+        with self._lock:
+            if not self._path.exists():
+                self._write_unlocked(CALIBRATION_DEFAULTS.copy())
+                return CALIBRATION_DEFAULTS.copy()
+            try:
+                with self._path.open("r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+                # 补全缺失的键（向后兼容）
+                merged = CALIBRATION_DEFAULTS.copy()
+                merged.update({k: v for k, v in data.items() if k in CALIBRATION_ALLOWED_KEYS or k.startswith("_")})
+                return merged
+            except (json.JSONDecodeError, OSError) as exc:
+                logger.warning("calibration.json 读取失败，使用默认值: %s", exc)
+                return CALIBRATION_DEFAULTS.copy()
+
+    def update(self, patch: dict[str, Any]) -> dict[str, Any]:
+        """部分更新标定参数并持久化，返回更新后的完整参数。"""
+        with self._lock:
+            current = self._read_unlocked()
+            for key, value in patch.items():
+                if key not in CALIBRATION_ALLOWED_KEYS:
+                    continue
+                current[key] = value
+            # 若有任意实测值写入，清除 _uncalibrated 标记
+            if any(k != "_uncalibrated" for k in patch if k in CALIBRATION_ALLOWED_KEYS):
+                current["_uncalibrated"] = False
+            self._write_unlocked(current)
+            return current.copy()
+
+    def _read_unlocked(self) -> dict[str, Any]:
+        if not self._path.exists():
+            return CALIBRATION_DEFAULTS.copy()
+        try:
+            with self._path.open("r", encoding="utf-8") as fh:
+                return json.load(fh)
+        except (json.JSONDecodeError, OSError):
+            return CALIBRATION_DEFAULTS.copy()
+
+    def _write_unlocked(self, data: dict[str, Any]) -> None:
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            with self._path.open("w", encoding="utf-8") as fh:
+                json.dump(data, fh, ensure_ascii=False, indent=2)
+        except OSError as exc:
+            logger.error("标定参数写入失败: %s", exc)
+
+
+# --------------------------------------------------------------------------- #
+# 测试会话状态
+# --------------------------------------------------------------------------- #
+
+@dataclass
+class TestStatus:
+    active: bool = False
+    test_type: str = "none"          # "straight" / "turn" / "line_follow" / "none"
+    direction: str = ""              # "forward" / "backward" / "cw" / "ccw"
+    speed: int = 0
+    duration_seconds: float = 0.0
+    elapsed_seconds: float = 0.0
+    stop_reason: str | None = None   # None=未停止, "completed"/"manual"/"error"/"timeout"
+    error_message: str | None = None
+    started_at: float = 0.0
+
+
+@dataclass
+class SensorStatus:
+    line_sensor: tuple[int, int, int, int] | None = None
+    line_description: str = "未读取"
+    distance_mm: int | None = None
+
+
+# --------------------------------------------------------------------------- #
+# 测试会话管理器
+# --------------------------------------------------------------------------- #
+
+class TestSessionManager:
+    """
+    管理当前运动测试会话。
+
+    - 同一时刻只允许一个测试会话运行（后来者会先 stop 前者）
+    - 所有测试在 daemon 线程执行
+    - stop() 可从任意线程安全调用
+    """
+
+    def __init__(self, motion_adapter: Any = motion, sensor_adapter: Any = sensors) -> None:
+        self._motion = motion_adapter
+        self._sensors = sensor_adapter
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._status = TestStatus()
+        self._sensor_status = SensorStatus()
+
+    # ------------------------------------------------------------------ #
+    # 公开 API
+    # ------------------------------------------------------------------ #
+
+    def stop(self) -> None:
+        """立即停止当前测试，关闭全部电机输出。"""
+        self._stop_event.set()
+        try:
+            self._motion.stop()
+        except RobotHardwareError as exc:
+            logger.warning("stop() 电机停止异常: %s", exc)
+        with self._lock:
+            if self._status.active:
+                self._status.active = False
+                self._status.stop_reason = "manual"
+                self._status.elapsed_seconds = self._elapsed()
+        logger.info(
+            "[test] stop called | type=%s direction=%s speed=%s",
+            self._status.test_type,
+            self._status.direction,
+            self._status.speed,
+        )
+
+    def run_straight_test(self, direction: str, speed: int, duration_seconds: float) -> None:
+        """直行速度测试（前进或后退，固定时长）。"""
+        norm_dir = direction.strip().lower()
+        if norm_dir not in {"forward", "backward"}:
+            raise ValueError(f"无效方向: {direction}，应为 forward 或 backward")
+        self._start_session(
+            test_type="straight",
+            direction=norm_dir,
+            speed=speed,
+            duration_seconds=duration_seconds,
+            target=self._straight_worker,
+            args=(norm_dir, speed, duration_seconds),
+        )
+
+    def run_turn_test(self, direction: str, speed: int, duration_seconds: float) -> None:
+        """原地转向测试（顺时针CW或逆时针CCW）。"""
+        norm_dir = direction.strip().lower()
+        if norm_dir not in {"cw", "ccw", "right", "left"}:
+            raise ValueError(f"无效方向: {direction}，应为 cw/ccw 或 right/left")
+        # 统一为 cw/ccw
+        if norm_dir in {"right", "cw"}:
+            norm_dir = "cw"
+        else:
+            norm_dir = "ccw"
+        self._start_session(
+            test_type="turn",
+            direction=norm_dir,
+            speed=speed,
+            duration_seconds=duration_seconds,
+            target=self._turn_worker,
+            args=(norm_dir, speed, duration_seconds),
+        )
+
+    def run_line_follow_test(self, speed: int, step_seconds: float) -> None:
+        """寻线测试（持续循环，直到手动 stop）。"""
+        self._start_session(
+            test_type="line_follow",
+            direction="forward",
+            speed=speed,
+            duration_seconds=0.0,  # 无预设时长，手动停止
+            target=self._line_follow_worker,
+            args=(speed, step_seconds),
+        )
+
+    def get_status(self) -> dict[str, Any]:
+        """返回当前测试状态 + 最新传感器读数。"""
+        with self._lock:
+            st = self._status
+            ss = self._sensor_status
+            elapsed = self._elapsed() if st.active else st.elapsed_seconds
+            return {
+                "active": st.active,
+                "test_type": st.test_type,
+                "direction": st.direction,
+                "speed": st.speed,
+                "duration_seconds": st.duration_seconds,
+                "elapsed_seconds": round(elapsed, 2),
+                "stop_reason": st.stop_reason,
+                "error_message": st.error_message,
+                "line_sensor": list(ss.line_sensor) if ss.line_sensor else None,
+                "line_description": ss.line_description,
+                "distance_mm": ss.distance_mm,
+            }
+
+    def read_sensors_now(self) -> None:
+        """读取一次传感器，更新内部状态（供定时器或状态接口调用）。"""
+        with self._lock:
+            self._update_sensor_status()
+
+    # ------------------------------------------------------------------ #
+    # 内部：会话启动
+    # ------------------------------------------------------------------ #
+
+    def _start_session(
+        self,
+        *,
+        test_type: str,
+        direction: str,
+        speed: int,
+        duration_seconds: float,
+        target: Any,
+        args: tuple,
+    ) -> None:
+        # 先停止旧会话
+        self.stop()
+        # 清除停止事件，启动新会话
+        self._stop_event.clear()
+        with self._lock:
+            self._status = TestStatus(
+                active=True,
+                test_type=test_type,
+                direction=direction,
+                speed=max(0, min(100, int(speed))),
+                duration_seconds=float(duration_seconds),
+                started_at=time.monotonic(),
+            )
+        logger.info(
+            "[test] start | type=%s direction=%s speed=%s duration=%.2fs",
+            test_type, direction, speed, duration_seconds,
+        )
+        self._thread = threading.Thread(target=target, args=args, daemon=True)
+        self._thread.start()
+
+    def _finish_session(self, stop_reason: str, error_message: str | None = None) -> None:
+        with self._lock:
+            self._status.active = False
+            self._status.elapsed_seconds = self._elapsed()
+            self._status.stop_reason = stop_reason
+            self._status.error_message = error_message
+        logger.info(
+            "[test] finish | type=%s reason=%s elapsed=%.2fs error=%s",
+            self._status.test_type,
+            stop_reason,
+            self._status.elapsed_seconds,
+            error_message,
+        )
+
+    def _elapsed(self) -> float:
+        if self._status.started_at == 0.0:
+            return 0.0
+        return time.monotonic() - self._status.started_at
+
+    # ------------------------------------------------------------------ #
+    # 内部：工作线程
+    # ------------------------------------------------------------------ #
+
+    def _straight_worker(self, direction: str, speed: int, duration_seconds: float) -> None:
+        try:
+            if direction == "forward":
+                self._motion.move_forward_slow(speed=speed, duration_seconds=duration_seconds)
+            else:
+                self._motion.move_backward_slow(speed=speed, duration_seconds=duration_seconds)
+            self._motion.stop()
+            stop_reason = "manual" if self._stop_event.is_set() else "completed"
+            self._finish_session(stop_reason)
+        except RobotHardwareError as exc:
+            logger.error("[test] straight worker hardware error: %s", exc)
+            self._finish_session("error", str(exc))
+        finally:
+            try:
+                self._motion.stop()
+            except RobotHardwareError:
+                pass
+
+    def _turn_worker(self, direction: str, speed: int, duration_seconds: float) -> None:
+        try:
+            if direction == "cw":
+                self._motion.rotate_right_slow(speed=speed, duration_seconds=duration_seconds)
+            else:
+                self._motion.rotate_left_slow(speed=speed, duration_seconds=duration_seconds)
+            self._motion.stop()
+            stop_reason = "manual" if self._stop_event.is_set() else "completed"
+            self._finish_session(stop_reason)
+        except RobotHardwareError as exc:
+            logger.error("[test] turn worker hardware error: %s", exc)
+            self._finish_session("error", str(exc))
+        finally:
+            try:
+                self._motion.stop()
+            except RobotHardwareError:
+                pass
+
+    def _line_follow_worker(self, speed: int, step_seconds: float) -> None:
+        """
+        高级巡线测试（连续控制，参考小车官方巡线逻辑）：
+        - 使用无阻碍的连续指令 (duration_seconds=0.0) 保证行驶平稳；
+        - 根据 4 路传感器的物理排列 (x2, x1, x3, x4) 进行精准方向修正；
+        - 包含丢线安全保护，连续 15 次（约 150ms）检测到全白时自动停车；
+        - 支持随时通过 _stop_event 手动急停。
+        """
+        poll_interval = 0.01  # 10ms 轮询间隔，保证高频响应
+        lost_counter = 0
+        max_lost_ticks = 15   # 15 * 10ms = 150ms 丢线自动停车保护
+
+        try:
+            while not self._stop_event.is_set():
+                tape = self._sensors.read_tape_boundary()
+                with self._lock:
+                    self._update_sensor_status_from_tape(tape)
+
+                if tape is None:
+                    # 传感器异常，停止电机
+                    self._motion.stop()
+                    time.sleep(poll_interval)
+                    continue
+
+                left, left_center, right_center, right = tape
+
+                # 1. 丢线检测（全白）
+                if left == 1 and left_center == 1 and right_center == 1 and right == 1:
+                    lost_counter += 1
+                    if lost_counter >= max_lost_ticks:
+                        self._motion.stop()
+                        self._finish_session("completed", "丢线停车（未检测到黑线）")
+                        return
+                    time.sleep(poll_interval)
+                    continue
+                else:
+                    lost_counter = 0  # 重新检测到线，计数器清零
+
+                # 2. 官方寻线分支逻辑
+                # 分支 A：全黑 (0, 0, 0, 0)
+                if left == 0 and left_center == 0 and right_center == 0 and right == 0:
+                    self._motion.move_forward_slow(speed=speed, duration_seconds=0.0)
+                    time.sleep(poll_interval)
+
+                # 分支 B：右大弯或右锐角 (左或左中为黑，且右为黑)
+                elif (left_center == 0 or left == 0) and right == 0:
+                    self._motion.rotate_right_slow(speed=speed, duration_seconds=0.0)
+                    time.sleep(0.05)
+
+                # 分支 C：左大弯或左锐角 (左为黑，且右或右中为黑)
+                elif left == 0 and (right == 0 or right_center == 0):
+                    turn_speed = min(100, int(speed * 1.5))
+                    self._motion.rotate_left_slow(speed=turn_speed, duration_seconds=0.0)
+                    time.sleep(0.15)
+
+                # 分支 D：左最外侧检测到黑线 (车身偏右，需要向左修正)
+                elif left == 0:
+                    self._motion.rotate_left_slow(speed=speed, duration_seconds=0.0)
+                    time.sleep(0.02)
+
+                # 分支 E：右最外侧检测到黑线 (车身偏左，需要向右修正)
+                elif right == 0:
+                    self._motion.rotate_right_slow(speed=speed, duration_seconds=0.0)
+                    time.sleep(0.02)
+
+                # 分支 F：左中检测到黑线，右中为白 (车身微偏右，微调左转)
+                elif left_center == 0 and right_center == 1:
+                    self._motion.rotate_left_slow(speed=speed, duration_seconds=0.0)
+                    time.sleep(poll_interval)
+
+                # 分支 G：左中为白，右中检测到黑线 (车身微偏左，微调右转)
+                elif left_center == 1 and right_center == 0:
+                    self._motion.rotate_right_slow(speed=speed, duration_seconds=0.0)
+                    time.sleep(poll_interval)
+
+                # 分支 H：中间两路均在黑线上 (完美居中，直行)
+                elif left_center == 0 and right_center == 0:
+                    self._motion.move_forward_slow(speed=speed, duration_seconds=0.0)
+                    time.sleep(poll_interval)
+
+                else:
+                    # 其它复合或未定义状态微调直行
+                    self._motion.move_forward_slow(speed=speed, duration_seconds=0.0)
+                    time.sleep(poll_interval)
+
+            self._motion.stop()
+            self._finish_session("manual")
+        except RobotHardwareError as exc:
+            logger.error("[test] line_follow worker hardware error: %s", exc)
+            self._finish_session("error", str(exc))
+        finally:
+            try:
+                self._motion.stop()
+            except RobotHardwareError:
+                pass
+
+    def _update_sensor_status(self) -> None:
+        """在已持有 _lock 的情况下刷新传感器状态。"""
+        try:
+            tape = self._sensors.read_tape_boundary()
+            self._update_sensor_status_from_tape(tape)
+            distance = self._sensors.read_distance_mm()
+            self._sensor_status.distance_mm = distance
+        except (RobotHardwareError, Exception):
+            pass
+
+    def _update_sensor_status_from_tape(self, tape: tuple[int, int, int, int] | None) -> None:
+        self._sensor_status.line_sensor = tape
+        self._sensor_status.line_description = _tape_description(tape)
+
+
+# --------------------------------------------------------------------------- #
+# 纯函数：传感器解析与描述
+# --------------------------------------------------------------------------- #
+
+def _tape_description(tape: tuple[int, int, int, int] | None) -> str:
+    """将4路传感器状态转换为人类可读描述。"""
+    if tape is None:
+        return "传感器异常或无有效读数"
+    left, left_center, right_center, right = tape
+
+    if all(v == 1 for v in tape):
+        return "丢线（全白）"
+    if all(v == 0 for v in tape):
+        return "全路黑胶带（直行 crossing）"
+
+    if left_center == 0 and right_center == 0:
+        return "正常居中"
+    if (left_center == 0 or left == 0) and right == 0:
+        return "右大弯/右锐角（右转）"
+    if left == 0 and (right == 0 or right_center == 0):
+        return "左大弯/左锐角（左急弯）"
+    if left == 0:
+        return "最左侧偏线（左转修正）"
+    if right == 0:
+        return "最右侧偏线（右转修正）"
+    if left_center == 0 and right_center == 1:
+        return "微偏右（左转微调）"
+    if left_center == 1 and right_center == 0:
+        return "微偏左（右转微调）"
+
+    return f"复合触发（左={left}/左中={left_center}/右中={right_center}/右={right}）"

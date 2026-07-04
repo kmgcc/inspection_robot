@@ -137,7 +137,13 @@ def _first_int(raw: Any) -> int | None:
 
 
 def _decode_bitfield(value: int) -> tuple[int, int, int, int]:
-    return tuple(_binary((value >> shift) & 1) for shift in (3, 2, 1, 0))  # type: ignore[return-value]
+    # x1 = Bit 3, x2 = Bit 2, x3 = Bit 1, x4 = Bit 0
+    # Physical sensor layout from left to right: x2, x1, x3, x4
+    x1 = _binary((value >> 3) & 1)
+    x2 = _binary((value >> 2) & 1)
+    x3 = _binary((value >> 1) & 1)
+    x4 = _binary(value & 1)
+    return (x2, x1, x3, x4)
 
 
 def _binary(value: int) -> int:

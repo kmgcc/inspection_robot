@@ -10,6 +10,7 @@ from .core.planner import PlanningError, plan_patrol_route
 from .robot import gimbal, motion
 from .robot.sensors import RobotHardwareError
 from .state import InspectionStore
+from .test_mode import CalibrationStore, TestSessionManager
 
 
 def create_app(root: Path | None = None) -> Flask:
@@ -30,6 +31,9 @@ def create_app(root: Path | None = None) -> Flask:
     app.config["SHELF_MANIFEST"] = store.shelf_manifest
     app.config["RUN_MODE"] = "simulate"
     store.record_run_mode("simulate", False)
+
+    calibration_store = CalibrationStore(project_root)
+    app.config["CALIBRATION_STORE"] = calibration_store
 
     @app.get("/")
     def index():
@@ -225,8 +229,11 @@ def create_app(root: Path | None = None) -> Flask:
         runtime = _ensure_runtime()
         payload = request.get_json(silent=True) or {}
         config = getattr(runtime, "config", None)
-        speed = _int_payload(payload, "speed", int(getattr(config, "patrol_speed", 22)))
-        duration = _float_payload(payload, "duration_seconds", float(getattr(config, "step_seconds", 0.14)))
+        cal = app.config["CALIBRATION_STORE"].load()
+        default_speed = cal.get("straight_speed") or getattr(config, "patrol_speed", 22)
+        default_dur = cal.get("straight_step_seconds") or getattr(config, "step_seconds", 0.14)
+        speed = _int_payload(payload, "speed", int(default_speed))
+        duration = _float_payload(payload, "duration_seconds", float(default_dur))
         try:
             runtime.stop()
             _run_manual_command(command, speed=speed, duration_seconds=duration, runtime=runtime)
@@ -247,15 +254,21 @@ def create_app(root: Path | None = None) -> Flask:
         runtime = _ensure_runtime()
         payload = request.get_json(silent=True) or {}
         config = getattr(runtime, "config", None)
+        cal = app.config["CALIBRATION_STORE"].load()
         direction = str(payload.get("direction") or "right").strip().lower()
-        speed = _int_payload(payload, "speed", int(getattr(config, "turn_speed", 18)))
-        duration = _float_payload(payload, "duration_seconds", float(getattr(config, "turn_90_seconds", 0.75)))
-        if direction not in {"left", "right"}:
+        default_speed = cal.get("turn_speed") or getattr(config, "turn_speed", 18)
+        if direction in {"left", "ccw"}:
+            default_dur = cal.get("turn_ccw90_seconds") or getattr(config, "turn_90_seconds", 0.75)
+        else:
+            default_dur = cal.get("turn_cw90_seconds") or getattr(config, "turn_90_seconds", 0.75)
+        speed = _int_payload(payload, "speed", int(default_speed))
+        duration = _float_payload(payload, "duration_seconds", float(default_dur))
+        if direction not in {"left", "right", "cw", "ccw"}:
             return jsonify({"ok": False, "error": f"unknown turn direction: {direction}"}), 400
         try:
             runtime.stop()
             active_motion = getattr(runtime, "motion", motion)
-            if direction == "left":
+            if direction in {"left", "ccw"}:
                 active_motion.rotate_left_slow(speed=speed, duration_seconds=duration)
             else:
                 active_motion.rotate_right_slow(speed=speed, duration_seconds=duration)
@@ -282,6 +295,139 @@ def create_app(root: Path | None = None) -> Flask:
     @app.get("/health")
     def health():
         return jsonify({"ok": True})
+
+    # ------------------------------------------------------------------ #
+    # 标定参数 API
+    # ------------------------------------------------------------------ #
+
+    @app.get("/api/calibration")
+    def api_calibration_get():
+        """读取当前标定参数（任何模式均可读）。"""
+        cal = app.config["CALIBRATION_STORE"].load()
+        return jsonify({"ok": True, "calibration": cal})
+
+    @app.post("/api/calibration")
+    def api_calibration_post():
+        """部分更新并持久化标定参数。"""
+        payload = request.get_json(silent=True) or {}
+        updated = app.config["CALIBRATION_STORE"].update(payload)
+        return jsonify({"ok": True, "calibration": updated})
+
+    # ------------------------------------------------------------------ #
+    # 运动测试 API（需要 RUN_MODE=robot）
+    # ------------------------------------------------------------------ #
+
+    def _ensure_test_session() -> TestSessionManager:
+        session = app.config.get("TEST_SESSION")
+        if session is None:
+            runtime = app.config.get("ROBOT_RUNTIME")
+            motion_adapter = getattr(runtime, "motion", motion) if runtime else motion
+            sensor_adapter = getattr(runtime, "sensors", None)
+            from .robot import sensors as default_sensors
+            session = TestSessionManager(
+                motion_adapter=motion_adapter,
+                sensor_adapter=sensor_adapter if sensor_adapter is not None else default_sensors,
+            )
+            app.config["TEST_SESSION"] = session
+        return session
+
+    @app.post("/api/test/stop")
+    def api_test_stop():
+        """立即停止所有测试电机输出（任何模式均可调用）。"""
+        session = app.config.get("TEST_SESSION")
+        if session is not None:
+            session.stop()
+        else:
+            # 尝试直接停止电机（兜底）
+            if _robot_mode_enabled():
+                try:
+                    motion.stop()
+                except RobotHardwareError:
+                    pass
+        return jsonify({"ok": True, "stopped": True})
+
+    @app.get("/api/test/status")
+    def api_test_status():
+        """返回当前测试状态 + 传感器读数。"""
+        session = _ensure_test_session()
+        if _robot_mode_enabled():
+            try:
+                session.read_sensors_now()
+            except Exception:
+                pass
+            status = session.get_status()
+        else:
+            # 模拟模式：返回假数据以配合UI效果预览
+            status = session.get_status()
+            if status.get("line_sensor") is None:
+                status["line_sensor"] = [1, 0, 0, 1]
+                status["line_description"] = "模拟居中 (白, 黑, 黑, 白)"
+                status["distance_mm"] = 280
+        return jsonify({"ok": True, **status})
+
+    @app.post("/api/test/straight")
+    def api_test_straight():
+        """直行速度测试（前进或后退，固定时长）。"""
+        if not _robot_mode_enabled():
+            return jsonify({"ok": False, "error": "运动测试需要 RUN_MODE=robot，请在小车上启动。"}), 409
+        payload = request.get_json(silent=True) or {}
+        cal = app.config["CALIBRATION_STORE"].load()
+        direction = str(payload.get("direction") or "forward").strip().lower()
+        speed = _int_payload(payload, "speed", int(cal.get("straight_speed", 22)))
+        duration = _float_payload(payload, "duration_seconds", float(cal.get("straight_step_seconds", 2.0)))
+        session = _ensure_test_session()
+        try:
+            session.run_straight_test(direction, speed, duration)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except RobotHardwareError as exc:
+            store.record_robot_status("ERROR", str(exc))
+            return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": True, "direction": direction, "speed": speed, "duration_seconds": duration})
+
+    @app.post("/api/test/turn")
+    def api_test_turn():
+        """原地转向测试（CW顺时针 / CCW逆时针）。"""
+        if not _robot_mode_enabled():
+            return jsonify({"ok": False, "error": "运动测试需要 RUN_MODE=robot，请在小车上启动。"}), 409
+        payload = request.get_json(silent=True) or {}
+        cal = app.config["CALIBRATION_STORE"].load()
+        direction = str(payload.get("direction") or "cw").strip().lower()
+        # 支持 cw/ccw/right/left
+        if direction in {"right", "cw"}:
+            direction = "cw"
+            default_dur = float(cal.get("turn_cw90_seconds", 0.75))
+        else:
+            direction = "ccw"
+            default_dur = float(cal.get("turn_ccw90_seconds", 0.75))
+        speed = _int_payload(payload, "speed", int(cal.get("turn_speed", 18)))
+        duration = _float_payload(payload, "duration_seconds", default_dur)
+        session = _ensure_test_session()
+        try:
+            session.run_turn_test(direction, speed, duration)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except RobotHardwareError as exc:
+            store.record_robot_status("ERROR", str(exc))
+            return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": True, "direction": direction, "speed": speed, "duration_seconds": duration})
+
+    @app.post("/api/test/line_follow/start")
+    def api_test_line_follow_start():
+        """开始寻线测试（持续运行，直到 /api/test/stop）。"""
+        if not _robot_mode_enabled():
+            return jsonify({"ok": False, "error": "运动测试需要 RUN_MODE=robot，请在小车上启动。"}), 409
+        payload = request.get_json(silent=True) or {}
+        cal = app.config["CALIBRATION_STORE"].load()
+        speed = _int_payload(payload, "speed", int(cal.get("line_follow_speed", 22)))
+        step_seconds = _float_payload(payload, "step_seconds", float(cal.get("line_follow_step_seconds", 0.14)))
+        session = _ensure_test_session()
+        try:
+            session.run_line_follow_test(speed, step_seconds)
+        except RobotHardwareError as exc:
+            store.record_robot_status("ERROR", str(exc))
+            return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": True, "speed": speed, "step_seconds": step_seconds})
 
     def _flatten_route(route: list[dict[str, object]]) -> list[tuple[int, int]]:
         waypoints: list[tuple[int, int]] = []
@@ -311,18 +457,24 @@ def create_app(root: Path | None = None) -> Flask:
     def _run_manual_command(command: str, *, speed: int, duration_seconds: float, runtime: object) -> None:
         active_motion = getattr(runtime, "motion", motion)
         config = getattr(runtime, "config", None)
-        turn_duration = getattr(config, "turn_90_seconds", 0.55)
-        turn_speed = getattr(config, "turn_speed", speed)
-        commands = {
-            "stop": lambda: active_motion.stop(),
-            "forward": lambda: active_motion.move_forward_slow(speed=speed, duration_seconds=duration_seconds),
-            "turn_left_90": lambda: active_motion.rotate_left_slow(speed=turn_speed, duration_seconds=turn_duration),
-            "turn_right_90": lambda: active_motion.rotate_right_slow(speed=turn_speed, duration_seconds=turn_duration),
-        }
-        action = commands.get(command)
-        if action is None:
+        cal = app.config["CALIBRATION_STORE"].load()
+        turn_speed = cal.get("turn_speed") or getattr(config, "turn_speed", speed)
+        if command == "stop":
+            active_motion.stop()
+        elif command == "forward":
+            active_motion.move_forward_slow(speed=speed, duration_seconds=duration_seconds)
+            active_motion.stop()
+        elif command == "backward":
+            active_motion.move_backward_slow(speed=speed, duration_seconds=duration_seconds)
+            active_motion.stop()
+        elif command == "turn_left_90":
+            active_motion.rotate_left_slow(speed=turn_speed, duration_seconds=cal.get("turn_ccw90_seconds", 0.75))
+            active_motion.stop()
+        elif command == "turn_right_90":
+            active_motion.rotate_right_slow(speed=turn_speed, duration_seconds=cal.get("turn_cw90_seconds", 0.75))
+            active_motion.stop()
+        else:
             raise ValueError(f"unknown manual command: {command}")
-        action()
 
     def _robot_mode_enabled() -> bool:
         return str(app.config.get("RUN_MODE", "simulate")).strip().lower() == "robot"

@@ -71,6 +71,8 @@ class RobotRuntime:
         self.warehouse_map = warehouse_map
         self.shelf_manifest = shelf_manifest
         self.config = config or RobotRuntimeConfig()
+        if self.store and self.store.root:
+            load_calibration_into_config(self.config, self.store.root)
         self.motion = motion_adapter
         self.sensors = sensor_adapter
         self.alarm = alarm_adapter
@@ -575,3 +577,26 @@ def _normalize_heading(value: str, fallback: str) -> str:
 
 def _cells_from_step(step: RouteStep) -> list[Cell]:
     return [(int(cell[0]), int(cell[1])) for cell in step["path"]]
+
+
+def load_calibration_into_config(config: RobotRuntimeConfig, root: Path) -> None:
+    import json
+    path = root / "config" / "calibration.json"
+    if path.exists():
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            if data.get("straight_speed") is not None:
+                config.patrol_speed = int(data["straight_speed"])
+            if data.get("straight_step_seconds") is not None:
+                config.step_seconds = float(data["straight_step_seconds"])
+            if data.get("turn_speed") is not None:
+                config.turn_speed = int(data["turn_speed"])
+            if data.get("turn_cw90_seconds") is not None:
+                config.turn_90_seconds = float(data["turn_cw90_seconds"])
+            if data.get("line_follow_speed") is not None:
+                config.line_follow_speed = int(data["line_follow_speed"])
+            if data.get("line_follow_step_seconds") is not None:
+                config.line_follow_step_seconds = float(data["line_follow_step_seconds"])
+        except Exception:
+            pass

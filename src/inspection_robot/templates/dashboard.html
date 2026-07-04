@@ -4,181 +4,397 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>仓库巡逻看板</title>
+  <meta name="description" content="RASPBOT V2 麦轮小车：手动控制、运动测试、参数标定与巡逻看板">
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
 <body>
+  <!-- 顶部：应用标题 + 实时状态 + 急停按钮 -->
   <header class="app-header">
     <div>
       <h1>固定仓库巡逻看板</h1>
-      <span class="subtitle">货架通道循环巡逻、侧向扫描、列端转向、异常复核与日志导出</span>
+      <span class="subtitle">RASPBOT V2 麦轮小车 · 手动控制 / 运动测试 / 参数标定</span>
     </div>
-    <div class="header-status">
-      <span id="run_id">-</span>
-      <strong id="header_status">-</strong>
+    <div class="header-right">
+      <div class="header-status">
+        <span id="run_id">-</span>
+        <strong id="header_status">-</strong>
+      </div>
+      <button class="emergency-stop" id="btn-emergency-stop" type="button">⛔ 立即停止</button>
     </div>
   </header>
 
-  <main class="dashboard">
-    <section class="panel overview" aria-labelledby="overview-title">
-      <div class="section-title">
-        <div>
-          <h2 id="overview-title">状态总览</h2>
-          <p id="last_message">-</p>
+  <!-- 标签页导航 -->
+  <nav class="tab-nav" role="tablist" aria-label="功能分区">
+    <button class="tab-btn active" role="tab" aria-selected="true" data-tab="manual" id="tab-manual">
+      🕹 手动控制
+    </button>
+    <button class="tab-btn" role="tab" aria-selected="false" data-tab="test" id="tab-test">
+      🔬 运动测试
+    </button>
+    <button class="tab-btn" role="tab" aria-selected="false" data-tab="status" id="tab-status">
+      📊 状态参数
+    </button>
+    <button class="tab-btn" role="tab" aria-selected="false" data-tab="advanced" id="tab-advanced">
+      ⚙️ 高级设置
+    </button>
+  </nav>
+
+  <main class="tab-main">
+
+    <!-- ================================================================ -->
+    <!-- 标签1：手动控制                                                    -->
+    <!-- ================================================================ -->
+    <section class="tab-panel active" id="panel-manual" role="tabpanel" aria-labelledby="tab-manual">
+      <div class="panel-row">
+
+        <!-- 手动方向控制 -->
+        <div class="panel card" style="flex:0 0 auto">
+          <h2 class="card-title">方向控制</h2>
+          <p class="card-hint simulate-only-hint" id="manual-hint" hidden>
+            ⚠ 当前为 simulate 模式，方向控制不会发送到底盘。请用 <code>RUN_MODE=robot</code> 在小车上启动。
+          </p>
+          <div class="dpad">
+            <button class="dpad-btn" id="btn-forward" type="button" data-manual-cmd="forward">▲ 前进</button>
+            <div class="dpad-row">
+              <button class="dpad-btn" id="btn-turn-left" type="button" data-manual-cmd="turn_left_90">◄ 左转90°</button>
+              <button class="dpad-btn dpad-stop" id="btn-stop-motor" type="button" data-manual-cmd="stop">■ 停止</button>
+              <button class="dpad-btn" id="btn-turn-right" type="button" data-manual-cmd="turn_right_90">右转90° ►</button>
+            </div>
+            <button class="dpad-btn" id="btn-backward" type="button" data-manual-cmd="backward">▼ 后退</button>
+          </div>
+          <div class="field-row" style="margin-top:12px">
+            <label class="field-label" for="manual-speed">速度（0–100）</label>
+            <input class="field-number" id="manual-speed" type="number" min="0" max="100" step="1" value="22">
+            <label class="field-label" for="manual-duration" style="margin-left:8px">步长(秒)</label>
+            <input class="field-number" id="manual-duration" type="number" min="0.05" max="5" step="0.05" value="0.14">
+          </div>
         </div>
-        <span class="pill" id="path_status">-</span>
+
+        <!-- 巡逻控制 -->
+        <div class="panel card">
+          <h2 class="card-title">巡逻控制</h2>
+          <div class="btn-group">
+            <button class="btn btn-primary" type="button" data-post="/api/start" id="btn-start-patrol">开始巡逻</button>
+            <button class="btn btn-danger" type="button" data-post="/api/stop" id="btn-stop-patrol">停止巡逻</button>
+            <button class="btn" type="button" data-post="/api/reset" id="btn-reset">重置</button>
+            <button class="btn" type="button" data-post="/api/gimbal/init" id="btn-gimbal">云台侧向</button>
+          </div>
+          <div class="metric-row" style="margin-top:12px">
+            <div class="metric-sm">
+              <label>运行模式</label>
+              <strong id="run_mode">-</strong>
+            </div>
+            <div class="metric-sm">
+              <label>真实硬件</label>
+              <strong id="hardware_connected">-</strong>
+            </div>
+            <div class="metric-sm">
+              <label>当前阶段</label>
+              <strong id="task_status">-</strong>
+            </div>
+            <div class="metric-sm">
+              <label>当前轮次</label>
+              <strong id="patrol_cycle">-</strong>
+            </div>
+          </div>
+          <p id="last_message" class="card-hint" style="margin-top:8px">-</p>
+        </div>
+
       </div>
 
-      <div class="metric-grid">
-        <div class="metric">
-          <label>运行模式</label>
-          <strong id="run_mode">-</strong>
+      <!-- 货架 + 地图（折叠区） -->
+      <details class="panel card collapsible" style="margin-top:14px">
+        <summary class="card-title collapsible-title">巡检地图与货架状态</summary>
+        <div class="panel-row" style="margin-top:12px;gap:14px">
+          <div style="flex:1;min-width:0">
+            <div class="section-label">巡检拓扑</div>
+            <div class="topology-list" id="warehouse_map"></div>
+            <div class="legend">
+              <span><i class="legend-shelf"></i>已识别货架</span>
+              <span><i class="legend-path"></i>经过关系</span>
+              <span><i class="legend-forbidden"></i>列端/非预期边界</span>
+              <span><i class="legend-robot"></i>当前节点</span>
+            </div>
+          </div>
+          <div style="flex:1;min-width:0">
+            <div class="section-label">货架扫描</div>
+            <div class="shelf-grid" id="shelves"></div>
+          </div>
         </div>
-        <div class="metric">
-          <label>真实硬件</label>
-          <strong id="hardware_connected">-</strong>
+      </details>
+
+      <!-- 事件日志（折叠区） -->
+      <details class="panel card collapsible" style="margin-top:14px" open>
+        <summary class="card-title collapsible-title">事件日志</summary>
+        <div style="margin-top: 10px; display: flex; justify-content: flex-end;">
+          <button class="btn btn-sm btn-danger" type="button" data-post="/api/reset" id="btn-clear-events">🗑 清空全部日志与状态</button>
         </div>
-        <div class="metric">
-          <label>当前阶段</label>
-          <strong id="task_status">-</strong>
+        <div class="table-wrap" style="margin-top:10px">
+          <table>
+            <thead>
+              <tr>
+                <th>时间</th><th>类型</th><th>货架</th><th>标签</th>
+                <th>物品</th><th>期望货架</th><th>状态</th><th>来源</th>
+                <th>OCR</th><th>颜色</th><th>图像类别</th><th>说明</th>
+              </tr>
+            </thead>
+            <tbody id="events"></tbody>
+          </table>
         </div>
-        <div class="metric">
-          <label>当前轮次</label>
-          <strong id="patrol_cycle">-</strong>
-        </div>
-        <div class="metric">
-          <label>当前目标点</label>
-          <strong id="current_target">-</strong>
-        </div>
-        <div class="metric">
-          <label>当前货架</label>
-          <strong id="current_shelf">-</strong>
-        </div>
-        <div class="metric">
-          <label>当前标签 / 物品</label>
-          <strong id="current_item">-</strong>
-        </div>
-        <div class="metric">
-          <label>货架 OCR</label>
-          <strong id="shelf_ocr">-</strong>
-        </div>
-        <div class="metric">
-          <label>颜色 / 文字 / 图像</label>
-          <strong id="evidence_summary">-</strong>
-        </div>
-        <div class="metric">
-          <label>前方障碍</label>
-          <strong id="obstacle_state">-</strong>
-        </div>
-        <div class="metric">
-          <label>黑胶带/列端</label>
-          <strong id="boundary_state">-</strong>
-        </div>
-        <div class="metric">
-          <label>告警等级</label>
-          <strong id="alarm_state">-</strong>
-        </div>
-        <div class="metric">
-          <label>音频提示</label>
-          <strong id="audio_state">-</strong>
-        </div>
-        <div class="metric">
-          <label>云台状态</label>
-          <strong id="gimbal_state">-</strong>
-        </div>
-        <div class="metric">
-          <label>当前位置</label>
-          <strong id="pose_state">-</strong>
-        </div>
-        <div class="metric">
-          <label>待确认异常</label>
-          <strong id="pending_count">0</strong>
-        </div>
+      </details>
+    </section>
+
+    <!-- ================================================================ -->
+    <!-- 标签2：运动测试                                                    -->
+    <!-- ================================================================ -->
+    <section class="tab-panel" id="panel-test" role="tabpanel" aria-labelledby="tab-test" hidden>
+
+      <!-- 模式提示横幅 -->
+      <div class="banner banner-warn" id="test-simulate-banner" hidden>
+        ⚠ 当前为 <strong>simulate 模式</strong>，测试按钮不会驱动电机。  
+        请在小车上以 <code>RUN_MODE=robot</code> 启动后再使用此页面。
+      </div>
+      <!-- 未标定提示横幅 -->
+      <div class="banner banner-info" id="test-uncalibrated-banner" hidden>
+        📋 标定参数尚未完成实测（<code>_uncalibrated=true</code>）。建议先完成直行速度测试，再测转向。
       </div>
 
-      <div class="actions" aria-label="巡逻操作">
-        <button class="primary" type="button" data-post="/api/start">开始巡逻</button>
-        <button class="danger" type="button" data-post="/api/stop">急停</button>
-        <button type="button" data-post="/api/reset">重置</button>
-        <button type="button" data-post="/api/gimbal/init">云台侧向</button>
-        <button type="button" data-post="/api/control/forward">前进</button>
-        <button type="button" data-post="/api/control/turn_left_90">左转 90</button>
-        <button type="button" data-post="/api/control/turn_right_90">右转 90</button>
-        <button type="button" data-post="/api/control/stop">电机停止</button>
-        <label class="calibration-field">90 速度 <input id="turn_calibration_speed" type="number" min="1" max="100" step="1" value="18"></label>
-        <label class="calibration-field">90 秒数 <input id="turn_calibration_seconds" type="number" min="0.1" max="3" step="0.05" value="0.75"></label>
-        <button type="button" data-calibrate-turn="left">校准左 90</button>
-        <button type="button" data-calibrate-turn="right">校准右 90</button>
-        <button type="button" data-post="/api/audio/announce">音频测试</button>
-        <button type="button" data-post="/api/demo/path">模拟规划路径</button>
-        <button type="button" data-post="/api/demo/obstacle">模拟障碍等待</button>
-        <button type="button" data-post="/api/demo/obstacle/clear">模拟障碍解除</button>
-        <button type="button" data-post="/api/demo/forbidden">模拟禁区触发</button>
-        <button type="button" data-post="/api/demo/forbidden/clear">模拟禁区恢复</button>
-        <button type="button" data-post="/api/demo/scan/A1/normal">模拟扫描 A1 正常</button>
-        <button class="danger" type="button" data-post="/api/demo/scan/A2/abnormal">模拟扫描 A2 异常</button>
-        <button class="danger" type="button" data-post="/api/demo/evidence-mismatch">模拟识别证据冲突</button>
-        <button class="ok" type="button" data-confirm>确认处理</button>
-        <button class="demo" type="button" data-post="/api/demo/run">软件兜底全流程</button>
-        <button type="button" data-audio>播放音频</button>
-        <a class="button" href="{{ url_for('static', filename='audio/youdowhatreversed.wav') }}">浏览器试听</a>
-        <a class="button" href="/api/export.csv">导出日志</a>
+      <!-- 子区块1：直行速度测试 -->
+      <details class="panel card collapsible" open>
+        <summary class="card-title collapsible-title">📏 直行速度测试</summary>
+        <p class="card-hint">找出小车能稳定起步、持续直行的最低速度参数（开环，结果受地面/电量影响）。</p>
+
+        <div class="field-section">
+          <div class="field-row">
+            <label class="field-label" for="st-speed">速度（0–100）</label>
+            <input class="field-number" id="st-speed" type="number" min="0" max="100" step="1" value="22">
+            <button class="btn btn-sm" type="button" id="st-speed-minus5">−5</button>
+            <button class="btn btn-sm" type="button" id="st-speed-minus1">−1</button>
+            <button class="btn btn-sm" type="button" id="st-speed-plus1">+1</button>
+            <button class="btn btn-sm" type="button" id="st-speed-plus5">+5</button>
+          </div>
+          <div class="field-row">
+            <label class="field-label">时长（秒）</label>
+            <button class="btn btn-sm btn-outline" type="button" data-st-dur="1">1s</button>
+            <button class="btn btn-sm btn-outline" type="button" data-st-dur="2">2s</button>
+            <button class="btn btn-sm btn-outline" type="button" data-st-dur="3">3s</button>
+            <input class="field-number" id="st-duration" type="number" min="0.5" max="30" step="0.5" value="2">
+          </div>
+        </div>
+
+        <div class="btn-group" style="margin-top:10px">
+          <button class="btn btn-primary" type="button" id="btn-st-forward">▶ 前进测试</button>
+          <button class="btn" type="button" id="btn-st-backward">◀ 后退测试</button>
+          <button class="btn btn-danger" type="button" id="btn-st-stop">■ 停止</button>
+        </div>
+
+        <div class="test-status-row" id="st-status-row">
+          <div class="metric-sm"><label>方向</label><strong id="st-direction">-</strong></div>
+          <div class="metric-sm"><label>速度</label><strong id="st-speed-disp">-</strong></div>
+          <div class="metric-sm"><label>已运行</label><strong id="st-elapsed">-</strong></div>
+          <div class="metric-sm"><label>状态</label><strong id="st-state">待机</strong></div>
+        </div>
+
+        <div class="save-row">
+          <span class="save-hint">现场观察起步稳定后，点击保存：</span>
+          <button class="btn btn-save" type="button" id="btn-save-min-speed">💾 保存为最低稳定直行速度</button>
+          <span class="saved-value">已保存: <strong id="saved-min-speed">⚠ 待标定</strong></span>
+        </div>
+      </details>
+
+      <!-- 子区块2：原地转向测试 -->
+      <details class="panel card collapsible" style="margin-top:14px" open>
+        <summary class="card-title collapsible-title">🔄 原地转向测试</summary>
+        <p class="card-hint">测量顺时针/逆时针转约90°所需参数（开环时间标定，左右两侧轮组反向）。</p>
+
+        <div class="field-section">
+          <div class="field-row">
+            <label class="field-label" for="turn-speed">转向速度（0–100）</label>
+            <input class="field-number" id="turn-speed" type="number" min="0" max="100" step="1" value="18">
+          </div>
+          <div class="field-row">
+            <label class="field-label">时长（秒）</label>
+            <button class="btn btn-sm btn-outline" type="button" data-turn-dur="0.5">短0.5s</button>
+            <button class="btn btn-sm btn-outline" type="button" data-turn-dur="0.75">中0.75s</button>
+            <button class="btn btn-sm btn-outline" type="button" data-turn-dur="1.0">长1.0s</button>
+            <button class="btn btn-sm btn-outline" type="button" data-turn-dur="1.5">1.5s</button>
+            <input class="field-number" id="turn-duration" type="number" min="0.1" max="10" step="0.05" value="0.75">
+          </div>
+          <div class="field-row">
+            <label class="field-label" for="cw-comp">顺时针补偿</label>
+            <input class="field-number" id="cw-comp" type="number" min="0.5" max="2.0" step="0.05" value="1.0" style="width:72px">
+            <label class="field-label" for="ccw-comp" style="margin-left:16px">逆时针补偿</label>
+            <input class="field-number" id="ccw-comp" type="number" min="0.5" max="2.0" step="0.05" value="1.0" style="width:72px">
+          </div>
+        </div>
+
+        <div class="btn-group" style="margin-top:10px">
+          <button class="btn btn-primary" type="button" id="btn-turn-cw">↻ 顺时针(CW)</button>
+          <button class="btn" type="button" id="btn-turn-ccw">↺ 逆时针(CCW)</button>
+          <button class="btn btn-danger" type="button" id="btn-turn-stop">■ 停止</button>
+        </div>
+
+        <div class="test-status-row" id="turn-status-row">
+          <div class="metric-sm"><label>方向</label><strong id="turn-direction">-</strong></div>
+          <div class="metric-sm"><label>速度</label><strong id="turn-speed-disp">-</strong></div>
+          <div class="metric-sm"><label>时长设置</label><strong id="turn-duration-disp">-</strong></div>
+          <div class="metric-sm"><label>已运行</label><strong id="turn-elapsed">-</strong></div>
+          <div class="metric-sm"><label>状态</label><strong id="turn-state">待机</strong></div>
+        </div>
+
+        <div class="param-box">
+          <strong>本次测试参数（供现场记录）：</strong>
+          <span id="turn-param-summary">-</span>
+        </div>
+
+        <div class="save-row">
+          <button class="btn btn-save" type="button" id="btn-save-cw90">💾 保存顺时针约90°参数</button>
+          <button class="btn btn-save" type="button" id="btn-save-ccw90">💾 保存逆时针约90°参数</button>
+        </div>
+        <div class="save-row" style="margin-top:6px">
+          <span class="saved-value">CW已保存: <strong id="saved-cw90">⚠ 待标定</strong></span>
+          <span class="saved-value" style="margin-left:12px">CCW已保存: <strong id="saved-ccw90">⚠ 待标定</strong></span>
+        </div>
+      </details>
+
+      <!-- 子区块3：寻线测试 -->
+      <details class="panel card collapsible" style="margin-top:14px">
+        <summary class="card-title collapsible-title">➰ 低速寻线测试</summary>
+        <p class="card-hint">验证传感器阈值、修正逻辑与低速稳定性。默认使用已标定最低稳定速度（可覆盖）。</p>
+
+        <div class="field-section">
+          <div class="field-row">
+            <label class="field-label" for="lf-speed">寻线速度（0–100）</label>
+            <input class="field-number" id="lf-speed" type="number" min="0" max="100" step="1" value="22">
+            <span class="field-hint" id="lf-speed-hint" style="margin-left:8px"></span>
+          </div>
+          <div class="field-row">
+            <label class="field-label" for="lf-step">每步时长(秒)</label>
+            <input class="field-number" id="lf-step" type="number" min="0.05" max="1" step="0.01" value="0.14">
+          </div>
+        </div>
+
+        <div class="btn-group" style="margin-top:10px">
+          <button class="btn btn-primary" type="button" id="btn-lf-start">▶ 开始寻线</button>
+          <button class="btn btn-danger" type="button" id="btn-lf-stop">■ 立即停止</button>
+        </div>
+
+        <!-- 传感器可视化 -->
+        <div class="sensor-visual-section">
+          <div class="section-label">4路传感器状态（0=黑/检测到，1=白）</div>
+          <div class="sensor-visual" id="sensor-visual">
+            <div class="sensor-cell" id="sv-0"><span class="sv-label">左</span><span class="sv-val">-</span></div>
+            <div class="sensor-cell" id="sv-1"><span class="sv-label">左中</span><span class="sv-val">-</span></div>
+            <div class="sensor-cell" id="sv-2"><span class="sv-label">右中</span><span class="sv-val">-</span></div>
+            <div class="sensor-cell" id="sv-3"><span class="sv-label">右</span><span class="sv-val">-</span></div>
+          </div>
+          <div class="lf-decision" id="lf-decision">-</div>
+        </div>
+
+        <div class="test-status-row">
+          <div class="metric-sm"><label>寻线状态</label><strong id="lf-state">待机</strong></div>
+          <div class="metric-sm"><label>已运行</label><strong id="lf-elapsed">-</strong></div>
+          <div class="metric-sm"><label>前方距离</label><strong id="lf-distance">-</strong></div>
+        </div>
+      </details>
+
+    </section>
+
+    <!-- ================================================================ -->
+    <!-- 标签3：状态参数                                                    -->
+    <!-- ================================================================ -->
+    <section class="tab-panel" id="panel-status" role="tabpanel" aria-labelledby="tab-status" hidden>
+      <div class="panel-row">
+
+        <!-- 系统状态 -->
+        <div class="panel card" style="flex:1">
+          <h2 class="card-title">系统与运动状态</h2>
+          <div class="metric-grid">
+            <div class="metric"><label>运行模式</label><strong id="s-run_mode">-</strong></div>
+            <div class="metric"><label>真实硬件</label><strong id="s-hardware_connected">-</strong></div>
+            <div class="metric"><label>当前阶段</label><strong id="s-task_status">-</strong></div>
+            <div class="metric"><label>当前货架</label><strong id="s-current_shelf">-</strong></div>
+            <div class="metric"><label>当前目标</label><strong id="s-current_target">-</strong></div>
+            <div class="metric"><label>当前位置</label><strong id="s-pose_state">-</strong></div>
+            <div class="metric"><label>前方障碍</label><strong id="s-obstacle_state">-</strong></div>
+            <div class="metric"><label>黑胶带/列端</label><strong id="s-boundary_state">-</strong></div>
+            <div class="metric"><label>告警等级</label><strong id="s-alarm_state">-</strong></div>
+            <div class="metric"><label>云台状态</label><strong id="s-gimbal_state">-</strong></div>
+            <div class="metric"><label>待确认异常</label><strong id="s-pending_count">0</strong></div>
+          </div>
+        </div>
+
+        <!-- 传感器实时读数 -->
+        <div class="panel card" style="flex:0 0 240px">
+          <h2 class="card-title">传感器实时读数</h2>
+          <div class="sensor-visual" id="sensor-visual-status">
+            <div class="sensor-cell" id="svs-0"><span class="sv-label">左</span><span class="sv-val">-</span></div>
+            <div class="sensor-cell" id="svs-1"><span class="sv-label">左中</span><span class="sv-val">-</span></div>
+            <div class="sensor-cell" id="svs-2"><span class="sv-label">右中</span><span class="sv-val">-</span></div>
+            <div class="sensor-cell" id="svs-3"><span class="sv-label">右</span><span class="sv-val">-</span></div>
+          </div>
+          <p class="card-hint" style="margin-top:8px" id="status-line-desc">-</p>
+          <div class="metric" style="margin-top:10px">
+            <label>超声波测距</label>
+            <strong id="status-distance">-</strong>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- 已保存标定参数 -->
+      <div class="panel card" style="margin-top:14px">
+        <h2 class="card-title">已保存标定参数</h2>
+        <div class="banner banner-warn" id="status-uncal-banner" hidden>
+          ⚠ 尚未完成实测标定（<code>_uncalibrated=true</code>）。以下参数为初始默认值，请完成现场测试后保存。
+        </div>
+        <div class="cal-table" id="cal-table">
+          <!-- 由 JS 动态填充 -->
+        </div>
+        <div class="btn-group" style="margin-top:10px">
+          <a class="btn" href="/api/export.csv">📄 导出事件日志</a>
+          <button class="btn" type="button" id="btn-confirm" data-confirm>✅ 确认处理异常</button>
+        </div>
       </div>
     </section>
 
-    <section class="panel map-panel" aria-labelledby="map-title">
-      <div class="section-title compact">
-        <h2 id="map-title">巡检拓扑与轨迹</h2>
-        <span id="path_counter">-</span>
+    <!-- ================================================================ -->
+    <!-- 标签4：高级设置                                                    -->
+    <!-- ================================================================ -->
+    <section class="tab-panel" id="panel-advanced" role="tabpanel" aria-labelledby="tab-advanced" hidden>
+
+      <div class="panel card">
+        <h2 class="card-title">模拟演示</h2>
+        <p class="card-hint">以下按钮仅用于 simulate 模式下的软件功能验证，不会驱动真实电机。</p>
+        <div class="btn-group">
+          <button class="btn" type="button" data-post="/api/demo/path">模拟规划路径</button>
+          <button class="btn" type="button" data-post="/api/demo/obstacle">模拟障碍等待</button>
+          <button class="btn" type="button" data-post="/api/demo/obstacle/clear">模拟障碍解除</button>
+          <button class="btn" type="button" data-post="/api/demo/forbidden">模拟禁区触发</button>
+          <button class="btn" type="button" data-post="/api/demo/forbidden/clear">模拟禁区恢复</button>
+          <button class="btn" type="button" data-post="/api/demo/scan/A1/normal">模拟扫描A1正常</button>
+          <button class="btn btn-danger" type="button" data-post="/api/demo/scan/A2/abnormal">模拟扫描A2异常</button>
+          <button class="btn btn-danger" type="button" data-post="/api/demo/evidence-mismatch">模拟证据冲突</button>
+          <button class="btn btn-demo" type="button" data-post="/api/demo/run">软件兜底全流程</button>
+        </div>
       </div>
-      <div class="topology-list" id="warehouse_map" aria-label="运行中生成的巡检拓扑"></div>
-      <div class="legend">
-        <span><i class="legend-shelf"></i>已识别货架</span>
-        <span><i class="legend-path"></i>经过关系</span>
-        <span><i class="legend-forbidden"></i>列端/非预期边界</span>
-        <span><i class="legend-robot"></i>当前节点</span>
+
+      <div class="panel card" style="margin-top:14px">
+        <h2 class="card-title">音频与云台</h2>
+        <div class="btn-group">
+          <button class="btn" type="button" data-post="/api/audio/announce" id="btn-audio-announce">音频提示测试</button>
+          <button class="btn" type="button" data-audio id="btn-audio-play">播放车载音频</button>
+          <a class="btn" href="{{ url_for('static', filename='audio/youdowhatreversed.wav') }}">浏览器试听</a>
+        </div>
       </div>
+
+      <div class="panel card" style="margin-top:14px">
+        <h2 class="card-title">多模态识别证据</h2>
+        <div class="detection-list" id="detections"></div>
+      </div>
+
     </section>
 
-    <section class="panel shelves-panel" aria-labelledby="shelves-title">
-      <div class="section-title compact">
-        <h2 id="shelves-title">货架扫描</h2>
-      </div>
-      <div class="shelf-grid" id="shelves"></div>
-    </section>
-
-    <section class="panel evidence-panel" aria-labelledby="evidence-title">
-      <div class="section-title compact">
-        <h2 id="evidence-title">多模态识别证据</h2>
-      </div>
-      <div class="detection-list" id="detections"></div>
-    </section>
-
-    <section class="panel events-panel" aria-labelledby="events-title">
-      <div class="section-title compact">
-        <h2 id="events-title">事件日志</h2>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>时间</th>
-              <th>类型</th>
-              <th>货架</th>
-              <th>标签</th>
-              <th>物品</th>
-              <th>期望货架</th>
-              <th>状态</th>
-              <th>来源</th>
-              <th>OCR</th>
-              <th>颜色</th>
-              <th>图像类别</th>
-              <th>说明</th>
-            </tr>
-          </thead>
-          <tbody id="events"></tbody>
-        </table>
-      </div>
-    </section>
   </main>
 
   <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
