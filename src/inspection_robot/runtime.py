@@ -109,13 +109,13 @@ class RobotRuntimeConfig:
     video_width: int = 640
     video_height: int = 360
     video_fps: int = 8
-    vision_stability_enabled: bool = field(default_factory=lambda: _env_bool("VISION_STABILITY_ENABLED", False))
+    vision_stability_enabled: bool = field(default_factory=lambda: _env_bool("VISION_STABILITY_ENABLED", True))
     vision_min_stable_frames: int = field(default_factory=lambda: _env_int(3, "VISION_MIN_STABLE_FRAMES"))
     vision_max_center_shift_px: float = field(default_factory=lambda: _env_float(10.0, "VISION_MAX_CENTER_SHIFT_PX"))
     vision_max_corner_shift_px: float = field(default_factory=lambda: _env_float(14.0, "VISION_MAX_CORNER_SHIFT_PX"))
     vision_max_angle_delta_deg: float = field(default_factory=lambda: _env_float(8.0, "VISION_MAX_ANGLE_DELTA_DEG"))
-    vision_state_machine_enabled: bool = field(default_factory=lambda: _env_bool("VISION_STATE_MACHINE_ENABLED", False))
-    image_classifier_enabled: bool = field(default_factory=lambda: _env_bool("IMAGE_CLASSIFIER_ENABLED", False))
+    vision_state_machine_enabled: bool = field(default_factory=lambda: _env_bool("VISION_STATE_MACHINE_ENABLED", True))
+    image_classifier_enabled: bool = field(default_factory=lambda: _env_bool("IMAGE_CLASSIFIER_ENABLED", True))
     camera_failure_scan_threshold: int = field(default_factory=lambda: _env_int(8, "CAMERA_FAILURE_SCAN_THRESHOLD"))
     camera_failure_request_cooldown_seconds: float = field(
         default_factory=lambda: _env_float(30.0, "CAMERA_FAILURE_REQUEST_COOLDOWN_SECONDS")

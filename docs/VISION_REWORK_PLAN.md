@@ -8,10 +8,10 @@
 
 | 编号 | 状态 | 模块 | 本轮落地 |
 |---|---|---|---|
-| R1 | 已完成，默认关闭 | vision | 新增 `DetectionStabilityTracker`，按中心点、四角位移、角度和连续帧数判断稳定；runtime 可通过 `VISION_STABILITY_ENABLED=1` 启用。 |
-| R2 | 已完成，默认关闭 | vision + runtime | 新增 `VisionStateMachine`，状态为 `IDLE -> SEARCHING -> ALIGNING -> CAPTURE -> OCR -> VERIFY -> DONE`；只标注视觉状态，不驱动底盘。 |
+| R1 | 已完成，默认开启 | vision | 新增 `DetectionStabilityTracker`，按中心点、四角位移、角度和连续帧数判断稳定；runtime 可通过 `VISION_STABILITY_ENABLED=0` 关闭。 |
+| R2 | 已完成，默认开启 | vision + runtime | 新增 `VisionStateMachine`，状态为 `IDLE -> SEARCHING -> ALIGNING -> CAPTURE -> OCR -> VERIFY -> DONE`；只标注视觉状态，不驱动底盘。 |
 | R3 | 已补充软件观测，待上车 | vision + web | `/api/video/detections` 增加 `fps/latency_ms/updated_at`，视频流继续使用共享帧源；真实摄像头并发稳定性仍需上车跑。 |
-| R4 | 已完成轻量方案，默认关闭 | vision | 新增 OpenCV 形状分类器，可识别简单 `CARD/BOX/CYLINDER`，通过 `IMAGE_CLASSIFIER_ENABLED=1` 启用；不默认制造证据冲突。 |
+| R4 | 已完成轻量方案，默认开启 | vision | 新增 OpenCV 形状分类器，可识别简单 `CARD/BOX/CYLINDER`，通过 `IMAGE_CLASSIFIER_ENABLED=0` 关闭；默认参与证据复核。 |
 | R5 | 已完成首版 | vision | OCR ROI 增加卡片轮廓检测与透视矫正，低置信度仍返回 `None`。 |
 | R6 | 已完成评估工具 | scripts | 新增 `scripts/evaluate_ocr_engines.py`，可用同一批实拍图片对比 pytesseract 与可选 PaddleOCR 的文本和耗时。 |
 | R7 | 已完成首版 | audio + runtime | `missing_item` 高优先级异常触发本地 TTS 语音报警并节流；无 TTS 命令时记录失败但不阻塞巡逻。 |
@@ -23,13 +23,13 @@
 
 | 环境变量 | 默认值 | 作用 |
 |---|---:|---|
-| `VISION_STABILITY_ENABLED` | `false` | 启用完整帧稳定性 tracker。 |
+| `VISION_STABILITY_ENABLED` | `true` | 启用完整帧稳定性 tracker。 |
 | `VISION_MIN_STABLE_FRAMES` | `3` | 连续稳定帧数阈值。 |
 | `VISION_MAX_CENTER_SHIFT_PX` | `10.0` | 同一 tag 中心点最大允许位移。 |
 | `VISION_MAX_CORNER_SHIFT_PX` | `14.0` | 同一 tag 四角点最大允许位移。 |
 | `VISION_MAX_ANGLE_DELTA_DEG` | `8.0` | 同一 tag 角度最大允许变化。 |
-| `VISION_STATE_MACHINE_ENABLED` | `false` | 启用视觉状态机标注，不控制底盘。 |
-| `IMAGE_CLASSIFIER_ENABLED` | `false` | 启用轻量 OpenCV 图像类别识别。 |
+| `VISION_STATE_MACHINE_ENABLED` | `true` | 启用视觉状态机标注，不控制底盘。 |
+| `IMAGE_CLASSIFIER_ENABLED` | `true` | 启用轻量 OpenCV 图像类别识别。 |
 | `MOTION_GUARD_POLL_SECONDS` | `0.02` | 运动过程中黑胶带轮询间隔，用于高速捕获边界。 |
 | `CAMERA_FAILURE_SCAN_THRESHOLD` | `8` | 连续多少次扫描无货架后请求人工确认轮次。 |
 | `MISSING_ALERT_COOLDOWN_SECONDS` | `8.0` | 缺货语音报警节流间隔。 |
