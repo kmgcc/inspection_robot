@@ -40,7 +40,8 @@ const EVENT_TYPE_LABELS = {
   forbidden_zone_detected: "禁区触发", obstacle_wait: "障碍等待", obstacle_clear: "障碍解除",
   shelf_arrived: "到达货架", shelf_scanned: "货架扫描", normal_item: "正常物品",
   unknown_item: "未知物品", wrong_shelf: "错放", missing_item: "缺失",
-  duplicate_item: "重复", evidence_mismatch: "证据冲突", manual_confirm: "人工确认",
+  duplicate_item: "重复", evidence_mismatch: "证据冲突", untagged_evidence: "无二维码证据",
+  scan_failed: "扫描失败", light_cue: "灯光提示", manual_confirm: "人工确认",
 };
 
 const DIRECTION_LABELS = {
@@ -601,6 +602,7 @@ function renderCalibration(cal) {
     straight_min_speed: "最低稳定直行速度",
     straight_speed: "直行默认速度",
     straight_step_seconds: "直行默认时长(s)",
+    patrol_settle_seconds: "巡逻短停顿(s)",
     turn_speed: "转向速度",
     turn_cw90_seconds: "顺时针90°时长(s)",
     turn_ccw90_seconds: "逆时针90°时长(s)",
@@ -852,14 +854,16 @@ function renderDetectionItems(rootId, items, scan = {}) {
     const card = document.createElement("article");
     card.className = "detection-card";
     const t = document.createElement("strong");
-    t.textContent = `${textOrDash(item.tag_id)} / ${textOrDash(item.item || item.item_id || item.kind)}`;
+    const tagLabel = item.tag_id === null || item.tag_id === undefined || item.tag_id === "" ? "无二维码" : textOrDash(item.tag_id);
+    t.textContent = `${tagLabel} / ${textOrDash(item.item || item.item_id || item.kind || item.type || "未归类")}`;
     const meta = document.createElement("span");
-    const parts = [
+    const readableParts = [
       item.color ? `颜色 ${item.color}` : null,
-      item.ocr_text ? `文字 ${item.ocr_text}` : null,
+      item.ocr_text ? `文字 ${item.ocr_text}` : "文字 未识别",
       item.image_class ? `图像 ${item.image_class}` : null,
+      item.source ? `来源 ${item.source}` : null,
     ].filter(Boolean);
-    meta.textContent = parts.length > 0 ? parts.join(" / ") : "-";
+    meta.textContent = readableParts.length > 0 ? readableParts.join(" / ") : "-";
     const frame = document.createElement("small");
     frame.textContent = `帧：${textOrDash(item.frame_id || scan?.frame_id)}，类型：${textOrDash(item.marker_family || item.type)}`;
     card.append(t, meta, frame);

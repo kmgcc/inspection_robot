@@ -5,6 +5,7 @@
   "straight_speed": 20,
   "straight_step_seconds": 2.0,
   "patrol_step_seconds": 0.18,
+  "patrol_settle_seconds": 0.05,
   "action_settle_seconds": 0.7,
   "turn_speed": 22,
   "turn_cw90_seconds": 0.85,

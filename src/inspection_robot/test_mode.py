@@ -38,6 +38,7 @@ CALIBRATION_DEFAULTS: dict[str, Any] = {
     "straight_speed": 20,           # 直行测试默认速度
     "straight_step_seconds": 2.0,    # 直行测试默认时长(s)
     "patrol_step_seconds": 0.18,
+    "patrol_settle_seconds": 0.05,
     "action_settle_seconds": 0.7,
     "turn_speed": 22,               # 转向测试默认速度
     "turn_cw90_seconds": 0.85,       # 顺时针约90°所需时间(s)
@@ -53,6 +54,7 @@ CALIBRATION_ALLOWED_KEYS = {
     "straight_speed",
     "straight_step_seconds",
     "patrol_step_seconds",
+    "patrol_settle_seconds",
     "action_settle_seconds",
     "turn_speed",
     "turn_cw90_seconds",

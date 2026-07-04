@@ -70,6 +70,7 @@ class RobotRuntimeConfig:
     blocked_samples: int = field(default_factory=lambda: _env_int(2, "BLOCKED_SAMPLES"))
     patrol_speed: int = field(default_factory=lambda: _env_int(20, "ROBOT_PATROL_SPEED", "ROBOT_SLOW_SPEED"))
     step_seconds: float = field(default_factory=lambda: _env_float(0.18, "ROBOT_PATROL_STEP_SECONDS", "ROBOT_STEP_SECONDS"))
+    patrol_settle_seconds: float = field(default_factory=lambda: _env_float(0.05, "ROBOT_PATROL_SETTLE_SECONDS"))
     poll_seconds: float = field(default_factory=lambda: _env_float(0.12, "ROBOT_POLL_SECONDS"))
     scan_enabled: bool = field(default_factory=lambda: _env_bool("ROBOT_SCAN_ENABLED", True))
     scan_timeout_seconds: float = 4.0
@@ -109,7 +110,7 @@ class RobotRuntimeConfig:
     heading_hold_max_pulse_seconds: float = field(default_factory=lambda: _env_float(0.12, "HEADING_HOLD_MAX_PULSE_SECONDS"))
     heading_hold_correction_speed: int | None = field(default_factory=lambda: _env_optional_int("HEADING_HOLD_CORRECTION_SPEED"))
     heading_hold_invert: bool = field(default_factory=lambda: _env_bool("HEADING_HOLD_INVERT", False))
-    line_follow_enabled: bool = field(default_factory=lambda: _env_bool("LINE_FOLLOW_ENABLED", False))
+    line_follow_enabled: bool = field(default_factory=lambda: _env_bool("LINE_FOLLOW_ENABLED", True))
     line_follow_speed: int = field(default_factory=lambda: _env_int(30, "LINE_FOLLOW_SPEED", "ROBOT_PATROL_SPEED", "ROBOT_SLOW_SPEED"))
     line_follow_step_seconds: float = field(default_factory=lambda: _env_float(0.14, "LINE_FOLLOW_STEP_SECONDS", "ROBOT_STEP_SECONDS"))
     line_follow_turn_speed: int = field(
@@ -527,6 +528,25 @@ class RobotRuntime:
         if self._line_follow_active and self.config.line_follow_enabled:
             self._drive_line_follow_step(tape_state)
             return
+        if self.config.line_follow_enabled:
+            decision = decide_line_follow_motion(tape_state)
+            if decision.line_seen and not decision.boundary_candidate:
+                self._line_follow_active = True
+                self._line_lost_ticks = 0
+                self.store.record_motion_debug(
+                    "line_follow_auto_enter",
+                    "Tape line detected during patrol; switching to line-follow correction.",
+                    evidence={
+                        "phase": self._patrol_phase_label(),
+                        "decision": decision.command,
+                        "description": decision.description,
+                        "tape_state": _json_tape_state(tape_state),
+                        "speed": self.config.line_follow_speed,
+                        "step_seconds": self.config.line_follow_step_seconds,
+                    },
+                )
+                self._drive_line_follow_step(tape_state)
+                return
         self._motion_step_index += 1
         self.store.record_motion_debug(
             "patrol_step",
@@ -539,12 +559,15 @@ class RobotRuntime:
                 "phase": self._patrol_phase_label(),
                 "speed": self.config.patrol_speed,
                 "step_seconds": self.config.step_seconds,
+                "patrol_settle_seconds": self.config.patrol_settle_seconds,
+                "line_follow_enabled": self.config.line_follow_enabled,
                 "tape_state": _json_tape_state(tape_state),
             },
         )
         self._forward_step(
             speed=self.config.patrol_speed,
             duration_seconds=self.config.step_seconds,
+            settle_seconds=self.config.patrol_settle_seconds,
         )
 
     def _drive_line_follow_step(self, tape_state: tuple[int, int, int, int] | None) -> None:
@@ -1134,24 +1157,36 @@ class RobotRuntime:
         if heading not in HEADINGS or target_heading not in HEADINGS:
             if not self._turn_to_heading(heading, target_heading):
                 return heading
-            self._forward_step(speed=self.config.patrol_speed, duration_seconds=self.config.step_seconds)
+            self._forward_step(
+                speed=self.config.patrol_speed,
+                duration_seconds=self.config.step_seconds,
+                settle_seconds=self.config.patrol_settle_seconds,
+            )
             return target_heading
         delta = (HEADINGS.index(target_heading) - HEADINGS.index(heading)) % len(HEADINGS)
         if delta == 0:
-            self._forward_step(speed=self.config.patrol_speed, duration_seconds=self.config.step_seconds)
+            self._forward_step(
+                speed=self.config.patrol_speed,
+                duration_seconds=self.config.step_seconds,
+                settle_seconds=self.config.patrol_settle_seconds,
+            )
         elif delta == 1:
             self.motion.strafe_right_slow(speed=self.config.patrol_speed, duration_seconds=self.config.step_seconds)
             self.motion.stop()
-            self._settle()
+            self._settle(self.config.patrol_settle_seconds)
         elif delta == 2:
             if not self._turn_to_heading(heading, target_heading):
                 return heading
-            self._forward_step(speed=self.config.patrol_speed, duration_seconds=self.config.step_seconds)
+            self._forward_step(
+                speed=self.config.patrol_speed,
+                duration_seconds=self.config.step_seconds,
+                settle_seconds=self.config.patrol_settle_seconds,
+            )
             return target_heading
         else:
             self.motion.strafe_left_slow(speed=self.config.patrol_speed, duration_seconds=self.config.step_seconds)
             self.motion.stop()
-            self._settle()
+            self._settle(self.config.patrol_settle_seconds)
         return heading
 
     def _turn_to_heading(self, heading: str, target_heading: str) -> bool:
@@ -1166,7 +1201,14 @@ class RobotRuntime:
             return _turn_succeeded(self._turn_90("left"))
         return True
 
-    def _forward_step(self, *, speed: int, duration_seconds: float, watch_boundary: bool = True) -> None:
+    def _forward_step(
+        self,
+        *,
+        speed: int,
+        duration_seconds: float,
+        watch_boundary: bool = True,
+        settle_seconds: float | None = None,
+    ) -> None:
         self._run_timed_motion(
             self.motion.move_forward_slow,
             speed=speed,
@@ -1174,7 +1216,7 @@ class RobotRuntime:
             watch_boundary=watch_boundary,
             heading_hold=watch_boundary,
         )
-        self._settle()
+        self._settle(settle_seconds)
 
     def _turn_90(self, direction: str, *, speed: int | None = None, duration_seconds: float | None = None) -> dict[str, object] | None:
         normalized = direction.strip().lower()
@@ -1261,8 +1303,9 @@ class RobotRuntime:
             evidence=evidence,
         )
 
-    def _settle(self) -> None:
-        delay = max(0.0, float(self.config.action_settle_seconds))
+    def _settle(self, seconds: float | None = None) -> None:
+        delay = self.config.action_settle_seconds if seconds is None else seconds
+        delay = max(0.0, float(delay))
         if delay > 0:
             self._interruptible_sleep(delay)
 
@@ -1392,6 +1435,18 @@ class RobotRuntime:
         self._signal_scan_events(events)
 
     def _collect_detections(self) -> list[dict[str, object]]:
+        self.store.record_motion_debug(
+            "vision_scan_start",
+            "Starting parked vision scan: AprilTag/OCR/color/classifier run only after the car is stopped.",
+            status="SCANNING_SHELF",
+            evidence={
+                "camera_device": self.config.camera_device,
+                "scan_timeout_seconds": self.config.scan_timeout_seconds,
+                "scan_max_detections": self.config.scan_max_detections,
+                "vision_stability_enabled": self.config.vision_stability_enabled,
+                "image_classifier_enabled": self.config.image_classifier_enabled,
+            },
+        )
         try:
             iterator = self.detection_provider(
                 device=self.config.camera_device,
@@ -1413,7 +1468,49 @@ class RobotRuntime:
                 detections.append(self._enrich_detection(detection))
         except (RobotHardwareError, VisionDependencyError) as exc:
             self.store.record_robot_status("SCANNING_SHELF", f"side camera scan skipped: {exc}")
+            self.store.record_motion_debug(
+                "vision_scan_error",
+                f"Parked vision scan skipped: {exc}",
+                status="SCANNING_SHELF",
+                evidence={"error": str(exc)},
+            )
+        summary = [self._detection_log_summary(detection) for detection in detections]
+        self.store.record_motion_debug(
+            "vision_scan_result",
+            f"Parked vision scan finished: {len(detections)} detection(s).",
+            status="SCANNING_SHELF",
+            evidence={"count": len(detections), "detections": summary},
+        )
+        for item in summary:
+            if item.get("tag_id") and not item.get("ocr_text"):
+                self.store.record_motion_debug(
+                    "vision_text_missing",
+                    f"QR/AprilTag {item['tag_id']} was detected, but OCR text is empty.",
+                    status="SCANNING_SHELF",
+                    evidence=item,
+                )
         return detections
+
+    def _detection_log_summary(self, detection: Mapping[str, object]) -> dict[str, object]:
+        confidence = detection.get("confidence")
+        try:
+            confidence_value: float | None = None if confidence is None else float(confidence)
+        except (TypeError, ValueError):
+            confidence_value = None
+        return {
+            "tag_id": _optional_text(detection.get("tag_id")),
+            "marker_family": _optional_text(detection.get("marker_family")),
+            "kind": _optional_text(detection.get("kind")),
+            "item_id": _optional_text(detection.get("item_id")),
+            "shelf_id": _optional_text(detection.get("shelf_id")),
+            "ocr_text": _optional_text(detection.get("ocr_text")),
+            "color": _optional_text(detection.get("color")),
+            "image_class": _optional_text(detection.get("image_class")),
+            "source": _optional_text(detection.get("source")),
+            "confidence": confidence_value,
+            "has_tag": detection.get("tag_id") is not None,
+            "has_ocr": bool(_optional_text(detection.get("ocr_text"))),
+        }
 
     def _play_cue(self, cue: str, message: str) -> None:
         payload, status = start_audio_cue(self.store.root, cue)
@@ -1507,6 +1604,13 @@ def _json_tape_state(tape_state: tuple[int, int, int, int] | None) -> list[int] 
     return list(tape_state) if tape_state is not None else None
 
 
+def _optional_text(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 def _cells_from_step(step: RouteStep) -> list[Cell]:
     return [(int(cell[0]), int(cell[1])) for cell in step["path"]]
 
@@ -1521,6 +1625,8 @@ def load_calibration_into_config(config: RobotRuntimeConfig, root: Path) -> None
                 config.patrol_speed = int(data["straight_speed"])
             if data.get("patrol_step_seconds") is not None:
                 config.step_seconds = float(data["patrol_step_seconds"])
+            if data.get("patrol_settle_seconds") is not None:
+                config.patrol_settle_seconds = float(data["patrol_settle_seconds"])
             if data.get("action_settle_seconds") is not None:
                 config.action_settle_seconds = float(data["action_settle_seconds"])
             if data.get("turn_speed") is not None:

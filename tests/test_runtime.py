@@ -52,6 +52,7 @@ class RuntimeTest(unittest.TestCase):
             "ROBOT_SLOW_SPEED",
             "ROBOT_PATROL_STEP_SECONDS",
             "ROBOT_STEP_SECONDS",
+            "ROBOT_PATROL_SETTLE_SECONDS",
             "ROBOT_ACTION_SETTLE_SECONDS",
             "ROBOT_SCAN_ENABLED",
             "AVOIDANCE_SPEED",
@@ -69,6 +70,7 @@ class RuntimeTest(unittest.TestCase):
             "OBJECT_PRESENCE_COOLDOWN_SECONDS",
             "HEADING_HOLD_ENABLED",
             "HEADING_HOLD_TOLERANCE_DEG",
+            "LINE_FOLLOW_ENABLED",
             "LINE_FOLLOW_SPEED",
             "LINE_FOLLOW_TURN_SPEED",
         ):
@@ -76,6 +78,7 @@ class RuntimeTest(unittest.TestCase):
 
         self.assertEqual(config.patrol_speed, 20)
         self.assertEqual(config.step_seconds, 0.18)
+        self.assertEqual(config.patrol_settle_seconds, 0.05)
         self.assertEqual(config.action_settle_seconds, 0.7)
         self.assertEqual(config.avoidance_speed, 20)
         self.assertEqual(config.avoidance_body_seconds, 0.35)
@@ -87,6 +90,7 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(config.object_detector, "opencv")
         self.assertEqual(config.object_presence_confirm_frames, 2)
         self.assertTrue(config.heading_hold_enabled)
+        self.assertTrue(config.line_follow_enabled)
         self.assertEqual(config.line_follow_speed, 30)
         self.assertEqual(config.line_follow_turn_speed, 30)
 
@@ -128,15 +132,16 @@ class RuntimeTest(unittest.TestCase):
         config_dir = self.root / "config"
         config_dir.mkdir(parents=True)
         (config_dir / "calibration.json").write_text(
-            '{"straight_speed": 30, "patrol_step_seconds": 0.25}',
+            '{"straight_speed": 30, "patrol_step_seconds": 0.25, "patrol_settle_seconds": 0.03}',
             encoding="utf-8",
         )
-        config = RobotRuntimeConfig(patrol_speed=5, step_seconds=0.16)
+        config = RobotRuntimeConfig(patrol_speed=5, step_seconds=0.16, patrol_settle_seconds=0.1)
 
         load_calibration_into_config(config, self.root)
 
         self.assertEqual(config.patrol_speed, 30)
         self.assertEqual(config.step_seconds, 0.25)
+        self.assertEqual(config.patrol_settle_seconds, 0.03)
 
     def test_calibration_action_settle_seconds_overrides_runtime_default(self) -> None:
         config_dir = self.root / "config"
@@ -286,7 +291,7 @@ class RuntimeTest(unittest.TestCase):
         self.assertNotIn("rotate_right", fake_motion.calls)
         self.assertNotIn("rotate_left", fake_motion.calls)
 
-    def test_continuous_patrol_ignores_partial_tape_outside_line_follow_phase(self) -> None:
+    def test_continuous_patrol_auto_enters_line_follow_on_partial_tape(self) -> None:
         store = self.make_store()
         fake_motion = FakeMotion()
         fake_sensors = FakeSensors(distances=[400] * 4, tapes=[(0, 1, 1, 1), (0, 1, 1, 1)])
@@ -313,7 +318,8 @@ class RuntimeTest(unittest.TestCase):
         runtime.run_continuous_patrol(max_iterations=1)
 
         self.assertIn("stop", fake_motion.calls)
-        self.assertIn("move_forward", fake_motion.calls)
+        self.assertIn("strafe_left", fake_motion.calls)
+        self.assertNotIn("move_forward", fake_motion.calls)
         self.assertNotIn("rotate_right", fake_motion.calls)
         self.assertNotIn("rotate_left", fake_motion.calls)
 
@@ -407,6 +413,7 @@ class RuntimeTest(unittest.TestCase):
             config=RobotRuntimeConfig(
                 step_seconds=0,
                 line_follow_step_seconds=0,
+                line_follow_enabled=False,
                 poll_seconds=0,
                 scan_timeout_seconds=0,
                 action_settle_seconds=0,
@@ -639,6 +646,32 @@ class RuntimeTest(unittest.TestCase):
 
         self.assertEqual(snapshot["current_shelf"], "A1")
         self.assertTrue(any(event["type"] == "shelf_scanned" for event in snapshot["events"]))
+
+    def test_collect_detections_logs_missing_ocr_for_detected_tag(self) -> None:
+        store = self.make_store()
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=RobotRuntimeConfig(scan_timeout_seconds=0, action_settle_seconds=0),
+            motion_adapter=FakeMotion(),
+            sensor_adapter=FakeSensors(distances=[400] * 4, tapes=[(1, 1, 1, 1)] * 4),
+            alarm_adapter=FakeAlarm(),
+            gimbal_adapter=FakeGimbal(),
+            detection_provider=tag_without_ocr_detection_provider,
+        )
+
+        detections = runtime._collect_detections()
+        stages = [
+            event["evidence"].get("stage")
+            for event in store.snapshot()["events"]
+            if event["type"] == "motion_debug" and isinstance(event.get("evidence"), dict)
+        ]
+
+        self.assertEqual(detections[0]["tag_id"], "101")
+        self.assertIn("vision_scan_start", stages)
+        self.assertIn("vision_scan_result", stages)
+        self.assertIn("vision_text_missing", stages)
 
     def test_perceptual_cycle_advances_with_one_missed_shelf(self) -> None:
         store = InspectionStore(
@@ -896,6 +929,10 @@ def fake_detection_provider(**_: object) -> Iterator[dict[str, object]]:
 
 def shelf_tag_only_detection_provider(**_: object) -> Iterator[dict[str, object]]:
     yield {"tag_id": "101", "marker_family": "TAG36H11", "ocr_text": "A1"}
+
+
+def tag_without_ocr_detection_provider(**_: object) -> Iterator[dict[str, object]]:
+    yield {"tag_id": "101", "marker_family": "TAG36H11"}
 
 
 def empty_detection_provider(**_: object) -> Iterator[dict[str, object]]:

@@ -56,7 +56,7 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
             line_follow_enabled=line_follow_enabled,
         )
 
-    def test_partial_tape_outside_route_line_follow_keeps_patrol_forward(self) -> None:
+    def test_partial_tape_auto_enters_line_follow_correction(self) -> None:
         store = self.make_store()
         fake_motion = FakeMotion()
         fake_sensors = FakeSensors(distances=[400] * 4, tapes=[(0, 1, 1, 1)] * 3)
@@ -74,8 +74,8 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
 
         runtime.run_continuous_patrol(max_iterations=1)
 
-        self.assertIn(("move_forward", 5, 0), fake_motion.calls)
-        self.assertNotIn(("move_forward", 7, 0), fake_motion.calls)
+        self.assertIn(("strafe_left", 7, 0), fake_motion.calls)
+        self.assertNotIn(("move_forward", 5, 0), fake_motion.calls)
 
     def test_fixed_boundary_pattern_enters_and_exits_line_follow(self) -> None:
         store = self.make_store()
@@ -102,7 +102,7 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
         self.assertIn(("move_forward", 7, 0), fake_motion.calls)
         self.assertIn(("move_forward", 5, 0), fake_motion.calls)
 
-    def test_boundary_pattern_keeps_pure_patrol_when_line_follow_disabled_by_default(self) -> None:
+    def test_boundary_pattern_keeps_pure_patrol_when_line_follow_disabled(self) -> None:
         store = self.make_store()
         fake_motion = FakeMotion()
         fake_sensors = FakeSensors(

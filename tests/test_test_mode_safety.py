@@ -24,6 +24,7 @@ class TestModeSafetyTest(unittest.TestCase):
 
             self.assertEqual(calibration["straight_speed"], 20)
             self.assertEqual(calibration["patrol_step_seconds"], 0.18)
+            self.assertEqual(calibration["patrol_settle_seconds"], 0.05)
             self.assertEqual(calibration["action_settle_seconds"], 0.7)
             self.assertFalse((root / "config" / "calibration.json").exists())
 
