@@ -28,14 +28,14 @@ class RobotRuntimeConfig:
     blocked_distance_mm: int = int(os.environ.get("BLOCKED_DISTANCE_MM", "160"))
     clear_distance_mm: int = int(os.environ.get("CLEAR_DISTANCE_MM", "240"))
     blocked_samples: int = int(os.environ.get("BLOCKED_SAMPLES", "2"))
-    patrol_speed: int = int(os.environ.get("ROBOT_PATROL_SPEED", os.environ.get("ROBOT_SLOW_SPEED", "22")))
+    patrol_speed: int = int(os.environ.get("ROBOT_PATROL_SPEED", os.environ.get("ROBOT_SLOW_SPEED", "5")))
     step_seconds: float = float(os.environ.get("ROBOT_STEP_SECONDS", "0.14"))
     poll_seconds: float = float(os.environ.get("ROBOT_POLL_SECONDS", "0.12"))
     scan_timeout_seconds: float = 4.0
     scan_max_detections: int = 6
     scan_interval_seconds: float = float(os.environ.get("SCAN_INTERVAL_SECONDS", "0.8"))
-    turn_90_seconds: float = float(os.environ.get("ROBOT_TURN_90_SECONDS", "0.75"))
-    turn_speed: int = int(os.environ.get("ROBOT_TURN_SPEED", "18"))
+    turn_90_seconds: float = float(os.environ.get("ROBOT_TURN_90_SECONDS", "0.6"))
+    turn_speed: int = int(os.environ.get("ROBOT_TURN_SPEED", "20"))
     action_settle_seconds: float = float(os.environ.get("ROBOT_ACTION_SETTLE_SECONDS", "0.35"))
     obstacle_wait_seconds: float = float(os.environ.get("OBSTACLE_WAIT_SECONDS", "6.0"))
     avoidance_speed: int = int(os.environ.get("AVOIDANCE_SPEED", "14"))
@@ -46,7 +46,7 @@ class RobotRuntimeConfig:
     boundary_confirm_gap_seconds: float = float(os.environ.get("BOUNDARY_CONFIRM_GAP_SECONDS", "0.08"))
     boundary_cooldown_seconds: float = 1.2
     line_follow_enabled: bool = os.environ.get("LINE_FOLLOW_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
-    line_follow_speed: int = int(os.environ.get("LINE_FOLLOW_SPEED", os.environ.get("ROBOT_PATROL_SPEED", os.environ.get("ROBOT_SLOW_SPEED", "22"))))
+    line_follow_speed: int = int(os.environ.get("LINE_FOLLOW_SPEED", os.environ.get("ROBOT_PATROL_SPEED", os.environ.get("ROBOT_SLOW_SPEED", "5"))))
     line_follow_step_seconds: float = float(os.environ.get("LINE_FOLLOW_STEP_SECONDS", os.environ.get("ROBOT_STEP_SECONDS", "0.14")))
     turns_per_cycle: int = 2
     skip_scan_cycles: int = 1

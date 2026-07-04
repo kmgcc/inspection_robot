@@ -36,9 +36,9 @@ CALIBRATION_DEFAULTS: dict[str, Any] = {
     "straight_min_speed": 5,        # 最低稳定直行速度
     "straight_speed": 5,            # 直行测试默认速度
     "straight_step_seconds": 2.0,    # 直行测试默认时长(s)
-    "turn_speed": 7,                # 转向测试默认速度
-    "turn_cw90_seconds": 1.15,       # 顺时针约90°所需时间(s)
-    "turn_ccw90_seconds": 1.15,      # 逆时针约90°所需时间(s)
+    "turn_speed": 20,               # 转向测试默认速度
+    "turn_cw90_seconds": 0.6,        # 顺时针约90°所需时间(s)
+    "turn_ccw90_seconds": 0.6,       # 逆时针约90°所需时间(s)
     "cw_compensation": 1.0,          # 顺时针左右轮补偿系数
     "ccw_compensation": 1.0,         # 逆时针左右轮补偿系数
     "line_follow_speed": 5,          # 寻线测试速度
