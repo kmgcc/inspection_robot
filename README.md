@@ -37,6 +37,7 @@
 - [3.1 看板计划](docs/plans/3.1-plan-dashboard-demo.md)：网页控制、运行模式、动态拓扑和演示兜底。
 - [SSH 连接与运维手册](docs/ssh_operations.md)：小车账号、SSH/VNC、部署和官方程序清理。
 - [演示运行手册](docs/demo_runbook.md)：真车演示、网页演示和兜底流程。
+- [OLED 显示屏接入说明](docs/oled_display.md)：官方 Yahboom OLED 用法、yaw 显示和现场排错。
 - [答辩证据清单](docs/evidence_checklist.md)：需要录制或截图的证据。
 - [官方资料索引](docs/RASPBOT-V2_Clean_Docs/README.md)：保留的 RASPBOT V2 资料说明。
 

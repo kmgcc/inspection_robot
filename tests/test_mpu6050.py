@@ -80,7 +80,7 @@ class MPU6050Test(unittest.TestCase):
 
         self.assertTrue(result.ok)
         self.assertIn(("rotate_right", 10, 0.08), motion.calls)
-        self.assertTrue(any(call[0] == "rotate_right" and call[2] > 0.03 for call in motion.calls[1:]))
+        self.assertTrue(any(call[0] == "rotate_right" and call[2] > 0 for call in motion.calls[1:]))
         self.assertNotIn("rotate_left", [call[0] for call in motion.calls])
 
     def test_turn_90_with_gyro_reverses_when_overshot(self) -> None:
@@ -150,6 +150,25 @@ class MPU6050Test(unittest.TestCase):
         self.assertEqual(result.pulses[0].speed, 20)
         self.assertTrue(any(pulse.speed == 6 for pulse in result.pulses[1:]))
 
+    def test_measure_turn_pulse_samples_after_motor_stop(self) -> None:
+        gyro = FakeGyro(rate_dps=0.0, vector_rate_dps={"x": 0.0, "y": 0.0, "z": 50.0})
+        motion = FakeMotion()
+        config = mpu6050.Turn90Config(
+            speed=10,
+            fallback_seconds=0.01,
+            sample_seconds=0.01,
+            bias_samples=1,
+            settle_seconds=0,
+            post_stop_sample_seconds=0.05,
+            turn_axis="z",
+        )
+
+        measurement = mpu6050._measure_turn_pulse("right", motion, gyro, {"x": 0.0, "y": 0.0, "z": 0.0}, config, 0.01, 10, "z")
+
+        self.assertEqual(motion.calls[0], ("rotate_right", 10, 0.01))
+        self.assertEqual(motion.calls[1], ("stop", None, None))
+        self.assertGreater(measurement.measured_degrees, 2.0)
+
     def test_motion_sample_reports_accel_and_compensated_gyro_bias(self) -> None:
         reads = {
             mpu6050.WHO_AM_I: 0x68,
@@ -192,6 +211,22 @@ class MPU6050Test(unittest.TestCase):
             second = mpu6050._orientation_from_sample(accel, gyro, 12.0)
         finally:
             _restore_env("MPU6050_YAW_AXIS", original_axis)
+            _restore_env("MPU6050_YAW_SIGN", original_sign)
+            mpu6050._reset_orientation_state()
+
+        self.assertEqual(first["yaw"], 0.0)
+        self.assertEqual(second["yaw"], 90.0)
+
+    def test_default_yaw_sign_treats_negative_z_as_left_turn(self) -> None:
+        accel = {"x": 0.0, "y": 0.0, "z": mpu6050.GRAVITY_MPS2}
+        gyro = {"x": 0.0, "y": 0.0, "z": -45.0}
+        original_sign = os.environ.get("MPU6050_YAW_SIGN")
+        os.environ.pop("MPU6050_YAW_SIGN", None)
+        mpu6050._reset_orientation_state()
+        try:
+            first = mpu6050._orientation_from_sample(accel, gyro, 10.0)
+            second = mpu6050._orientation_from_sample(accel, gyro, 12.0)
+        finally:
             _restore_env("MPU6050_YAW_SIGN", original_sign)
             mpu6050._reset_orientation_state()
 

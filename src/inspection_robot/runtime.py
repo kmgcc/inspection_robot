@@ -13,7 +13,7 @@ from .audio import start_audio_cue
 from .config import ShelfManifest, WarehouseMap
 from .core.planner import PlanningError, RouteStep, plan_patrol_route
 from .core.store import InspectionStore
-from .robot import alarm, gimbal, motion, mpu6050, sensors
+from .robot import alarm, gimbal, motion, mpu6050, oled_display, sensors
 from .robot.line_following import decide_line_follow_motion
 from .robot.sensors import RobotHardwareError
 from .vision import tag_detector
@@ -38,7 +38,7 @@ class RobotRuntimeConfig:
     blocked_distance_mm: int = int(os.environ.get("BLOCKED_DISTANCE_MM", "160"))
     clear_distance_mm: int = int(os.environ.get("CLEAR_DISTANCE_MM", "240"))
     blocked_samples: int = int(os.environ.get("BLOCKED_SAMPLES", "2"))
-    patrol_speed: int = int(os.environ.get("ROBOT_PATROL_SPEED", os.environ.get("ROBOT_SLOW_SPEED", "7")))
+    patrol_speed: int = int(os.environ.get("ROBOT_PATROL_SPEED", os.environ.get("ROBOT_SLOW_SPEED", "5")))
     step_seconds: float = float(os.environ.get("ROBOT_PATROL_STEP_SECONDS", os.environ.get("ROBOT_STEP_SECONDS", "0.16")))
     poll_seconds: float = float(os.environ.get("ROBOT_POLL_SECONDS", "0.12"))
     scan_enabled: bool = _env_bool("ROBOT_SCAN_ENABLED", False)
@@ -60,9 +60,9 @@ class RobotRuntimeConfig:
     boundary_confirm_gap_seconds: float = float(os.environ.get("BOUNDARY_CONFIRM_GAP_SECONDS", "0.03"))
     boundary_cooldown_seconds: float = float(os.environ.get("BOUNDARY_COOLDOWN_SECONDS", "0.60"))
     line_follow_enabled: bool = _env_bool("LINE_FOLLOW_ENABLED", True)
-    line_follow_speed: int = int(os.environ.get("LINE_FOLLOW_SPEED", os.environ.get("ROBOT_PATROL_SPEED", os.environ.get("ROBOT_SLOW_SPEED", "7"))))
+    line_follow_speed: int = int(os.environ.get("LINE_FOLLOW_SPEED", os.environ.get("ROBOT_PATROL_SPEED", os.environ.get("ROBOT_SLOW_SPEED", "5"))))
     line_follow_step_seconds: float = float(os.environ.get("LINE_FOLLOW_STEP_SECONDS", os.environ.get("ROBOT_STEP_SECONDS", "0.14")))
-    line_follow_turn_speed: int = int(os.environ.get("LINE_FOLLOW_TURN_SPEED", os.environ.get("LINE_FOLLOW_SPEED", os.environ.get("ROBOT_PATROL_SPEED", os.environ.get("ROBOT_SLOW_SPEED", "7")))))
+    line_follow_turn_speed: int = int(os.environ.get("LINE_FOLLOW_TURN_SPEED", os.environ.get("LINE_FOLLOW_SPEED", os.environ.get("ROBOT_PATROL_SPEED", os.environ.get("ROBOT_SLOW_SPEED", "5")))))
     line_follow_turn_seconds: float = float(os.environ.get("LINE_FOLLOW_TURN_SECONDS", "0.08"))
     line_follow_search_seconds: float = float(os.environ.get("LINE_FOLLOW_SEARCH_SECONDS", "0.08"))
     line_follow_poll_seconds: float = float(os.environ.get("LINE_FOLLOW_POLL_SECONDS", "0.01"))
@@ -87,6 +87,7 @@ class RobotRuntime:
         alarm_adapter: Any = alarm,
         gimbal_adapter: Any = gimbal,
         imu_adapter: Any = mpu6050,
+        display_adapter: Any = oled_display,
         detection_provider: DetectionProvider = tag_detector.iter_detections,
     ) -> None:
         self.store = store
@@ -100,6 +101,7 @@ class RobotRuntime:
         self.alarm = alarm_adapter
         self.gimbal = gimbal_adapter
         self.imu = imu_adapter
+        self.display = display_adapter
         self.detection_provider = detection_provider
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -585,7 +587,11 @@ class RobotRuntime:
         if not callable(reader):
             return
         self._last_motion_sensor_at = now
-        self.store.record_motion_sensor(reader())
+        sample = reader()
+        self.store.record_motion_sensor(sample)
+        updater = getattr(self.display, "update_motion_sensor", None)
+        if callable(updater):
+            updater(sample)
 
     def turn_90_closed_loop(self, direction: str, *, speed: int | None = None, duration_seconds: float | None = None) -> dict[str, object] | None:
         return self._turn_90(direction, speed=speed, duration_seconds=duration_seconds)

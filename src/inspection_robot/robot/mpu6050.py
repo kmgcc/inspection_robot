@@ -54,17 +54,18 @@ class Turn90Config:
     speed: int
     fallback_seconds: float
     target_degrees: float = 90.0
-    tolerance_degrees: float = 3.0
+    tolerance_degrees: float = 2.0
     sample_seconds: float = 0.01
     bias_samples: int = 20
-    max_correction_attempts: int = 5
-    min_pulse_seconds: float = 0.04
-    max_pulse_seconds: float = 0.45
-    settle_seconds: float = 0.05
-    correction_gain: float = 0.9
+    max_correction_attempts: int = 7
+    min_pulse_seconds: float = 0.025
+    max_pulse_seconds: float = 0.25
+    settle_seconds: float = 0.25
+    correction_gain: float = 0.55
     min_measured_degrees: float = 0.5
     correction_speed: int | None = None
     turn_axis: str = "auto"
+    post_stop_sample_seconds: float = 0.18
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,17 +206,18 @@ def turn_90_with_result(
         speed=speed,
         fallback_seconds=fallback_seconds,
         target_degrees=float(os.environ.get("MPU6050_TURN_TARGET_DEGREES", "90.0")),
-        tolerance_degrees=float(os.environ.get("MPU6050_TURN_TOLERANCE_DEGREES", "3.0")),
+        tolerance_degrees=float(os.environ.get("MPU6050_TURN_TOLERANCE_DEGREES", "2.0")),
         sample_seconds=float(os.environ.get("MPU6050_TURN_SAMPLE_SECONDS", "0.01")),
         bias_samples=int(os.environ.get("MPU6050_TURN_BIAS_SAMPLES", "20")),
-        max_correction_attempts=int(os.environ.get("MPU6050_TURN_MAX_CORRECTIONS", "5")),
-        min_pulse_seconds=float(os.environ.get("MPU6050_TURN_MIN_PULSE_SECONDS", "0.04")),
-        max_pulse_seconds=float(os.environ.get("MPU6050_TURN_MAX_PULSE_SECONDS", "0.45")),
-        settle_seconds=float(os.environ.get("MPU6050_TURN_SETTLE_SECONDS", "0.05")),
-        correction_gain=float(os.environ.get("MPU6050_TURN_CORRECTION_GAIN", "0.9")),
+        max_correction_attempts=int(os.environ.get("MPU6050_TURN_MAX_CORRECTIONS", "7")),
+        min_pulse_seconds=float(os.environ.get("MPU6050_TURN_MIN_PULSE_SECONDS", "0.025")),
+        max_pulse_seconds=float(os.environ.get("MPU6050_TURN_MAX_PULSE_SECONDS", "0.25")),
+        settle_seconds=float(os.environ.get("MPU6050_TURN_SETTLE_SECONDS", "0.25")),
+        correction_gain=float(os.environ.get("MPU6050_TURN_CORRECTION_GAIN", "0.55")),
         min_measured_degrees=float(os.environ.get("MPU6050_TURN_MIN_MEASURED_DEGREES", "0.5")),
-        correction_speed=int(os.environ.get("MPU6050_TURN_CORRECTION_SPEED", str(max(1, int(speed) // 2)))),
+        correction_speed=int(os.environ.get("MPU6050_TURN_CORRECTION_SPEED", str(max(5, int(speed) // 3)))),
         turn_axis=os.environ.get("MPU6050_TURN_AXIS", "auto"),
+        post_stop_sample_seconds=float(os.environ.get("MPU6050_TURN_POST_STOP_SAMPLE_SECONDS", "0.18")),
     )
     try:
         gyro = open_default_gyro()
@@ -409,9 +411,11 @@ def _measure_turn_pulse(
     try:
         _run_turn_motion(direction, motion_adapter, speed, duration)
     finally:
+        motion_adapter.stop()
+        if config.post_stop_sample_seconds > 0:
+            time.sleep(config.post_stop_sample_seconds)
         stop_sampling.set()
         thread.join(timeout=max(config.sample_seconds * 4.0, 0.2))
-        motion_adapter.stop()
     if errors:
         raise RobotHardwareError(f"MPU6050 gyro read failed during turn: {errors[0]}")
     return _turn_measurement_from_axes(accumulated_axes, config, axis_hint)
@@ -442,7 +446,7 @@ def _correction_duration(
 
 def _correction_speed(config: Turn90Config) -> int:
     if config.correction_speed is None:
-        return max(1, min(100, int(config.speed) // 2))
+        return max(5, min(100, int(config.speed) // 3))
     return max(1, min(100, int(config.correction_speed)))
 
 
@@ -678,9 +682,9 @@ def _yaw_axis() -> str:
 
 def _yaw_sign() -> float:
     try:
-        value = float(os.environ.get("MPU6050_YAW_SIGN", "1"))
+        value = float(os.environ.get("MPU6050_YAW_SIGN", "-1"))
     except ValueError:
-        return 1.0
+        return -1.0
     return -1.0 if value < 0 else 1.0
 
 

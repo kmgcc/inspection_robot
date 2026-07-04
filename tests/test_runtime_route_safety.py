@@ -47,6 +47,7 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
             boundary_confirm_samples=1,
             boundary_min_black_sensors=4,
             line_follow_speed=7,
+            line_follow_turn_speed=7,
             line_follow_step_seconds=0,
             line_follow_turn_seconds=0,
             line_follow_search_seconds=0,
@@ -251,6 +252,32 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
         self.assertNotIn("rotate_right", fake_motion.names())
         self.assertEqual(store.snapshot()["task_status"], "ERROR")
 
+    def test_motion_sensor_refresh_updates_optional_display(self) -> None:
+        store = self.make_store()
+        fake_display = FakeDisplay()
+        sample = {
+            "ok": True,
+            "orientation_deg": {"roll": 0.0, "pitch": 0.0, "yaw": 12.5},
+        }
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=self.make_config(),
+            motion_adapter=FakeMotion(),
+            sensor_adapter=FakeSensors(distances=[400], tapes=[(1, 1, 1, 1)]),
+            alarm_adapter=FakeAlarm(),
+            gimbal_adapter=FakeGimbal(),
+            detection_provider=fake_detection_provider,
+            imu_adapter=FakeMotionSensorImu(sample),
+            display_adapter=fake_display,
+        )
+
+        runtime.refresh_motion_sensor(force=True)
+
+        self.assertEqual(store.snapshot()["motion_sensor"], sample)
+        self.assertEqual(fake_display.samples, [sample])
+
     def test_runtime_refreshes_normal_led_during_patrol(self) -> None:
         store = self.make_store()
         fake_alarm = FakeAlarm()
@@ -369,6 +396,22 @@ class FakeFailedImuAdapter:
             "attempts": 6,
             "message": "MPU6050 turn failed to converge",
         }
+
+
+class FakeMotionSensorImu:
+    def __init__(self, sample: dict[str, object]) -> None:
+        self.sample = sample
+
+    def read_motion_sample(self) -> dict[str, object]:
+        return dict(self.sample)
+
+
+class FakeDisplay:
+    def __init__(self) -> None:
+        self.samples: list[dict[str, object]] = []
+
+    def update_motion_sensor(self, sample: dict[str, object]) -> None:
+        self.samples.append(dict(sample))
 
 
 def fake_detection_provider(**_: object) -> Iterator[dict[str, object]]:
