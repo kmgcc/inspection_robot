@@ -76,6 +76,8 @@ ls /home/pi
 
 VNC 主要用于图形窗口测试。普通代码推送、启动服务、查看日志，用 SSH 更快。
 
+注意：关闭官方 Yahboom App 主程序不等于关闭 VNC。VNC 属于树莓派系统远程桌面能力，必须和 Wi-Fi、SSH、蓝牙音频一起保留。
+
 ## 四、开发前清理官方大程序
 
 官方镜像开机后可能自动启动 APP 控制大程序。开发前必须先关闭，否则可能占用摄像头、底盘或 I2C 设备。
@@ -99,6 +101,8 @@ Process xxxx has been terminated.
 ```bash
 sudo rm -rf /home/pi/.config/autostart/start_raspbot.desktop
 ```
+
+只允许清理官方 App 自身。不要执行会关闭系统桌面、VNC、Wi-Fi、SSH 或蓝牙音频的命令，例如禁用 `vncserver`、`wayvnc`、桌面显示管理器或网络服务。
 
 ## 五、推送项目代码到小车
 
@@ -550,6 +554,32 @@ sh /home/pi/project_demo/raspbot/killprocess.sh
 ### 6. OpenCV 或 AprilTag 窗口打不开
 
 SSH 没有图形显示环境。使用 VNC 登录小车桌面，在桌面终端中进入 Docker 并运行视觉程序。
+
+### 7. VNC 连不上
+
+先确认电脑连的是本组小车热点或同一局域网，再确认 IP：
+
+```bash
+ssh pi@192.168.1.11
+hostname
+hostname -I
+```
+
+如果 SSH 可用但 VNC 客户端连不上，先在电脑上探测 VNC 端口：
+
+```bash
+nc -vz 192.168.1.11 5900
+```
+
+端口能连通但 RealVNC Viewer 仍登录失败时，优先检查用户名密码是否仍为 `pi / yahboom`，以及是否连到了别人的车。端口不通时，在小车上检查 VNC 服务：
+
+```bash
+sudo systemctl status vncserver-x11-serviced --no-pager
+sudo systemctl status wayvnc --no-pager
+sudo raspi-config
+```
+
+在 `raspi-config` 中进入 `Interface Options`，重新启用 VNC。官方远程访问资料也说明，小车镜像默认已开启 SSH 和 VNC；若开启 VNC 服务失败，应更新系统、重启后再重新启用。
 
 ## 十四、推荐日常流程
 

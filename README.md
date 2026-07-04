@@ -32,6 +32,7 @@
 - [共享 API 契约](docs/api_contract.md)：状态字段、事件、运行模式、动态拓扑和控制接口。
 - [0.1 基准计划](docs/plans/0.1-plan-shared-contract.md)：共享契约与配置格式。
 - [1.1 硬件计划](docs/plans/1.1-plan-robot-io.md)：底盘、云台、超声波、黑胶带、音频灯光和 runtime。
+- [MPU6050 接入文档](docs/mpu6050_integration.md)：加速度/陀螺仪模块接线、依赖、验证和 runtime 接入边界。
 - [2.1 核心计划](docs/plans/2.1-plan-core-contract.md)：轮次、货架清单、识别证据、异常规则和动态拓扑。
 - [3.1 看板计划](docs/plans/3.1-plan-dashboard-demo.md)：网页控制、运行模式、动态拓扑和演示兜底。
 - [SSH 连接与运维手册](docs/ssh_operations.md)：小车账号、SSH/VNC、部署和官方程序清理。
