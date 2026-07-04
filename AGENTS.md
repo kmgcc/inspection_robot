@@ -307,7 +307,6 @@ inspection_robot/
 │       │   ├── alarm.py            # 蜂鸣器/RGB LED
 │       │   ├── gimbal.py           # 云台（侧向摄像头初始化）
 │       │   ├── mpu6050.py          # 陀螺仪/加速度（90度转向闭环）
-│       │   ├── oled_display.py     # OLED 显示
 │       │   └── line_following.py   # 寻线决策
 │       ├── vision/                 # 视觉识别子包
 │       │   └── tag_detector.py     # AprilTag 检测迭代器
