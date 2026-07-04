@@ -116,6 +116,22 @@ class InspectionStore:
                 )
                 self._persist_events_locked()
 
+    def record_cycle_completed(self, cycle: int, observed_shelves: list[str], missed_shelves: list[str]) -> EventRecord:
+        cycle_value = max(1, int(cycle))
+        evidence = {"observed_shelves": list(observed_shelves), "missed_shelves": list(missed_shelves)}
+        with self.lock:
+            event = make_event(
+                "cycle_completed",
+                priority=1,
+                status="info",
+                source="runtime",
+                message=f"第 {cycle_value} 轮巡检完成。",
+                evidence=evidence,
+            )
+            self._append_event_locked(event)
+            self._persist_events_locked()
+            return event
+
     def record_gimbal_initialized(self, yaw: int | None = None, pitch: int | None = None) -> None:
         with self.lock:
             self.state.gimbal = {"side_initialized": True, "yaw": yaw, "pitch": pitch}
@@ -247,7 +263,7 @@ class InspectionStore:
             )
             self._persist_events_locked()
 
-    def record_scan_result(self, shelf_id: str, detected_items: list[str], frame_id: str | None = None) -> None:
+    def record_scan_result(self, shelf_id: str, detected_items: list[str], frame_id: str | None = None) -> list[EventRecord]:
         with self.lock:
             self.state.scan = {"active": False, "shelf_id": shelf_id, "detected_items": list(detected_items), "frame_id": frame_id, "detections": []}
             self.state.current_shelf = shelf_id
@@ -260,8 +276,9 @@ class InspectionStore:
                 skip_missing=self.state.skip_shortage_detection,
             )
             self._append_scan_events_locked(events)
+            return events
 
-    def record_detection_evidence(self, shelf_id: str, detections: list[Mapping[str, JsonValue]], frame_id: str | None = None) -> None:
+    def record_detection_evidence(self, shelf_id: str, detections: list[Mapping[str, JsonValue]], frame_id: str | None = None) -> list[EventRecord]:
         with self.lock:
             normalized = [dict(detection) for detection in detections]
             self.state.scan = {"active": False, "shelf_id": shelf_id, "detected_items": [], "frame_id": frame_id, "detections": normalized}
@@ -275,6 +292,7 @@ class InspectionStore:
                 skip_missing=self.state.skip_shortage_detection,
             )
             self._append_scan_events_locked(events)
+            return events
 
     def record_forbidden_zone(self, zone_id: str | None, blocked: bool) -> None:
         with self.lock:

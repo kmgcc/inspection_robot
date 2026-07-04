@@ -147,6 +147,19 @@
           <p class="card-hint" id="pose-turn-summary">-</p>
         </div>
 
+        <div class="panel card vision-card">
+          <h2 class="card-title">实时视觉</h2>
+          <div class="vision-layout">
+            <div class="video-frame">
+              <img id="video-preview" src="/api/video_feed" alt="侧向摄像头画面">
+            </div>
+            <div class="vision-evidence">
+              <div class="section-label">最近检测证据</div>
+              <div class="detection-list compact" id="live-detections"></div>
+            </div>
+          </div>
+        </div>
+
       </div>
 
       <!-- 货架 + 地图（折叠区） -->

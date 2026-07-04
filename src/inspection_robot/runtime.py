@@ -13,6 +13,7 @@ from typing import Any
 from .audio import start_audio_cue
 from .config import ShelfManifest, WarehouseMap
 from .core.planner import PlanningError, RouteStep, plan_patrol_route
+from .core.events import EventRecord
 from .core.store import InspectionStore
 from .robot import alarm, gimbal, motion, mpu6050, oled_display, sensors
 from .robot.line_following import decide_line_follow_motion
@@ -102,6 +103,11 @@ class RobotRuntimeConfig:
     turns_per_cycle: int = 2
     skip_scan_cycles: int = 1
     camera_device: int = 0
+    patrol_order: tuple[str, ...] = field(default_factory=lambda: ("A1", "A2", "A3", "A4", "B4", "B3", "B2", "B1"))
+    cycle_max_missed_shelves: int = 1
+    video_width: int = 640
+    video_height: int = 360
+    video_fps: int = 8
 
 
 class RobotRuntime:
@@ -144,6 +150,7 @@ class RobotRuntime:
         self._last_line_correction: str | None = None
         self._motion_step_index = 0
         self._last_motion_sensor_at = 0.0
+        self._observed_shelf_sequence: list[str] = []
 
     def start(self, shelf_order: Iterable[str] | None = None) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -184,7 +191,7 @@ class RobotRuntime:
     def run_continuous_patrol(self, max_iterations: int | None = None) -> None:
         self.store.record_run_mode("robot", True)
         self.store.start()
-        self.store.record_cycle(1, True)
+        self.store.record_cycle(1, self._skip_shortage_for_cycle(1))
         self.store.record_motion_debug(
             "runtime_started",
             "运动调试巡逻启动：短步前进、列端转向、寻线过渡、禁区绕行；当前暂不做货架识别。",
@@ -206,8 +213,6 @@ class RobotRuntime:
         self.refresh_motion_sensor(force=True)
 
         iterations = 0
-        turn_count = 0
-        current_cycle = 1
         last_scan_at = time.monotonic()
 
         while not self._stop_event.is_set():
@@ -223,12 +228,8 @@ class RobotRuntime:
             tape_state = self.sensors.read_tape_boundary()
             boundary_outcome = self._handle_tape_boundary(tape_state)
             if boundary_outcome != "none":
-                if boundary_outcome == "turn":
-                    turn_count += 1
-                    current_cycle = _cycle_from_turn_count(turn_count, self.config.turns_per_cycle)
-                    self.store.record_cycle(current_cycle, current_cycle <= self.config.skip_scan_cycles)
-                else:
-                    self.store.record_cycle(current_cycle, current_cycle <= self.config.skip_scan_cycles)
+                current_cycle = self._current_cycle()
+                self.store.record_cycle(current_cycle, self._skip_shortage_for_cycle(current_cycle))
                 continue
 
             if not self._guard_obstacle(None):
@@ -238,7 +239,8 @@ class RobotRuntime:
             self._drive_patrol_step(tape_state)
             self._show_line_follow() if self._line_follow_active else self._show_normal()
             iterations += 1
-            self.store.record_cycle(current_cycle, current_cycle <= self.config.skip_scan_cycles)
+            current_cycle = self._current_cycle()
+            self.store.record_cycle(current_cycle, self._skip_shortage_for_cycle(current_cycle))
 
             now = time.monotonic()
             if self.config.scan_enabled and now - last_scan_at >= self.config.scan_interval_seconds:
@@ -656,6 +658,82 @@ class RobotRuntime:
                     return normalized
         return None
 
+    def _enrich_detection(self, detection: Mapping[str, object]) -> dict[str, object]:
+        enriched = dict(detection)
+        tag_id = enriched.get("tag_id")
+        if tag_id is None:
+            return enriched
+        info = self.store.tag_map.get(str(tag_id))
+        if info is None:
+            return enriched
+        kind = str(info.get("kind", "item"))
+        enriched.setdefault("kind", kind)
+        enriched.setdefault("name", info.get("name"))
+        if kind == "shelf" and info.get("shelf_id") is not None:
+            enriched.setdefault("shelf_id", str(info["shelf_id"]).strip().upper())
+        if kind == "item" and info.get("item_id") is not None:
+            enriched.setdefault("item_id", str(info["item_id"]))
+        return enriched
+
+    def _record_observed_shelf(self, shelf_id: str) -> None:
+        order = [str(item).strip().upper() for item in self.config.patrol_order if str(item).strip()]
+        normalized = shelf_id.strip().upper()
+        if normalized not in order:
+            return
+        if self._observed_shelf_sequence and self._observed_shelf_sequence[-1] == normalized:
+            return
+        index = order.index(normalized)
+        if not self._observed_shelf_sequence:
+            if index == 0:
+                self._observed_shelf_sequence.append(normalized)
+            return
+        previous_index = order.index(self._observed_shelf_sequence[-1])
+        if index > previous_index:
+            self._observed_shelf_sequence.append(normalized)
+        elif index == 0:
+            self._observed_shelf_sequence = [normalized]
+        else:
+            return
+        if normalized == order[-1]:
+            self._complete_observed_cycle(order)
+
+    def _complete_observed_cycle(self, order: list[str]) -> None:
+        observed = list(self._observed_shelf_sequence)
+        missed = [shelf_id for shelf_id in order if shelf_id not in set(observed)]
+        if len(missed) > max(0, int(self.config.cycle_max_missed_shelves)):
+            return
+        cycle = self._current_cycle()
+        self.store.record_cycle_completed(cycle, observed, missed)
+        next_cycle = cycle + 1
+        self.store.record_cycle(next_cycle, self._skip_shortage_for_cycle(next_cycle))
+        self._observed_shelf_sequence = []
+
+    def _current_cycle(self) -> int:
+        try:
+            return max(1, int(self.store.snapshot().get("patrol_cycle", 1)))
+        except (TypeError, ValueError):
+            return 1
+
+    def _skip_shortage_for_cycle(self, cycle: int) -> bool:
+        return max(1, int(cycle)) <= max(0, int(self.config.skip_scan_cycles))
+
+    def _signal_scan_events(self, events: list[EventRecord]) -> None:
+        waiting = [event for event in events if event.get("status") == "waiting_confirm"]
+        if not waiting:
+            return
+        high_priority = any(event.get("type") == "missing_item" or _event_priority(event) >= 3 for event in waiting)
+        try:
+            if high_priority:
+                notifier = getattr(self.alarm, "show_high_priority_alarm", None)
+                if callable(notifier):
+                    notifier()
+                else:
+                    self.alarm.show_warning()
+            else:
+                self.alarm.show_warning()
+        except RobotHardwareError:
+            pass
+
     def _wait_for_obstacle_clear(self, shelf_id: str | None) -> bool:
         started_at = time.monotonic()
         deadline = started_at + self.config.obstacle_wait_seconds
@@ -953,16 +1031,20 @@ class RobotRuntime:
         self._play_cue("first", f"扫描到 {shelf_id} 货架。")
         frame_id = f"runtime-{shelf_id.lower()}-{int(time.time())}"
         self.store.record_scan_start(shelf_id, target=target, frame_id=frame_id)
-        scan_detections = self._collect_detections() if detections is None else detections
+        raw_detections = self._collect_detections() if detections is None else detections
+        scan_detections = [self._enrich_detection(detection) for detection in raw_detections]
+        events: list[EventRecord]
         if scan_detections:
-            self.store.record_detection_evidence(shelf_id, scan_detections, frame_id=frame_id)
+            events = self.store.record_detection_evidence(shelf_id, scan_detections, frame_id=frame_id)
             if any(
                 str(detection.get("kind", "item")) == "item" or detection.get("item_id")
                 for detection in scan_detections
             ):
                 self._play_cue("following", f"识别到 {shelf_id} 货架上的物品。")
         else:
-            self.store.record_scan_result(shelf_id, [], frame_id=frame_id)
+            events = self.store.record_scan_result(shelf_id, [], frame_id=frame_id)
+        self._record_observed_shelf(shelf_id)
+        self._signal_scan_events(events)
 
     def _collect_detections(self) -> list[dict[str, object]]:
         try:
@@ -976,7 +1058,7 @@ class RobotRuntime:
         detections: list[dict[str, object]] = []
         try:
             for detection in itertools.islice(iterator, self.config.scan_max_detections):
-                detections.append(dict(detection))
+                detections.append(self._enrich_detection(detection))
         except (RobotHardwareError, VisionDependencyError) as exc:
             self.store.record_robot_status("SCANNING_SHELF", f"side camera scan skipped: {exc}")
         return detections
@@ -1031,6 +1113,13 @@ def _cycle_from_turn_count(turn_count: int, turns_per_cycle: int) -> int:
 
 def _turn_succeeded(result: Mapping[str, object] | None) -> bool:
     return result is None or bool(result.get("ok", True))
+
+
+def _event_priority(event: Mapping[str, object]) -> int:
+    try:
+        return int(event.get("priority", 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _heading_after_right_turn(heading: str) -> str:

@@ -176,6 +176,24 @@ class WebApiTest(unittest.TestCase):
         self.assertIn("manual_confirm", event_types)
         self.assertFalse(any(event["status"] == "waiting_confirm" for event in payload["events"]))
 
+    def test_video_routes_are_available_in_simulate_mode(self) -> None:
+        template = (ROOT / "src" / "inspection_robot" / "templates" / "dashboard.html").read_text(encoding="utf-8")
+        self.assertIn("/api/video_feed", template)
+
+        detections = self.client.get("/api/video/detections")
+        self.assertEqual(detections.status_code, 200)
+        payload = detections.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["source"], "simulate")
+        self.assertIn("detections", payload)
+
+        feed = self.client.get("/api/video_feed", buffered=False)
+        self.assertEqual(feed.status_code, 200)
+        self.assertEqual(feed.mimetype, "multipart/x-mixed-replace")
+        first_chunk = next(feed.response)
+        self.assertIn(b"--frame", first_chunk)
+        feed.close()
+
     def test_robot_calibration_turn_uses_payload_and_disables_backward_control(self) -> None:
         runtime = FakeRuntime()
         self.app.config["RUN_MODE"] = "robot"

@@ -494,6 +494,112 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(snapshot["current_shelf"], "A1")
         self.assertTrue(any(event["type"] == "shelf_scanned" for event in snapshot["events"]))
 
+    def test_scan_visible_shelf_maps_shelf_tag_to_shelf_id(self) -> None:
+        store = self.make_store()
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=RobotRuntimeConfig(scan_timeout_seconds=0, action_settle_seconds=0),
+            motion_adapter=FakeMotion(),
+            sensor_adapter=FakeSensors(distances=[400] * 4, tapes=[(1, 1, 1, 1)] * 4),
+            alarm_adapter=FakeAlarm(),
+            gimbal_adapter=FakeGimbal(),
+            detection_provider=shelf_tag_only_detection_provider,
+        )
+
+        runtime._scan_visible_shelf()
+        snapshot = store.snapshot()
+
+        self.assertEqual(snapshot["current_shelf"], "A1")
+        self.assertTrue(any(event["type"] == "shelf_scanned" for event in snapshot["events"]))
+
+    def test_perceptual_cycle_advances_with_one_missed_shelf(self) -> None:
+        store = InspectionStore(
+            DEFAULT_TAG_MAP,
+            warehouse_map=DEFAULT_WAREHOUSE_MAP,
+            shelf_manifest=DEFAULT_SHELF_MANIFEST,
+            root=self.root,
+        )
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            DEFAULT_SHELF_MANIFEST,
+            config=RobotRuntimeConfig(scan_timeout_seconds=0, action_settle_seconds=0),
+            motion_adapter=FakeMotion(),
+            sensor_adapter=FakeSensors(distances=[400] * 4, tapes=[(1, 1, 1, 1)] * 4),
+            alarm_adapter=FakeAlarm(),
+            gimbal_adapter=FakeGimbal(),
+            detection_provider=fake_detection_provider,
+        )
+
+        for shelf_id in ["A1", "A2", "A3", "A4", "B4", "B3", "B1"]:
+            runtime._perform_scan(shelf_id, f"{shelf_id}_SCAN", detections=[])
+        snapshot = store.snapshot()
+
+        self.assertEqual(snapshot["patrol_cycle"], 2)
+        self.assertFalse(snapshot["skip_shortage_detection"])
+        cycle_event = next(event for event in snapshot["events"] if event["type"] == "cycle_completed")
+        self.assertEqual(cycle_event["evidence"], {"observed_shelves": ["A1", "A2", "A3", "A4", "B4", "B3", "B1"], "missed_shelves": ["B2"]})
+
+    def test_perceptual_cycle_does_not_advance_when_two_shelves_are_missed(self) -> None:
+        store = InspectionStore(
+            DEFAULT_TAG_MAP,
+            warehouse_map=DEFAULT_WAREHOUSE_MAP,
+            shelf_manifest=DEFAULT_SHELF_MANIFEST,
+            root=self.root,
+        )
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            DEFAULT_SHELF_MANIFEST,
+            config=RobotRuntimeConfig(scan_timeout_seconds=0, action_settle_seconds=0),
+            motion_adapter=FakeMotion(),
+            sensor_adapter=FakeSensors(distances=[400] * 4, tapes=[(1, 1, 1, 1)] * 4),
+            alarm_adapter=FakeAlarm(),
+            gimbal_adapter=FakeGimbal(),
+            detection_provider=fake_detection_provider,
+        )
+
+        for shelf_id in ["A1", "A2", "A3", "A4", "B4", "B1"]:
+            runtime._perform_scan(shelf_id, f"{shelf_id}_SCAN", detections=[])
+
+        self.assertEqual(store.snapshot()["patrol_cycle"], 1)
+
+    def test_second_cycle_missing_item_triggers_high_priority_alarm(self) -> None:
+        store = self.make_store()
+        fake_alarm = FakeAlarm()
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=RobotRuntimeConfig(scan_timeout_seconds=0, action_settle_seconds=0),
+            motion_adapter=FakeMotion(),
+            sensor_adapter=FakeSensors(distances=[400] * 4, tapes=[(1, 1, 1, 1)] * 4),
+            alarm_adapter=fake_alarm,
+            gimbal_adapter=FakeGimbal(),
+            detection_provider=fake_detection_provider,
+        )
+        store.record_cycle(2, False)
+
+        runtime._perform_scan(
+            "A1",
+            "A1_SCAN",
+            detections=[
+                {
+                    "tag_id": "1",
+                    "kind": "item",
+                    "item_id": "item_01",
+                    "marker_family": "TAG36H11",
+                    "color": "RED",
+                    "ocr_text": "ITEM-01",
+                    "image_class": "BOTTLE",
+                }
+            ],
+        )
+
+        self.assertIn("high_priority_alarm", fake_alarm.calls)
+
 
 class FakeMotion:
     def __init__(self) -> None:
@@ -558,6 +664,9 @@ class FakeAlarm:
     def show_warning(self) -> None:
         self.calls.append("warning")
 
+    def show_high_priority_alarm(self) -> None:
+        self.calls.append("high_priority_alarm")
+
     def clear_alarm(self) -> None:
         self.calls.append("clear")
 
@@ -605,6 +714,10 @@ def fake_detection_provider(**_: object) -> Iterator[dict[str, object]]:
         "ocr_text": "ITEM-02",
         "image_class": "BOX",
     }
+
+
+def shelf_tag_only_detection_provider(**_: object) -> Iterator[dict[str, object]]:
+    yield {"tag_id": "101", "marker_family": "TAG36H11", "ocr_text": "A1"}
 
 
 class temporary_env:

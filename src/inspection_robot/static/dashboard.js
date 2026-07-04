@@ -53,6 +53,7 @@ const PATROL_ORDER = ["A1","A2","A3","A4","B4","B3","B2","B1"];
 let latestEventId = null;
 let testPollingActive = false;
 let testPollTimer = null;
+let latestVideoFrameId = null;
 
 // ============================================================
 // 工具函数
@@ -159,6 +160,18 @@ async function loadStatus() {
     renderStatus(data || {});
   } catch (err) {
     setText("last_message", `看板刷新失败：${err.message}`);
+  }
+}
+
+async function loadVideoDetections() {
+  try {
+    const res = await fetch("/api/video/detections", { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    latestVideoFrameId = data.frame_id || null;
+    renderDetectionItems("live-detections", asArray(data.detections), { frame_id: latestVideoFrameId });
+  } catch (_) {
+    renderDetectionItems("live-detections", [], { frame_id: latestVideoFrameId });
   }
 }
 
@@ -812,12 +825,16 @@ function addDetail(root, label, value) {
 // ============================================================
 
 function renderDetections(scan, events) {
-  const root = byId("detections");
-  if (!root) return;
-  root.innerHTML = "";
   const detections = asArray(scan?.detections);
   const evidence = events.filter((e) => e.ocr_text || e.color || e.image_class || e.evidence);
   const items = detections.length > 0 ? detections : evidence.slice(0, 4);
+  renderDetectionItems("detections", items, scan);
+}
+
+function renderDetectionItems(rootId, items, scan = {}) {
+  const root = byId(rootId);
+  if (!root) return;
+  root.innerHTML = "";
   if (items.length === 0) {
     const p = document.createElement("p");
     p.className = "empty";
@@ -895,9 +912,11 @@ initManualControls();
 initTestControls();
 
 loadStatus();
+loadVideoDetections();
 loadCalibration();
 startTestPolling();
 
 setInterval(loadStatus, 1500);
+setInterval(loadVideoDetections, 1500);
 
 })();

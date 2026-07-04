@@ -13,6 +13,7 @@ from .robot import gimbal, motion
 from .robot.sensors import RobotHardwareError
 from .state import InspectionStore
 from .test_mode import CalibrationStore, TestSessionManager
+from .vision.video_stream import generate_mjpeg_frames, latest_video_detections
 
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,23 @@ def create_app(root: Path | None = None) -> Flask:
         if _robot_mode_enabled() and callable(refresher):
             refresher()
         return jsonify(store.snapshot())
+
+    @app.get("/api/video_feed")
+    def api_video_feed():
+        runtime = app.config.get("ROBOT_RUNTIME")
+        config = getattr(runtime, "config", None)
+        stream = generate_mjpeg_frames(
+            device=int(getattr(config, "camera_device", 0)),
+            fps=int(getattr(config, "video_fps", 8)),
+            width=int(getattr(config, "video_width", 640)),
+            height=int(getattr(config, "video_height", 360)),
+            simulate=not _robot_mode_enabled(),
+        )
+        return Response(stream, mimetype="multipart/x-mixed-replace; boundary=frame")
+
+    @app.get("/api/video/detections")
+    def api_video_detections():
+        return jsonify(latest_video_detections(simulate=not _robot_mode_enabled()))
 
     @app.post("/api/start")
     def api_start():

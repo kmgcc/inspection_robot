@@ -114,19 +114,7 @@ def evaluate_shelf_scan(
                 frame_id=frame_id,
             )
         ]
-    return [
-        make_event(
-            "shelf_scanned",
-            item="-",
-            shelf_id=shelf_id,
-            expected_shelf=shelf_id,
-            priority=1,
-            status="normal",
-            message=f"{shelf_id} 货架扫描完成，未发现异常。",
-            source=source,
-            frame_id=frame_id,
-        )
-    ]
+    return [_shelf_scanned(shelf_id, source, frame_id)]
 
 
 def evaluate_detection_evidence(
@@ -141,6 +129,7 @@ def evaluate_detection_evidence(
 ) -> list[EventRecord]:
     detected_items: list[str] = []
     events: list[EventRecord] = []
+    shelf_evidence_seen = False
     for detection in detections:
         tag_id = _text(detection, "tag_id")
         if tag_id is None:
@@ -154,6 +143,7 @@ def evaluate_detection_evidence(
             continue
         kind = str(info.get("kind", "item"))
         if kind == "shelf":
+            shelf_evidence_seen = True
             events.extend(_shelf_evidence_events(shelf_id, tag_id, info, detection, source, frame_id))
             continue
         if kind != "item":
@@ -181,7 +171,9 @@ def evaluate_detection_evidence(
                     evidence={"mismatch": mismatch},
                 )
             )
-    if detected_items or not events:
+    if shelf_evidence_seen and not detected_items and not events and skip_missing:
+        events.append(_shelf_scanned(shelf_id, source, frame_id))
+    elif detected_items or not events:
         events.extend(
             evaluate_shelf_scan(
                 shelf_id,
@@ -260,6 +252,20 @@ def _unknown_item(tag_id: str, shelf_id: str, source: str, frame_id: str | None)
         priority=2,
         status="waiting_confirm",
         message=f"{shelf_id} 货架识别到未知标签 {tag_id}。",
+        source=source,
+        frame_id=frame_id,
+    )
+
+
+def _shelf_scanned(shelf_id: str, source: str, frame_id: str | None) -> EventRecord:
+    return make_event(
+        "shelf_scanned",
+        item="-",
+        shelf_id=shelf_id,
+        expected_shelf=shelf_id,
+        priority=1,
+        status="normal",
+        message=f"{shelf_id} 货架扫描完成，未发现异常。",
         source=source,
         frame_id=frame_id,
     )
