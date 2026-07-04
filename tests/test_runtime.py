@@ -178,7 +178,7 @@ class RuntimeTest(unittest.TestCase):
         self.assertNotIn("rotate_right", fake_motion.calls)
         self.assertNotIn("rotate_left", fake_motion.calls)
 
-    def test_continuous_patrol_stops_when_line_is_not_centered(self) -> None:
+    def test_continuous_patrol_ignores_partial_tape_outside_line_follow_phase(self) -> None:
         store = self.make_store()
         fake_motion = FakeMotion()
         fake_sensors = FakeSensors(distances=[400] * 4, tapes=[(0, 1, 1, 1), (0, 1, 1, 1)])
@@ -205,7 +205,7 @@ class RuntimeTest(unittest.TestCase):
         runtime.run_continuous_patrol(max_iterations=1)
 
         self.assertIn("stop", fake_motion.calls)
-        self.assertNotIn("move_forward", fake_motion.calls)
+        self.assertIn("move_forward", fake_motion.calls)
         self.assertNotIn("rotate_right", fake_motion.calls)
         self.assertNotIn("rotate_left", fake_motion.calls)
 

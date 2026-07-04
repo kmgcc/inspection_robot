@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import itertools
+import json
 import os
 import threading
 import time
@@ -12,7 +13,7 @@ from .audio import start_audio_cue
 from .config import ShelfManifest, WarehouseMap
 from .core.planner import PlanningError, RouteStep, plan_patrol_route
 from .core.store import InspectionStore
-from .robot import alarm, gimbal, motion, sensors
+from .robot import alarm, gimbal, motion, mpu6050, sensors
 from .robot.sensors import RobotHardwareError
 from .vision import tag_detector
 from .vision.tag_detector import VisionDependencyError
@@ -21,6 +22,7 @@ from .vision.tag_detector import VisionDependencyError
 Cell = tuple[int, int]
 DetectionProvider = Callable[..., Iterator[Mapping[str, object]]]
 HEADINGS = ["N", "E", "S", "W"]
+DEFAULT_BOUNDARY_ACTION_PATTERN = "turn_follow,turn_patrol,bypass,turn_follow,turn_patrol"
 
 
 @dataclass(slots=True)
@@ -48,6 +50,7 @@ class RobotRuntimeConfig:
     line_follow_enabled: bool = os.environ.get("LINE_FOLLOW_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
     line_follow_speed: int = int(os.environ.get("LINE_FOLLOW_SPEED", os.environ.get("ROBOT_PATROL_SPEED", os.environ.get("ROBOT_SLOW_SPEED", "5"))))
     line_follow_step_seconds: float = float(os.environ.get("LINE_FOLLOW_STEP_SECONDS", os.environ.get("ROBOT_STEP_SECONDS", "0.14")))
+    boundary_action_pattern: str = os.environ.get("BOUNDARY_ACTION_PATTERN", DEFAULT_BOUNDARY_ACTION_PATTERN)
     turns_per_cycle: int = 2
     skip_scan_cycles: int = 1
     camera_device: int = 0
@@ -65,6 +68,7 @@ class RobotRuntime:
         sensor_adapter: Any = sensors,
         alarm_adapter: Any = alarm,
         gimbal_adapter: Any = gimbal,
+        imu_adapter: Any = mpu6050,
         detection_provider: DetectionProvider = tag_detector.iter_detections,
     ) -> None:
         self.store = store
@@ -77,12 +81,15 @@ class RobotRuntime:
         self.sensors = sensor_adapter
         self.alarm = alarm_adapter
         self.gimbal = gimbal_adapter
+        self.imu = imu_adapter
         self.detection_provider = detection_provider
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._blocked_count = 0
         self._obstacle_active = False
         self._last_boundary_turn = 0.0
+        self._boundary_action_index = 0
+        self._line_follow_active = False
 
     def start(self, shelf_order: Iterable[str] | None = None) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -121,6 +128,9 @@ class RobotRuntime:
         self.store.start()
         self.store.record_cycle(1, True)
         self.store.record_robot_status("PATROLLING", "自主巡检循环已启动，小车慢速前进。")
+        self._boundary_action_index = 0
+        self._line_follow_active = False
+        self._show_normal()
         self._initialize_gimbal()
 
         iterations = 0
@@ -135,21 +145,28 @@ class RobotRuntime:
                 return
 
             tape_state = self.sensors.read_tape_boundary()
-            if self._handle_tape_boundary_turn(tape_state):
-                turn_count += 1
-                cycle_count = turn_count // max(1, self.config.turns_per_cycle)
-                current_cycle = cycle_count + 1
-                self.store.record_cycle(current_cycle, current_cycle <= self.config.skip_scan_cycles)
-                self.store.record_robot_status(
-                    "TURNING_AT_BOUNDARY",
-                    f"检测到货架尽头黑胶带，已顺时针转向；当前第 {current_cycle} 轮。",
-                )
+            boundary_outcome = self._handle_tape_boundary(tape_state)
+            if boundary_outcome != "none":
+                if boundary_outcome == "turn":
+                    turn_count += 1
+                    cycle_count = turn_count // max(1, self.config.turns_per_cycle)
+                    current_cycle = cycle_count + 1
+                    self.store.record_cycle(current_cycle, current_cycle <= self.config.skip_scan_cycles)
+                    self.store.record_robot_status(
+                        "TURNING_AT_BOUNDARY",
+                        f"检测到固定转向黑胶带，已顺时针转向；当前第 {current_cycle} 轮。",
+                    )
+                else:
+                    current_cycle = cycle_count + 1
+                    self.store.record_cycle(current_cycle, current_cycle <= self.config.skip_scan_cycles)
+                    self.store.record_robot_status("FORBIDDEN_ZONE_WAIT", "检测到非寻线禁区，已按障碍绕行。")
                 continue
 
             if not self._guard_obstacle(None):
                 continue
 
             self._drive_patrol_step(tape_state)
+            self._show_line_follow() if self._line_follow_active else self._show_normal()
             iterations += 1
             current_cycle = cycle_count + 1
             self.store.record_cycle(current_cycle, current_cycle <= self.config.skip_scan_cycles)
@@ -206,33 +223,61 @@ class RobotRuntime:
         self.store.finish_run()
 
     def _guard_before_move(self, shelf_id: str | None, heading: str) -> str | None:
-        if self._handle_tape_boundary_turn():
+        boundary_outcome = self._handle_tape_boundary()
+        if boundary_outcome == "turn":
             return _heading_after_right_turn(heading)
+        if boundary_outcome == "bypass":
+            return heading
         if not self._guard_obstacle(shelf_id):
             return None
         return heading
 
     def _handle_tape_boundary_turn(self, tape_state: tuple[int, int, int, int] | None = None) -> bool:
+        return self._handle_tape_boundary(tape_state) == "turn"
+
+    def _handle_tape_boundary(self, tape_state: tuple[int, int, int, int] | None = None) -> str:
         if tape_state is None:
             tape_state = self.sensors.read_tape_boundary()
         if not self._candidate_boundary(tape_state):
-            return False
+            return "none"
         now = time.monotonic()
         if now - self._last_boundary_turn < self.config.boundary_cooldown_seconds:
-            return False
+            return "none"
         self.motion.stop()
         confirmed_state = self._confirm_boundary_state(tape_state)
         if confirmed_state is None:
-            return False
+            return "none"
         self._last_boundary_turn = now
+        action = self._next_boundary_action()
+        if action == "bypass":
+            return self._handle_forbidden_bypass(confirmed_state)
+        return self._handle_planned_boundary_turn(confirmed_state, action)
+
+    def _handle_planned_boundary_turn(self, tape_state: tuple[int, int, int, int], action: str) -> str:
+        zone_id = f"black-tape-route-{self._boundary_action_index + 1}"
         self.alarm.show_warning()
-        self.store.record_boundary(confirmed_state, True, "column_end")
-        self.store.record_forbidden_zone("black-tape-end", True)
+        self.store.record_boundary(tape_state, True, action)
+        self.store.record_forbidden_zone(zone_id, True)
         self._turn_90("right")
         self.store.record_boundary_turn("clockwise", 90)
-        self.store.record_forbidden_zone("black-tape-end", False)
-        self.alarm.show_normal()
-        return True
+        self._line_follow_active = action == "turn_follow" and self.config.line_follow_enabled
+        self.store.record_forbidden_zone(zone_id, False)
+        self._advance_boundary_action()
+        self._show_line_follow() if self._line_follow_active else self._show_normal()
+        return "turn"
+
+    def _handle_forbidden_bypass(self, tape_state: tuple[int, int, int, int]) -> str:
+        zone_id = f"black-tape-bypass-{self._boundary_action_index + 1}"
+        self._line_follow_active = False
+        self.alarm.show_obstacle_wait()
+        self.store.record_boundary(tape_state, True, "route_forbidden_bypass")
+        self.store.record_forbidden_zone(zone_id, True)
+        self._play_cue("obstacle", "检测到非寻线禁区，小车按障碍绕行。")
+        if self._avoid_to_safe_side(None):
+            self.store.record_forbidden_zone(zone_id, False)
+            self._show_normal()
+        self._advance_boundary_action()
+        return "bypass"
 
     def _candidate_boundary(self, tape_state: tuple[int, int, int, int] | None) -> bool:
         min_black = max(1, min(4, int(self.config.boundary_min_black_sensors)))
@@ -257,17 +302,33 @@ class RobotRuntime:
         return state
 
     def _drive_patrol_step(self, tape_state: tuple[int, int, int, int] | None) -> None:
-        if self.config.line_follow_enabled and not self._line_is_centered(tape_state):
-            self.motion.stop()
-            self._settle()
-            tape_state = self.sensors.read_tape_boundary()
-            if not self._line_is_centered(tape_state):
-                self.store.record_boundary(tape_state, False, "line_not_centered")
-                return
+        if self._line_follow_active and self.config.line_follow_enabled:
+            self._drive_line_follow_step(tape_state)
+            return
         self._forward_step(
-            speed=self.config.line_follow_speed if self.config.line_follow_enabled else self.config.patrol_speed,
-            duration_seconds=self.config.line_follow_step_seconds if self.config.line_follow_enabled else self.config.step_seconds,
+            speed=self.config.patrol_speed,
+            duration_seconds=self.config.step_seconds,
         )
+
+    def _drive_line_follow_step(self, tape_state: tuple[int, int, int, int] | None) -> None:
+        if self._line_is_centered(tape_state):
+            self._forward_step(speed=self.config.line_follow_speed, duration_seconds=self.config.line_follow_step_seconds)
+            return
+        if tape_state is None or all(value == 1 for value in tape_state):
+            self.motion.stop()
+            self.store.record_boundary(tape_state, False, "line_follow_lost")
+            return
+        self.store.record_boundary(tape_state, False, "line_follow_correction")
+        left, left_center, right_center, right = tape_state
+        if left == 0 or left_center == 0:
+            self.motion.strafe_left_slow(speed=self.config.line_follow_speed, duration_seconds=self.config.line_follow_step_seconds)
+        elif right == 0 or right_center == 0:
+            self.motion.strafe_right_slow(speed=self.config.line_follow_speed, duration_seconds=self.config.line_follow_step_seconds)
+        else:
+            self.motion.stop()
+            return
+        self.motion.stop()
+        self._settle()
 
     @staticmethod
     def _line_is_centered(tape_state: tuple[int, int, int, int] | None) -> bool:
@@ -404,6 +465,13 @@ class RobotRuntime:
     def _distance_clear(self, distance_mm: int | None) -> bool:
         return distance_mm is not None and distance_mm >= self.config.clear_distance_mm
 
+    def _next_boundary_action(self) -> str:
+        pattern = _boundary_action_pattern(self.config.boundary_action_pattern)
+        return pattern[self._boundary_action_index % len(pattern)]
+
+    def _advance_boundary_action(self) -> None:
+        self._boundary_action_index += 1
+
     def _safe_side_for_shelf(self, shelf_id: str | None) -> str | None:
         if shelf_id is None:
             return None
@@ -457,15 +525,26 @@ class RobotRuntime:
 
     def _turn_90(self, direction: str, *, speed: int | None = None, duration_seconds: float | None = None) -> None:
         normalized = direction.strip().lower()
+        turn_speed = self.config.turn_speed if speed is None else speed
+        turn_seconds = self.config.turn_90_seconds if duration_seconds is None else duration_seconds
+        imu_turn = getattr(self.imu, "turn_90", None)
+        if callable(imu_turn):
+            try:
+                if imu_turn(normalized, self.motion, turn_speed, turn_seconds):
+                    self.motion.stop()
+                    self._settle()
+                    return
+            except RobotHardwareError as exc:
+                self.store.record_robot_status("TURNING_AT_BOUNDARY", f"MPU6050 turn skipped: {exc}")
         if normalized == "left":
             self.motion.rotate_left_slow(
-                speed=self.config.turn_speed if speed is None else speed,
-                duration_seconds=self.config.turn_90_seconds if duration_seconds is None else duration_seconds,
+                speed=turn_speed,
+                duration_seconds=turn_seconds,
             )
         elif normalized == "right":
             self.motion.rotate_right_slow(
-                speed=self.config.turn_speed if speed is None else speed,
-                duration_seconds=self.config.turn_90_seconds if duration_seconds is None else duration_seconds,
+                speed=turn_speed,
+                duration_seconds=turn_seconds,
             )
         else:
             raise ValueError(f"unsupported turn direction: {direction}")
@@ -476,6 +555,22 @@ class RobotRuntime:
         delay = max(0.0, float(self.config.action_settle_seconds))
         if delay > 0:
             time.sleep(delay)
+
+    def _show_normal(self) -> None:
+        try:
+            self.alarm.show_normal()
+        except RobotHardwareError:
+            pass
+
+    def _show_line_follow(self) -> None:
+        indicator = getattr(self.alarm, "show_line_follow", None)
+        try:
+            if callable(indicator):
+                indicator()
+            else:
+                self.alarm.show_normal()
+        except RobotHardwareError:
+            pass
 
     def _scan_shelf(self, step: RouteStep, heading: str) -> str:
         shelf_id = str(step["shelf_id"])
@@ -575,12 +670,24 @@ def _normalize_heading(value: str, fallback: str) -> str:
     return normalized if normalized in HEADINGS else fallback
 
 
+def _boundary_action_pattern(raw_pattern: str) -> list[str]:
+    actions: list[str] = []
+    for item in raw_pattern.split(","):
+        normalized = item.strip().lower().replace("-", "_")
+        if normalized in {"turn_follow", "follow", "line", "line_follow"}:
+            actions.append("turn_follow")
+        elif normalized in {"turn_patrol", "patrol", "exit_line", "line_exit"}:
+            actions.append("turn_patrol")
+        elif normalized in {"bypass", "avoid", "obstacle", "forbidden"}:
+            actions.append("bypass")
+    return actions or ["turn_follow", "turn_patrol", "bypass", "turn_follow", "turn_patrol"]
+
+
 def _cells_from_step(step: RouteStep) -> list[Cell]:
     return [(int(cell[0]), int(cell[1])) for cell in step["path"]]
 
 
 def load_calibration_into_config(config: RobotRuntimeConfig, root: Path) -> None:
-    import json
     path = root / "config" / "calibration.json"
     if path.exists():
         try:
@@ -598,5 +705,5 @@ def load_calibration_into_config(config: RobotRuntimeConfig, root: Path) -> None
                 config.line_follow_speed = int(data["line_follow_speed"])
             if data.get("line_follow_step_seconds") is not None:
                 config.line_follow_step_seconds = float(data["line_follow_step_seconds"])
-        except Exception:
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
             pass

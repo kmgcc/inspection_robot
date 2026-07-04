@@ -76,7 +76,7 @@ class RobotAdapterTest(unittest.TestCase):
 
         self.assertIn(("rgb", 1, alarm.COLOR_PURPLE), fake.calls)
         self.assertIn(("beep", 1), fake.calls)
-        self.assertIn(("rgb", 0, 0), fake.calls)
+        self.assertIn(("rgb", 1, alarm.COLOR_GREEN), fake.calls)
 
     def test_iter_tag_ids_delegates_to_detection_iterator(self) -> None:
         original = tag_detector.iter_detections

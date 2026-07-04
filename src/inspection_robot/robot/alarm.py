@@ -38,7 +38,12 @@ def show_high_priority_alarm() -> None:
 def clear_alarm() -> None:
     bot = get_bot()
     _call_optional(bot, "Ctrl_BEEP_Switch", 0)
-    _call_optional(bot, "Ctrl_WQ2812_ALL", 0, 0)
+    _call_optional(bot, "Ctrl_WQ2812_ALL", 1, COLOR_GREEN)
+
+
+def show_line_follow() -> None:
+    _set_rgb(COLOR_CYAN)
+    _beep(0)
 
 
 def _set_rgb(color_index: int) -> None:

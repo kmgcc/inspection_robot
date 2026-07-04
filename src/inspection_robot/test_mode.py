@@ -349,9 +349,9 @@ class TestSessionManager:
 
     def _line_follow_worker(self, speed: int, step_seconds: float) -> None:
         """
-        高级巡线测试（连续控制，参考小车官方巡线逻辑）：
-        - 使用无阻碍的连续指令 (duration_seconds=0.0) 保证行驶平稳；
-        - 根据 4 路传感器的物理排列 (x2, x1, x3, x4) 进行精准方向修正；
+        安全寻线测试：
+        - 使用有边界的短步指令，每步后显式 stop；
+        - 根据 4 路传感器的物理排列 (x2, x1, x3, x4) 做小幅平移修正；
         - 包含丢线安全保护，连续 15 次（约 150ms）检测到全白时自动停车；
         - 支持随时通过 _stop_event 手动急停。
         """
@@ -385,52 +385,18 @@ class TestSessionManager:
                 else:
                     lost_counter = 0  # 重新检测到线，计数器清零
 
-                # 2. 官方寻线分支逻辑
-                # 分支 A：全黑 (0, 0, 0, 0)
-                if left == 0 and left_center == 0 and right_center == 0 and right == 0:
-                    self._motion.move_forward_slow(speed=speed, duration_seconds=0.0)
-                    time.sleep(poll_interval)
-
-                # 分支 B：右大弯或右锐角 (左或左中为黑，且右为黑)
-                elif (left_center == 0 or left == 0) and right == 0:
-                    self._motion.rotate_right_slow(speed=speed, duration_seconds=0.0)
-                    time.sleep(0.05)
-
-                # 分支 C：左大弯或左锐角 (左为黑，且右或右中为黑)
-                elif left == 0 and (right == 0 or right_center == 0):
-                    turn_speed = min(100, int(speed * 1.5))
-                    self._motion.rotate_left_slow(speed=turn_speed, duration_seconds=0.0)
-                    time.sleep(0.15)
-
-                # 分支 D：左最外侧检测到黑线 (车身偏右，需要向左修正)
-                elif left == 0:
-                    self._motion.rotate_left_slow(speed=speed, duration_seconds=0.0)
-                    time.sleep(0.02)
-
-                # 分支 E：右最外侧检测到黑线 (车身偏左，需要向右修正)
-                elif right == 0:
-                    self._motion.rotate_right_slow(speed=speed, duration_seconds=0.0)
-                    time.sleep(0.02)
-
-                # 分支 F：左中检测到黑线，右中为白 (车身微偏右，微调左转)
-                elif left_center == 0 and right_center == 1:
-                    self._motion.rotate_left_slow(speed=speed, duration_seconds=0.0)
-                    time.sleep(poll_interval)
-
-                # 分支 G：左中为白，右中检测到黑线 (车身微偏左，微调右转)
-                elif left_center == 1 and right_center == 0:
-                    self._motion.rotate_right_slow(speed=speed, duration_seconds=0.0)
-                    time.sleep(poll_interval)
-
-                # 分支 H：中间两路均在黑线上 (完美居中，直行)
-                elif left_center == 0 and right_center == 0:
-                    self._motion.move_forward_slow(speed=speed, duration_seconds=0.0)
-                    time.sleep(poll_interval)
-
+                if left_center == 0 and right_center == 0:
+                    self._motion.move_forward_slow(speed=speed, duration_seconds=step_seconds)
+                elif left == 0 or left_center == 0:
+                    self._motion.strafe_left_slow(speed=speed, duration_seconds=step_seconds)
+                elif right == 0 or right_center == 0:
+                    self._motion.strafe_right_slow(speed=speed, duration_seconds=step_seconds)
                 else:
-                    # 其它复合或未定义状态微调直行
-                    self._motion.move_forward_slow(speed=speed, duration_seconds=0.0)
+                    self._motion.stop()
                     time.sleep(poll_interval)
+                    continue
+                self._motion.stop()
+                time.sleep(poll_interval)
 
             self._motion.stop()
             self._finish_session("manual")

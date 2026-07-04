@@ -1,0 +1,266 @@
+from __future__ import annotations
+
+import sys
+import tempfile
+import unittest
+from collections.abc import Iterator
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from inspection_robot.config import DEFAULT_TAG_MAP
+from inspection_robot.config_defaults import DEFAULT_SHELF_MANIFEST, DEFAULT_WAREHOUSE_MAP
+from inspection_robot.core.store import InspectionStore
+from inspection_robot.robot import sensors
+from inspection_robot.runtime import RobotRuntime, RobotRuntimeConfig
+
+
+class RuntimeRouteSafetyTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def make_store(self) -> InspectionStore:
+        return InspectionStore(
+            DEFAULT_TAG_MAP,
+            warehouse_map=DEFAULT_WAREHOUSE_MAP,
+            shelf_manifest={"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            root=self.root,
+        )
+
+    def make_config(self) -> RobotRuntimeConfig:
+        return RobotRuntimeConfig(
+            patrol_speed=5,
+            step_seconds=0,
+            poll_seconds=0,
+            scan_timeout_seconds=0,
+            scan_interval_seconds=999,
+            action_settle_seconds=0,
+            boundary_cooldown_seconds=0,
+            boundary_confirm_samples=1,
+            boundary_min_black_sensors=4,
+            line_follow_speed=7,
+            line_follow_step_seconds=0,
+            obstacle_wait_seconds=0,
+            avoidance_body_seconds=0,
+        )
+
+    def test_partial_tape_outside_route_line_follow_keeps_patrol_forward(self) -> None:
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        fake_sensors = FakeSensors(distances=[400] * 4, tapes=[(0, 1, 1, 1)] * 3)
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=self.make_config(),
+            motion_adapter=fake_motion,
+            sensor_adapter=fake_sensors,
+            alarm_adapter=FakeAlarm(),
+            gimbal_adapter=FakeGimbal(),
+            detection_provider=fake_detection_provider,
+        )
+
+        runtime.run_continuous_patrol(max_iterations=1)
+
+        self.assertIn(("move_forward", 5, 0), fake_motion.calls)
+        self.assertNotIn(("move_forward", 7, 0), fake_motion.calls)
+
+    def test_fixed_boundary_pattern_enters_and_exits_line_follow(self) -> None:
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        fake_sensors = FakeSensors(
+            distances=[400] * 8,
+            tapes=[(0, 0, 0, 0), (1, 0, 0, 1), (0, 0, 0, 0), (0, 1, 1, 1)],
+        )
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=self.make_config(),
+            motion_adapter=fake_motion,
+            sensor_adapter=fake_sensors,
+            alarm_adapter=FakeAlarm(),
+            gimbal_adapter=FakeGimbal(),
+            detection_provider=fake_detection_provider,
+        )
+
+        runtime.run_continuous_patrol(max_iterations=2)
+
+        self.assertEqual(fake_motion.names().count("rotate_right"), 2)
+        self.assertIn(("move_forward", 7, 0), fake_motion.calls)
+        self.assertIn(("move_forward", 5, 0), fake_motion.calls)
+
+    def test_third_route_forbidden_zone_is_bypassed_not_line_followed(self) -> None:
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        fake_sensors = FakeSensors(
+            distances=[400] * 24,
+            tapes=[
+                (0, 0, 0, 0),
+                (1, 0, 0, 1),
+                (0, 0, 0, 0),
+                (0, 1, 1, 1),
+                (0, 0, 0, 0),
+                (1, 1, 1, 1),
+            ],
+        )
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=self.make_config(),
+            motion_adapter=fake_motion,
+            sensor_adapter=fake_sensors,
+            alarm_adapter=FakeAlarm(),
+            gimbal_adapter=FakeGimbal(),
+            detection_provider=fake_detection_provider,
+        )
+
+        runtime.run_continuous_patrol(max_iterations=3)
+        event_types = [event["type"] for event in store.snapshot()["events"]]
+
+        self.assertIn("obstacle_avoidance_step", event_types)
+        self.assertIn(("move_forward", 5, 0), fake_motion.calls)
+
+    def test_planned_boundary_turn_delegates_to_mpu6050_adapter_when_available(self) -> None:
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        fake_imu = FakeImuAdapter()
+        fake_sensors = FakeSensors(distances=[400] * 4, tapes=[(0, 0, 0, 0), (1, 0, 0, 1)])
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=self.make_config(),
+            motion_adapter=fake_motion,
+            sensor_adapter=fake_sensors,
+            alarm_adapter=FakeAlarm(),
+            gimbal_adapter=FakeGimbal(),
+            detection_provider=fake_detection_provider,
+            imu_adapter=fake_imu,
+        )
+
+        runtime.run_continuous_patrol(max_iterations=1)
+
+        self.assertEqual(fake_imu.calls, [("right", 20, 0.6)])
+        self.assertNotIn("rotate_right", fake_motion.names())
+
+    def test_runtime_refreshes_normal_led_during_patrol(self) -> None:
+        store = self.make_store()
+        fake_alarm = FakeAlarm()
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=self.make_config(),
+            motion_adapter=FakeMotion(),
+            sensor_adapter=FakeSensors(distances=[400] * 4, tapes=[(1, 1, 1, 1)] * 3),
+            alarm_adapter=fake_alarm,
+            gimbal_adapter=FakeGimbal(),
+            detection_provider=fake_detection_provider,
+        )
+
+        runtime.run_continuous_patrol(max_iterations=1)
+
+        self.assertIn("normal", fake_alarm.calls)
+
+
+class FakeMotion:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int | None, float | None]] = []
+
+    def move_forward_slow(self, *, speed: int, duration_seconds: float) -> None:
+        self.calls.append(("move_forward", speed, duration_seconds))
+
+    def move_backward_slow(self, *, speed: int, duration_seconds: float) -> None:
+        self.calls.append(("move_backward", speed, duration_seconds))
+
+    def strafe_left_slow(self, *, speed: int, duration_seconds: float) -> None:
+        self.calls.append(("strafe_left", speed, duration_seconds))
+
+    def strafe_right_slow(self, *, speed: int, duration_seconds: float) -> None:
+        self.calls.append(("strafe_right", speed, duration_seconds))
+
+    def rotate_left_slow(self, *, speed: int, duration_seconds: float) -> None:
+        self.calls.append(("rotate_left", speed, duration_seconds))
+
+    def rotate_right_slow(self, *, speed: int, duration_seconds: float) -> None:
+        self.calls.append(("rotate_right", speed, duration_seconds))
+
+    def stop(self) -> None:
+        self.calls.append(("stop", None, None))
+
+    def names(self) -> list[str]:
+        return [name for name, _, _ in self.calls]
+
+
+class FakeSensors:
+    def __init__(self, distances: list[int | None], tapes: list[tuple[int, int, int, int] | None]) -> None:
+        self.distances = list(distances)
+        self.tapes = list(tapes)
+
+    def read_distance_mm(self) -> int | None:
+        if self.distances:
+            return self.distances.pop(0)
+        return 400
+
+    def read_tape_boundary(self) -> tuple[int, int, int, int] | None:
+        if self.tapes:
+            return self.tapes.pop(0)
+        return (1, 1, 1, 1)
+
+    @staticmethod
+    def full_tape_boundary_detected(state: tuple[int, int, int, int] | None) -> bool:
+        return sensors.full_tape_boundary_detected(state)
+
+    @staticmethod
+    def tape_boundary_count_detected(state: tuple[int, int, int, int] | None, min_black: int = 2) -> bool:
+        return sensors.tape_boundary_count_detected(state, min_black=min_black)
+
+
+class FakeAlarm:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def show_normal(self) -> None:
+        self.calls.append("normal")
+
+    def show_obstacle_wait(self) -> None:
+        self.calls.append("obstacle_wait")
+
+    def show_warning(self) -> None:
+        self.calls.append("warning")
+
+    def clear_alarm(self) -> None:
+        self.calls.append("clear")
+
+
+class FakeGimbal:
+    def initialize_side_camera(self) -> None:
+        pass
+
+
+class FakeImuAdapter:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int, float]] = []
+
+    def turn_90(self, direction: str, motion_adapter: FakeMotion, speed: int, fallback_seconds: float) -> bool:
+        self.calls.append((direction, speed, fallback_seconds))
+        motion_adapter.stop()
+        return True
+
+
+def fake_detection_provider(**_: object) -> Iterator[dict[str, object]]:
+    yield {"tag_id": "101", "kind": "shelf", "shelf_id": "A1", "marker_family": "TAG36H11", "ocr_text": "A1"}
+
+
+if __name__ == "__main__":
+    unittest.main()

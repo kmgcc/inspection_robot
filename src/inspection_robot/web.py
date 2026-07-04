@@ -46,6 +46,7 @@ def create_app(root: Path | None = None) -> Flask:
     @app.post("/api/start")
     def api_start():
         if _robot_mode_enabled():
+            _stop_test_session()
             runtime = _ensure_runtime()
             runtime.start()
             store.record_run_mode("robot", True)
@@ -235,6 +236,7 @@ def create_app(root: Path | None = None) -> Flask:
         speed = _int_payload(payload, "speed", int(default_speed))
         duration = _float_payload(payload, "duration_seconds", float(default_dur))
         try:
+            _stop_test_session()
             runtime.stop()
             _run_manual_command(command, speed=speed, duration_seconds=duration, runtime=runtime)
         except (RobotHardwareError, ValueError) as exc:
@@ -377,6 +379,7 @@ def create_app(root: Path | None = None) -> Flask:
         duration = _float_payload(payload, "duration_seconds", float(cal.get("straight_step_seconds", 2.0)))
         session = _ensure_test_session()
         try:
+            _stop_runtime()
             session.run_straight_test(direction, speed, duration)
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
@@ -404,6 +407,7 @@ def create_app(root: Path | None = None) -> Flask:
         duration = _float_payload(payload, "duration_seconds", default_dur)
         session = _ensure_test_session()
         try:
+            _stop_runtime()
             session.run_turn_test(direction, speed, duration)
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
@@ -423,6 +427,7 @@ def create_app(root: Path | None = None) -> Flask:
         step_seconds = _float_payload(payload, "step_seconds", float(cal.get("line_follow_step_seconds", 0.14)))
         session = _ensure_test_session()
         try:
+            _stop_runtime()
             session.run_line_follow_test(speed, step_seconds)
         except RobotHardwareError as exc:
             store.record_robot_status("ERROR", str(exc))
@@ -475,6 +480,16 @@ def create_app(root: Path | None = None) -> Flask:
             active_motion.stop()
         else:
             raise ValueError(f"unknown manual command: {command}")
+
+    def _stop_test_session() -> None:
+        session = app.config.get("TEST_SESSION")
+        if session is not None:
+            session.stop()
+
+    def _stop_runtime() -> None:
+        runtime = app.config.get("ROBOT_RUNTIME")
+        if runtime is not None:
+            runtime.stop()
 
     def _robot_mode_enabled() -> bool:
         return str(app.config.get("RUN_MODE", "simulate")).strip().lower() == "robot"
