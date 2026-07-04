@@ -10,28 +10,34 @@
 
 **项目名称：** 固定仓库场景下的麦克纳姆轮巡逻小车
 
-**项目目标：** 在 RASPBOT V2 麦轮小车上完成"固定地图路径规划、黑胶带禁区规避、超声波避障、侧向货架扫描、多模态物品识别、物品异常上报、网页看板展示"的课程演示系统。
+**项目目标：** 在 RASPBOT V2 麦轮小车上完成"固定货架通道循环巡逻、列端黑胶带触发转向、超声波避障与嵌套绕行、侧向货架扫描、多模态物品识别、缺货等异常上报、网页看板展示"的课程演示系统。**真实主链路是货架通道循环巡逻，不是固定栅格路径规划**；地图由运行中识别到的货架/边界动态生成拓扑，不是预先画死的栅格。
 
 **项目边界（重要）：**
-- ✅ 固定小场景巡逻
-- ✅ 货架识别与异常检测
-- ✅ 网页看板展示
+- ✅ 固定货架通道循环巡逻（A 列 → B 列 → A 列，循环往复）
+- ✅ 列端四路全黑触发顺时针 90 度转向
+- ✅ 超声波避障（6 秒等待 + 右侧绕行 + 嵌套避障）
+- ✅ 侧向货架扫描与多模态物品识别（AprilTag / OCR / 颜色 / 图像）
+- ✅ 缺货、错放、重复、未知、证据冲突等异常上报
+- ✅ 网页看板展示与真车手动控制
 - ❌ 不做 SLAM
 - ❌ 不做开放环境自动驾驶
 - ❌ 不训练大型识别模型
 - ❌ 不做机械臂搬运
 - ⚠️ LLM 仅用于告警后处理摘要，不参与实时底盘控制
+- ⚠️ `warehouse_map.json` 固定栅格仅作软件兜底/演示/未来扩展，不是真车主地图接口
 
 ### 1.2 技术栈
 
 | 层级 | 技术 |
 |------|------|
 | 后端框架 | Python 3 + Flask |
-| 硬件平台 | RASPBOT V2 麦轮小车 (树莓派) |
-| 机器人框架 | ROS2 (Docker 容器内) |
+| 硬件平台 | RASPBOT V2 麦轮小车 (树莓派 5) |
+| 运动控制 | 麦轮运动库 `McLumk_Wheel_Sports` + I2C 传感器 `Raspbot_Lib`（延迟导入，import 安全） |
+| 姿态辅助 | MPU6050（陀螺仪/加速度，辅助 90 度转向标定，不主导航） |
+| 机器人框架 | ROS2 (Docker 容器内，可选调试用) |
 | 识别技术 | AprilTag TAG36H11, OCR, 颜色识别, 图像分类 |
 | 通信协议 | SSH, VNC, HTTP REST API |
-| 部署方式 | rsync + SSH, Docker |
+| 部署方式 | rsync + SSH, systemd 自启 |
 
 ### 1.3 分工结构
 
@@ -61,12 +67,15 @@
 4. **保持向后兼容**：不能删除旧字段，只能新增扩展字段
 
 **计划文档入口：**
-- `docs/PROJECT_PLAN.md` - 全局规划书
+- `docs/REAL_REQUIREMENTS.md` - **真实需求基准文档（最高权威，冲突时以此为准）**
 - `docs/api_contract.md` - 共享 API 契约（最重要）
+- `docs/PROJECT_PLAN.md` - 全局规划书
 - `docs/plans/0.1-plan-shared-contract.md` - 基准计划
 - `docs/plans/1.1-plan-robot-io.md` - 硬件计划
 - `docs/plans/2.1-plan-core-contract.md` - 核心逻辑计划
 - `docs/plans/3.1-plan-dashboard-demo.md` - 看板演示计划
+
+> ⚠️ 若上述旧计划文档与 `REAL_REQUIREMENTS.md` 冲突，以 `REAL_REQUIREMENTS.md` 为准。旧计划中的"固定栅格地图、A* 主链路、任意一路压黑就后退"等描述已废弃。
 
 ### 2.2 多人协作：实时同步代码
 
@@ -250,23 +259,22 @@ git diff --cached --stat
 
 ```
 inspection_robot/
-├── app.py                          # Flask 看板入口
+├── app.py                          # Flask 看板入口（注入 RUN_MODE / 启动 runtime）
 ├── config/                         # 配置文件目录
-│   ├── tag_map.json                # 标签字典（物品、货架）
-│   ├── warehouse_map.json          # 仓库地图配置（按 2.1 计划创建）
-│   └── shelf_manifest.json         # 货架清单配置（按 2.1 计划创建）
-├── data/                           # 运行时数据目录
-│   └── .gitkeep
+│   ├── tag_map.json                # 标签字典（物品 1-50、货架 101-120）
+│   ├── warehouse_map.json          # 仓库地图配置（固定栅格兜底，非真车主地图）
+│   ├── shelf_manifest.json         # 货架清单配置（A1-A4 + B1-B4）
+│   └── calibration.json            # 运动标定参数（机器特定，运行时写入）
+├── data/                           # 运行时数据目录（.gitignore 忽略 *.json）
+│   ├── .gitkeep
+│   └── events.json                 # 事件持久化（断电恢复，本地不提交）
 ├── docs/                           # 文档目录
+│   ├── REAL_REQUIREMENTS.md        # 真实需求基准（最高权威）
 │   ├── PROJECT_PLAN.md             # 全局规划书
 │   ├── api_contract.md             # 共享 API 契约（核心）
 │   ├── ssh_operations.md           # SSH 连接与运维手册
 │   ├── plans/                      # 计划文档
-│   │   ├── 0.1-plan-shared-contract.md
-│   │   ├── 1.1-plan-robot-io.md
-│   │   ├── 2.1-plan-core-contract.md
-│   │   └── 3.1-plan-dashboard-demo.md
-│   └── RASPBOT-V2_Clean_Docs/     # 官方精简资料
+│   └── RASPBOT-V2_Clean_Docs/      # 官方精简资料
 ├── scripts/                        # 部署和运行脚本
 │   ├── deploy_to_car.sh            # 部署到小车
 │   ├── run_local.sh                # 本地运行
@@ -276,29 +284,62 @@ inspection_robot/
 ├── src/                            # 源代码目录
 │   └── inspection_robot/           # 主包
 │       ├── __init__.py
-│       ├── audio.py                # 音频播放
-│       ├── config.py               # 配置加载
-│       ├── state.py                # 状态管理（InspectionStore）
-│       ├── web.py                  # Flask 路由
+│       ├── app.py → (入口在仓库根 app.py)
+│       ├── audio.py                # 音频播放（paplay/aplay/ffplay 异步）
+│       ├── config.py               # 配置加载与校验
+│       ├── config_defaults.py      # 默认配置常量
+│       ├── config_types.py         # 配置类型定义
+│       ├── state.py                # 重导出垫片（→ core.store，向后兼容）
+│       ├── runtime.py              # 真车 runtime（连续巡逻/避障/扫描线程）
+│       ├── test_mode.py            # 运动测试模式（标定 + 测试会话）
+│       ├── web.py                  # Flask 路由与看板 API
+│       ├── core/                   # 核心业务逻辑子包
+│       │   ├── store.py            # InspectionStore 状态管理核心（真身）
+│       │   ├── rules.py            # 货架扫描异常规则（missing/wrong/duplicate...）
+│       │   ├── planner.py          # A* 路径规划（软件兜底/演示）
+│       │   ├── persistence.py      # 事件 JSON 持久化与 CSV 导出
+│       │   ├── events.py           # 事件构造
+│       │   ├── status.py           # DashboardState 数据类与默认值
+│       │   └── snapshot.py         # 状态快照构建（/api/status 输出）
+│       ├── robot/                  # 硬件适配子包（延迟导入，import 安全）
+│       │   ├── sensors.py          # 超声波/四路黑胶带 + I2C 单例
+│       │   ├── motion.py           # 麦轮运动封装
+│       │   ├── alarm.py            # 蜂鸣器/RGB LED
+│       │   ├── gimbal.py           # 云台（侧向摄像头初始化）
+│       │   ├── mpu6050.py          # 陀螺仪/加速度（90度转向闭环）
+│       │   ├── oled_display.py     # OLED 显示
+│       │   └── line_following.py   # 寻线决策
+│       ├── vision/                 # 视觉识别子包
+│       │   └── tag_detector.py     # AprilTag 检测迭代器
 │       ├── static/                 # 静态资源
 │       │   ├── dashboard.js
 │       │   ├── styles.css
 │       │   └── audio/
 │       └── templates/              # HTML 模板
 │           └── dashboard.html
-└── tests/                          # 测试目录
-    └── test_contract.py            # 契约测试
+└── tests/                          # 测试目录（155 项，契约+store+runtime+rules...）
+    ├── test_contract.py            # 契约测试
+    ├── test_store.py
+    ├── test_runtime.py
+    ├── test_rules.py
+    ├── test_web_api.py
+    └── ...                         # 共 17 个测试模块
 ```
 
 ### 3.2 核心文件说明
 
 | 文件 | 作用 | 重要程度 |
 |------|------|----------|
+| `docs/REAL_REQUIREMENTS.md` | 真实需求基准，最高权威 | ⭐⭐⭐⭐⭐ |
 | `docs/api_contract.md` | 共享 API 契约，定义所有接口 | ⭐⭐⭐⭐⭐ |
-| `src/inspection_robot/state.py` | 状态管理核心，InspectionStore | ⭐⭐⭐⭐⭐ |
+| `src/inspection_robot/core/store.py` | 状态管理核心，InspectionStore（真身） | ⭐⭐⭐⭐⭐ |
+| `src/inspection_robot/runtime.py` | 真车连续巡逻 runtime（线程/避障/扫描） | ⭐⭐⭐⭐⭐ |
 | `src/inspection_robot/web.py` | Flask 路由，API 端点 | ⭐⭐⭐⭐ |
+| `src/inspection_robot/core/rules.py` | 货架扫描异常规则 | ⭐⭐⭐⭐ |
 | `config/tag_map.json` | 标签字典 | ⭐⭐⭐⭐ |
 | `tests/test_contract.py` | 契约测试，保证接口不破 | ⭐⭐⭐⭐ |
+
+> 注：`src/inspection_robot/state.py` 现仅为重导出垫片（向后兼容），真正实现在 `core/store.py`。
 
 ### 3.3 使用 CodeGraph 高效掌握全局结构
 
@@ -325,7 +366,7 @@ codegraph summary
 codegraph search "def record_tag"
 
 # 查看函数调用关系
-codegraph callers src/inspection_robot/state.py:record_tag
+codegraph callers src/inspection_robot/core/store.py:record_tag
 
 # 查看函数被谁调用
 codegraph callees src/inspection_robot/web.py:api_status
@@ -351,18 +392,18 @@ codegraph generate-arch
 
 # 1. 找到函数定义
 codegraph search "def record_tag"
-# 输出：src/inspection_robot/state.py:125
+# 输出：src/inspection_robot/core/store.py:194
 
 # 2. 查看谁调用了这个函数
-codegraph callers src/inspection_robot/state.py:125
+codegraph callers src/inspection_robot/core/store.py:194
 # 输出：web.py:handle_tag, tests/test_contract.py:test_simulate_tag
 
 # 3. 查看这个函数调用了什么
-codegraph callees src/inspection_robot/state.py:125
-# 输出：_add_event, tag_map.get
+codegraph callees src/inspection_robot/core/store.py:194
+# 输出：_append_scan_events_locked, tag_map.get
 
 # 4. 评估修改影响
-codegraph impact src/inspection_robot/state.py:125
+codegraph impact src/inspection_robot/core/store.py:194
 # 输出：直接影响 web.py 和 test_contract.py
 ```
 
@@ -370,33 +411,52 @@ codegraph impact src/inspection_robot/state.py:125
 
 **推荐阅读顺序：**
 
-1. **先读契约**：`docs/api_contract.md` - 理解系统接口
-2. **再读状态**：`src/inspection_robot/state.py` - 理解核心数据结构
-3. **然后路由**：`src/inspection_robot/web.py` - 理解 API 端点
-4. **最后配置**：`config/tag_map.json` - 理解数据格式
+1. **先读需求**：`docs/REAL_REQUIREMENTS.md` - 理解真实主链路与边界
+2. **再读契约**：`docs/api_contract.md` - 理解系统接口
+3. **然后状态**：`src/inspection_robot/core/store.py` - 理解核心数据结构（InspectionStore 真身）
+4. **接着 runtime**：`src/inspection_robot/runtime.py` - 理解真车连续巡逻/避障/扫描
+5. **然后路由**：`src/inspection_robot/web.py` - 理解 API 端点
+6. **最后配置**：`config/tag_map.json` - 理解数据格式
 
 **关键类和函数：**
 
 ```python
-# 状态管理核心类
+# 状态管理核心类（core/store.py）
 class InspectionStore:
     def start()              # 开始巡检
     def stop()               # 停止巡检
     def reset()              # 重置状态
     def record_tag()         # 记录标签识别
     def record_obstacle()    # 记录障碍物
+    def record_boundary()    # 记录黑胶带边界（四路全黑/局部压黑）
+    def record_boundary_turn()  # 记录列端转向
+    def record_scan_result()    # 记录货架扫描结果
+    def record_detection_evidence()  # 记录多模态识别证据
+    def record_avoidance_step()  # 记录避障步骤（含嵌套）
+    def record_cycle()       # 记录巡检轮次（第1轮跳过缺货）
     def confirm()            # 人工确认
     def snapshot()           # 获取状态快照
     def export_events_csv()  # 导出事件 CSV
 
-# Flask 路由端点
+# 真车 runtime（runtime.py）
+class RobotRuntime:
+    def start()              # 启动后台巡逻线程
+    def stop()               # 停止巡逻
+    def run_continuous_patrol()  # 连续巡逻主循环（真车主链路）
+
+# Flask 路由端点（web.py）
 @app.get("/api/status")      # 获取状态
 @app.post("/api/start")      # 开始巡检
 @app.post("/api/stop")       # 停止巡检
 @app.post("/api/reset")      # 重置状态
 @app.post("/api/simulate/tag/<tag_id>")  # 模拟标签
 @app.post("/api/confirm")    # 确认处理
-@app.get("/api/export.csv")  # 导出 CSV
+@app.post("/api/control/<command>")      # 手动控制（forward/backward/turn_*/stop）
+@app.post("/api/gimbal/init")            # 云台初始化
+@app.post("/api/audio/announce")         # 音频播报
+@app.get("/api/calibration")             # 读取标定参数
+@app.post("/api/calibration")            # 更新标定参数
+@app.get("/api/export.csv")              # 导出 CSV
 ```
 
 ---
@@ -667,6 +727,24 @@ ros2 launch yahboomcar_bringup bringup.launch.py
 | POST | `/api/simulate/tag/<tag_id>` | 模拟标签识别 |
 | POST | `/api/confirm` | 人工确认处理 |
 | GET | `/api/export.csv` | 导出事件 CSV |
+| POST | `/api/control/<command>` | 手动控制（forward/backward/turn_left_90/turn_right_90/stop） |
+| POST | `/api/calibration/turn_90` | 90 度转向标定 |
+| GET | `/api/calibration` | 读取标定参数 |
+| POST | `/api/calibration` | 更新标定参数 |
+| POST | `/api/gimbal/init` | 云台初始化（需 robot 模式） |
+| POST | `/api/audio/play` | 播放默认音频 |
+| POST | `/api/audio/announce` | 播报指定 cue |
+| POST | `/api/test/stop` | 停止运动测试 |
+| GET | `/api/test/status` | 测试状态 + 传感器读数 |
+| POST | `/api/test/straight` | 直行测试（需 robot 模式） |
+| POST | `/api/test/turn` | 转向测试（需 robot 模式） |
+| POST | `/api/test/line_follow/start` | 寻线测试（需 robot 模式） |
+| POST | `/api/demo/path` | 演示：规划路径 |
+| POST | `/api/demo/obstacle` | 演示：注入障碍 |
+| POST | `/api/demo/forbidden` | 演示：注入禁区 |
+| POST | `/api/demo/scan/<shelf_id>/normal` | 演示：正常扫描 |
+| POST | `/api/demo/scan/<shelf_id>/abnormal` | 演示：异常扫描 |
+| POST | `/api/demo/run` | 演示：完整流程一遍 |
 
 ### 5.2 状态字段
 
@@ -703,22 +781,50 @@ ros2 launch yahboomcar_bringup bringup.launch.py
 }
 ```
 
+**真车扩展字段（按 api_contract.md）：** `run_mode`、`hardware_connected`、`patrol_cycle`、`skip_shortage_detection`、`boundary`、`audio`、`gimbal`、`motion_sensor`、`topology`。
+
 ### 5.3 状态枚举
 
 ```
-IDLE, PLANNING, PLAN_READY, MOVING, ALIGNING_SHELF, SCANNING_SHELF,
-ANALYZING, NORMAL_LOGGED, ABNORMAL_ALARM, WAIT_CONFIRM, CONFIRMED,
-OBSTACLE_WAIT, REROUTING, FORBIDDEN_ZONE_WAIT, FINISHED, STOPPED
+IDLE
+STARTING
+GIMBAL_INIT
+PATROLLING
+MOVING
+TURNING_AT_BOUNDARY
+SCANNING_SHELF
+ANALYZING
+FIRST_PASS_LEARNING
+NORMAL_LOGGED
+ABNORMAL_ALARM
+WAIT_CONFIRM
+CONFIRMED
+OBSTACLE_WAIT
+AVOIDING_OBSTACLE
+NESTED_AVOIDANCE
+FORBIDDEN_ZONE_WAIT
+MANUAL_CONTROL
+STOPPED
+ERROR
 ```
+
+旧状态兼容：`PLANNING -> STARTING`、`PLAN_READY -> STARTING`、`ALIGNING_SHELF -> SCANNING_SHELF`、`REROUTING -> AVOIDING_OBSTACLE`、`FINISHED -> STOPPED`（仅软件兜底）。
 
 ### 5.4 事件类型
 
 ```
-system, path_planned, path_step, path_replanned, forbidden_zone_detected,
-obstacle_wait, obstacle_clear, shelf_arrived, shelf_aligned, shelf_scanned,
-normal_item, unknown_item, wrong_shelf, missing_item, duplicate_item,
-evidence_mismatch, manual_confirm, llm_summary
+system, runtime_started, runtime_stopped, manual_control, motion_debug,
+gimbal_initialized, shelf_detected, item_detected, shelf_arrived,
+shelf_aligned, shelf_scanned, scan_failed, first_pass_observed,
+cycle_started, cycle_completed, boundary_full_black, boundary_turn,
+unexpected_boundary, obstacle_wait, obstacle_clear,
+obstacle_avoidance_started, obstacle_avoidance_step, obstacle_avoidance_nested,
+forbidden_zone_detected, audio_cue, light_cue,
+normal_item, missing_item, duplicate_item, wrong_shelf, unknown_item,
+untagged_evidence, evidence_mismatch, manual_confirm, llm_summary
 ```
+
+兼容旧类型：`normal_tag -> normal_item`、`unknown_tag -> unknown_item`、`wrong_zone -> wrong_shelf`、`missing_tag -> missing_item`、`duplicate_tag -> duplicate_item`、`path_planned/path_step/path_replanned` 仅软件兜底或旧演示使用。
 
 ---
 
@@ -730,21 +836,21 @@ evidence_mismatch, manual_confirm, llm_summary
 
 ```json
 {
-  "118": {
+  "101": {
     "name": "A1",
     "kind": "shelf",
     "shelf_id": "A1",
     "marker_family": "TAG36H11",
     "ocr_label": "A1"
   },
-  "46": {
+  "1": {
     "name": "Red Bottle",
     "kind": "item",
-    "item_id": "item_46",
+    "item_id": "item_01",
     "expected_shelf": "A1",
     "marker_family": "TAG36H11",
     "expected_color": "RED",
-    "expected_ocr": "ITEM-46",
+    "expected_ocr": "ITEM-01",
     "expected_image_class": "BOTTLE",
     "priority": 1
   }
@@ -762,29 +868,47 @@ evidence_mismatch, manual_confirm, llm_summary
 
 ### 6.2 warehouse_map.json（按 2.1 计划创建）
 
-仓库地图配置。
+仓库地图配置。**注意：固定栅格仅作软件兜底/演示/未来扩展，真车主链路使用运行中生成的 `topology`，不依赖此栅格。**
+
+固定栅格兜底仍可包含 `start_heading`，取值为 `N/E/S/W`，缺省为 `E`；栅格坐标约定为 `x+ = E`、`y+ = S`，与看板行列展示一致。
 
 ```json
 {
-  "grid_size": [8, 6],
+  "grid_size": [10, 6],
   "start": [0, 0],
+  "start_heading": "E",
   "home": [0, 0],
-  "forbidden_cells": [[2, 2], [2, 3]],
+  "forbidden_cells": [[2, 2], [2, 3], [4, 3]],
   "shelf_points": {
-    "A1": {"scan_pose": [3, 1, "E"], "safe_side": "W"},
-    "A2": {"scan_pose": [5, 1, "E"], "safe_side": "W"}
+    "A1": {"scan_pose": [2, 1, "E"], "safe_side": "W"},
+    "A2": {"scan_pose": [4, 1, "E"], "safe_side": "W"},
+    "B4": {"scan_pose": [8, 4, "W"], "safe_side": "E"}
   }
 }
 ```
 
 ### 6.3 shelf_manifest.json（按 2.1 计划创建）
 
-货架清单配置。
+货架清单配置。真实场地覆盖 A 列 `A1-A4` 和 B 列 `B1-B4`；B 列从 A 列转过来后从末端开始巡检，实际经过顺序为 `B4`、`B3`、`B2`、`B1`。
 
 ```json
 {
-  "A1": {"expected_items": ["item_01", "item_02", "item_03"]},
-  "A2": {"expected_items": ["item_04", "item_05"]}
+  "A1": {"expected_items": ["item_01", "item_02"]},
+  "A2": {"expected_items": ["item_03"]},
+  "A3": {"expected_items": ["item_04"]},
+  "A4": {"expected_items": ["item_05"]},
+  "B4": {"expected_items": ["item_09", "item_10"]},
+  "B3": {"expected_items": ["item_08"]},
+  "B2": {"expected_items": ["item_07"]},
+  "B1": {"expected_items": ["item_06"]}
+}
+```
+
+建议另行保存实际巡检顺序（前端 `dashboard.js` 已硬编码 `PATROL_ORDER = ["A1","A2","A3","A4","B4","B3","B2","B1"]`）：
+
+```json
+{
+  "patrol_order": ["A1", "A2", "A3", "A4", "B4", "B3", "B2", "B1"]
 }
 ```
 
@@ -837,19 +961,23 @@ scripts/run_on_car.sh
 ### 8.1 技术边界
 
 - **黑胶带**：表示禁区、边界或兜底保护线，不是主巡线路径
+- **黑胶带两类语义**：四路全黑 = 列端触发顺时针 90 度转向；局部压黑 = 非预期禁区保护（停车等待，不当作正常巡线）
 - **货架识别**：以 AprilTag TAG36H11 为主，OCR 识别货架号作为补充
 - **物品识别**：AprilTag 负责稳定身份，颜色和图像用于复核展示
 - **AprilTag ID**：必须分段管理，物品、货架、定位点、特殊区域不能复用
-- **动态避障**：超声波停车、等待、保守绕行，不承诺开放环境自由驾驶
+- **动态避障**：超声波停车、等待 6 秒、保守绕行，不承诺开放环境自由驾驶
+- **嵌套避障**：绕行中遇新障碍可中断并嵌套执行新一轮绕行
 - **红外传感器**：用于识别黑胶带禁区边界，是安全兜底，不是主循迹控制
+- **MPU6050**：辅助 90 度转向闭环标定与姿态记录，不主导航、不替代黑胶带触发
 - **人工按钮**：用于确认处理或复核异常
 
 ### 8.2 开发约束
 
 - 不能删除旧字段，只能新增扩展字段
-- 不能在 import 时触碰硬件
+- 不能在 import 时触碰硬件（`robot/` 子包一律延迟导入）
 - LLM 不参与实时底盘控制
 - 现场演示必须保留软件模拟兜底
+- 第一轮巡逻只观察不上报缺货，第二轮开始才判断缺货等异常
 
 ---
 
@@ -884,7 +1012,8 @@ git push origin main
 | 文件 | 用途 |
 |------|------|
 | `docs/api_contract.md` | API 契约，必读 |
-| `src/inspection_robot/state.py` | 状态管理核心 |
+| `src/inspection_robot/core/store.py` | 状态管理核心（真身） |
+| `src/inspection_robot/runtime.py` | 真车连续巡逻 runtime |
 | `src/inspection_robot/web.py` | Flask 路由 |
 | `config/tag_map.json` | 标签字典 |
 | `tests/test_contract.py` | 契约测试 |
@@ -896,6 +1025,7 @@ git push origin main
 |------|------|
 | `README.md` | 项目总览 |
 | `AGENTS.md` | AI Agent 协作指南（本文档） |
+| `docs/REAL_REQUIREMENTS.md` | 真实需求基准（最高权威） |
 | `docs/PROJECT_PLAN.md` | 全局规划书 |
 | `docs/api_contract.md` | 共享 API 契约 |
 | `docs/ssh_operations.md` | SSH 运维手册 |
@@ -906,3 +1036,4 @@ git push origin main
 ## 十、更新日志
 
 - **2026-07-02**：初始版本，包含项目概述、开发规范、部署流程、API 参考
+- **2026-07-04**：对齐 `REAL_REQUIREMENTS.md` 与最新代码结构。更新项目定位（货架通道循环巡逻、列端黑胶带触发、动态拓扑）、技术栈（MPU6050/树莓派5）、目录树（补全 `core/` `robot/` `vision/` 子包，`state.py` 标注为重导出垫片）、核心文件表（`core/store.py` 为真身）、API 接口表（补全控制/标定/测试/演示端点）、状态枚举与事件类型（对齐 `api_contract.md`）、配置示例（`warehouse_map` 改为 `[10,6]`、`shelf_manifest` 覆盖 A1-A4+B1-B4）、技术边界（四路全黑端点触发 vs 局部压黑禁区保护、嵌套避障、第一轮跳过缺货）。
