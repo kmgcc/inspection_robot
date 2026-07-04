@@ -217,6 +217,8 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(len(snapshot["events"]), 1000)
         self.assertEqual(snapshot["events"][0]["id"], "evt-1004")
         self.assertEqual(snapshot["events"][-1]["id"], "evt-5")
+        self.assertEqual(store.state.events[0]["id"], "evt-5")
+        self.assertEqual(store.state.events[-1]["id"], "evt-1004")
 
     def test_write_failure_preserves_in_memory_event_and_reports_error(self) -> None:
         store = self.make_store()
@@ -266,6 +268,44 @@ class StoreTest(unittest.TestCase):
         store = self.make_store()
 
         self.assertEqual(store.snapshot()["events"][0]["id"], "old-1")
+
+    def test_load_events_removes_stale_temp_file(self) -> None:
+        events_path = self.root / "data" / "events.json"
+        events_path.parent.mkdir()
+        events_path.write_text("[]", encoding="utf-8")
+        temp_path = events_path.parent / f"{events_path.name}.tmp"
+        temp_path.write_text("[", encoding="utf-8")
+
+        self.make_store()
+
+        self.assertFalse(temp_path.exists())
+
+    def test_load_events_skips_single_corrupt_record(self) -> None:
+        events_path = self.root / "data" / "events.json"
+        events_path.parent.mkdir()
+        events_path.write_text(
+            json.dumps(
+                [
+                    {"id": "ok-1", "time": "t", "type": "system", "priority": 1, "status": "info"},
+                    {"id": "bad-1", "type": {"not": "a scalar"}, "priority": object()},
+                    {"id": "ok-2", "time": "t", "type": "system", "priority": 1, "status": "info"},
+                ],
+                default=lambda _: {"not": "json-scalar"},
+            ),
+            encoding="utf-8",
+        )
+
+        store = self.make_store()
+
+        self.assertEqual([event["id"] for event in store.snapshot()["events"]], ["ok-2", "ok-1"])
+
+    def test_motion_sensor_updates_are_not_persisted_as_events(self) -> None:
+        store = self.make_store()
+
+        store.record_motion_sensor({"ok": True, "source": "test"})
+
+        self.assertEqual(store.snapshot()["motion_sensor"]["ok"], True)
+        self.assertFalse((self.root / "data" / "events.json").exists())
 
 
 if __name__ == "__main__":

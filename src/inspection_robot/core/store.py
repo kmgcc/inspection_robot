@@ -60,6 +60,7 @@ class InspectionStore:
         self.state = self._new_state()
         self.lock = Lock()
         self._patrol_started = False
+        self._boundary_turn_count = 0
         self._load_events()
 
     def snapshot(self) -> StatusSnapshot:
@@ -170,7 +171,8 @@ class InspectionStore:
 
     def record_boundary_turn(self, direction: str = "clockwise", degrees: int = 90) -> None:
         with self.lock:
-            node_id = f"turn-{sum(1 for node in self.state.topology.get('nodes', []) if isinstance(node, dict) and str(node.get('kind')) == 'boundary_turn') + 1}"
+            self._boundary_turn_count += 1
+            node_id = f"turn-{self._boundary_turn_count}"
             label = f"{'顺时针' if direction == 'clockwise' else '逆时针'} {degrees} 度"
             self._upsert_topology_node_locked({"id": node_id, "kind": "boundary_turn", "label": label})
             self.state.task_status = "TURNING_AT_BOUNDARY"
@@ -351,7 +353,7 @@ class InspectionStore:
 
     def record_light_cue(self, color: str, reason: str | None = None) -> None:
         with self.lock:
-            self.state.alarm["light"] = color
+            self.state.alarm = {**self.state.alarm, "light": color}
             self._append_event_locked(
                 make_event(
                     "light_cue",
@@ -420,7 +422,7 @@ class InspectionStore:
 
     def confirm(self, event_id: str | None = None) -> bool:
         with self.lock:
-            target = next((event for event in self.state.events if event["status"] == "waiting_confirm" and (event_id is None or event["id"] == event_id)), None)
+            target = next((event for event in reversed(self.state.events) if event["status"] == "waiting_confirm" and (event_id is None or event["id"] == event_id)), None)
             if target is None:
                 self.state.last_message = "当前没有待确认异常。"
                 return False
@@ -455,10 +457,17 @@ class InspectionStore:
             self._persist_events_locked()
 
     def _append_event_locked(self, event: EventRecord) -> None:
-        self.state.events.insert(0, event)
-        del self.state.events[MAX_EVENTS:]
+        self.state.events.append(event)
+        overflow = len(self.state.events) - MAX_EVENTS
+        if overflow > 0:
+            del self.state.events[:overflow]
 
     def _load_events(self) -> None:
+        temp_path = self.events_path.parent / f"{self.events_path.name}.tmp"
+        try:
+            remove_temp(temp_path)
+        except OSError:
+            pass
         if not self.events_path.exists():
             return
         try:
@@ -492,16 +501,17 @@ class InspectionStore:
         self._persist_events_locked()
 
     def _append_scan_events_locked(self, events: list[EventRecord]) -> None:
+        if not events:
+            return
         has_waiting = any(event["status"] == "waiting_confirm" for event in events)
         for event in events:
             self._append_event_locked(event)
-        shelf_id = events[0].get("shelf_id") if events else self.state.current_shelf
+        shelf_id = events[0].get("shelf_id")
         if shelf_id is not None:
             self._mark_shelf_locked(str(shelf_id), "waiting_confirm" if has_waiting else "normal", sum(1 for event in events if event["status"] == "waiting_confirm"))
-        if events:
-            latest = events[0]
-            self.state.current_tag = latest.get("tag_id")
-            self.state.current_item = latest.get("item")
+        latest = events[0]
+        self.state.current_tag = latest.get("tag_id")
+        self.state.current_item = latest.get("item")
         if has_waiting:
             self.state.task_status = "WAIT_CONFIRM"
             self.state.robot_status = "异常告警"

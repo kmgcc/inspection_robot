@@ -119,6 +119,19 @@ class RulesTest(unittest.TestCase):
         self.assertEqual(events[0]["status"], "waiting_confirm")
         self.assertEqual(events[0]["frame_id"], "empty-1")
 
+    def test_missing_item_without_tag_map_entry_has_complete_fallback_fields(self) -> None:
+        manifest = {"A9": {"expected_items": ["item_99"]}}
+
+        events = rules.evaluate_shelf_scan("A9", [], manifest, TAG_MAP, frame_id="missing-99")
+
+        self.assertEqual(events[0]["type"], "scan_failed")
+        missing = rules.evaluate_shelf_scan("A9", ["item_01"], manifest, TAG_MAP, frame_id="missing-99")
+        missing_event = next(event for event in missing if event["type"] == "missing_item")
+        self.assertEqual(missing_event["tag_id"], "item_99")
+        self.assertEqual(missing_event["item"], "item_99")
+        self.assertEqual(missing_event["expected_shelf"], "A9")
+        self.assertEqual(missing_event["priority"], 2)
+
     def test_detection_evidence_reports_mismatched_item_evidence(self) -> None:
         events = rules.evaluate_detection_evidence(
             "A1",
@@ -131,6 +144,16 @@ class RulesTest(unittest.TestCase):
         mismatch = next(event for event in events if event["type"] == "evidence_mismatch")
         self.assertEqual(mismatch["tag_id"], "1")
         self.assertEqual(mismatch["color"], "BLUE")
+
+    def test_evidence_compare_uses_ascii_casefolding(self) -> None:
+        events = rules.evaluate_detection_evidence(
+            "A1",
+            [{"tag_id": "1", "marker_family": "tag36h11", "color": "red", "ocr_text": "item-01"}],
+            MANIFEST,
+            TAG_MAP,
+        )
+
+        self.assertNotIn("evidence_mismatch", [event["type"] for event in events])
 
     def test_detection_evidence_preserves_untagged_visual_evidence(self) -> None:
         events = rules.evaluate_detection_evidence(

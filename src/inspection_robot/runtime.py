@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import itertools
 import json
+import logging
 import os
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from .audio import start_audio_cue
@@ -24,6 +25,7 @@ Cell = tuple[int, int]
 DetectionProvider = Callable[..., Iterator[Mapping[str, object]]]
 HEADINGS = ["N", "E", "S", "W"]
 DEFAULT_BOUNDARY_ACTION_PATTERN = "turn_follow,turn_patrol,bypass,turn_follow,turn_patrol"
+logger = logging.getLogger(__name__)
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -33,42 +35,70 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() not in {"0", "false", "no", "off"}
 
 
+def _env_value(names: tuple[str, ...], default: str) -> str:
+    for name in names:
+        raw = os.environ.get(name)
+        if raw is not None:
+            return raw
+    return default
+
+
+def _env_int(default: int, *names: str) -> int:
+    return int(_env_value(names, str(default)))
+
+
+def _env_float(default: float, *names: str) -> float:
+    return float(_env_value(names, str(default)))
+
+
+def _env_text(default: str, *names: str) -> str:
+    return _env_value(names, default)
+
+
 @dataclass(slots=True)
 class RobotRuntimeConfig:
-    blocked_distance_mm: int = int(os.environ.get("BLOCKED_DISTANCE_MM", "160"))
-    clear_distance_mm: int = int(os.environ.get("CLEAR_DISTANCE_MM", "240"))
-    blocked_samples: int = int(os.environ.get("BLOCKED_SAMPLES", "2"))
-    patrol_speed: int = int(os.environ.get("ROBOT_PATROL_SPEED", os.environ.get("ROBOT_SLOW_SPEED", "16")))
-    step_seconds: float = float(os.environ.get("ROBOT_PATROL_STEP_SECONDS", os.environ.get("ROBOT_STEP_SECONDS", "0.16")))
-    poll_seconds: float = float(os.environ.get("ROBOT_POLL_SECONDS", "0.12"))
-    scan_enabled: bool = _env_bool("ROBOT_SCAN_ENABLED", False)
+    blocked_distance_mm: int = field(default_factory=lambda: _env_int(160, "BLOCKED_DISTANCE_MM"))
+    clear_distance_mm: int = field(default_factory=lambda: _env_int(240, "CLEAR_DISTANCE_MM"))
+    blocked_samples: int = field(default_factory=lambda: _env_int(2, "BLOCKED_SAMPLES"))
+    patrol_speed: int = field(default_factory=lambda: _env_int(30, "ROBOT_PATROL_SPEED", "ROBOT_SLOW_SPEED"))
+    step_seconds: float = field(default_factory=lambda: _env_float(0.25, "ROBOT_PATROL_STEP_SECONDS", "ROBOT_STEP_SECONDS"))
+    poll_seconds: float = field(default_factory=lambda: _env_float(0.12, "ROBOT_POLL_SECONDS"))
+    scan_enabled: bool = field(default_factory=lambda: _env_bool("ROBOT_SCAN_ENABLED", False))
     scan_timeout_seconds: float = 4.0
     scan_max_detections: int = 6
-    scan_interval_seconds: float = float(os.environ.get("SCAN_INTERVAL_SECONDS", "0.8"))
-    turn_90_seconds: float = float(os.environ.get("ROBOT_TURN_90_SECONDS", "0.85"))
-    turn_speed: int = int(os.environ.get("ROBOT_TURN_SPEED", "22"))
-    action_settle_seconds: float = float(os.environ.get("ROBOT_ACTION_SETTLE_SECONDS", "0.35"))
-    obstacle_wait_seconds: float = float(os.environ.get("OBSTACLE_WAIT_SECONDS", "6.0"))
-    avoidance_speed: int = int(os.environ.get("AVOIDANCE_SPEED", "14"))
-    avoidance_body_seconds: float = float(os.environ.get("AVOIDANCE_BODY_SECONDS", "1.00"))
-    avoidance_side_clearance_bodies: float = float(os.environ.get("AVOIDANCE_SIDE_CLEARANCE_BODIES", "1.0"))
-    avoidance_parallel_bodies: float = float(os.environ.get("AVOIDANCE_PARALLEL_BODIES", "2.0"))
-    avoidance_return_bodies: float = float(os.environ.get("AVOIDANCE_RETURN_BODIES", "2.0"))
-    avoidance_turn_direction: str = os.environ.get("AVOIDANCE_TURN_DIRECTION", "right")
-    boundary_min_black_sensors: int = int(os.environ.get("BOUNDARY_MIN_BLACK_SENSORS", "3"))
-    boundary_confirm_samples: int = int(os.environ.get("BOUNDARY_CONFIRM_SAMPLES", "1"))
-    boundary_confirm_gap_seconds: float = float(os.environ.get("BOUNDARY_CONFIRM_GAP_SECONDS", "0.03"))
-    boundary_cooldown_seconds: float = float(os.environ.get("BOUNDARY_COOLDOWN_SECONDS", "0.60"))
-    line_follow_enabled: bool = _env_bool("LINE_FOLLOW_ENABLED", False)
-    line_follow_speed: int = int(os.environ.get("LINE_FOLLOW_SPEED", os.environ.get("ROBOT_PATROL_SPEED", os.environ.get("ROBOT_SLOW_SPEED", "16"))))
-    line_follow_step_seconds: float = float(os.environ.get("LINE_FOLLOW_STEP_SECONDS", os.environ.get("ROBOT_STEP_SECONDS", "0.14")))
-    line_follow_turn_speed: int = int(os.environ.get("LINE_FOLLOW_TURN_SPEED", os.environ.get("LINE_FOLLOW_SPEED", os.environ.get("ROBOT_PATROL_SPEED", os.environ.get("ROBOT_SLOW_SPEED", "16")))))
-    line_follow_turn_seconds: float = float(os.environ.get("LINE_FOLLOW_TURN_SECONDS", "0.08"))
-    line_follow_search_seconds: float = float(os.environ.get("LINE_FOLLOW_SEARCH_SECONDS", "0.08"))
-    line_follow_poll_seconds: float = float(os.environ.get("LINE_FOLLOW_POLL_SECONDS", "0.01"))
-    line_follow_max_lost_ticks: int = int(os.environ.get("LINE_FOLLOW_MAX_LOST_TICKS", "15"))
-    motion_sensor_interval_seconds: float = float(os.environ.get("MOTION_SENSOR_INTERVAL_SECONDS", "0.5"))
-    boundary_action_pattern: str = os.environ.get("BOUNDARY_ACTION_PATTERN", DEFAULT_BOUNDARY_ACTION_PATTERN)
+    scan_interval_seconds: float = field(default_factory=lambda: _env_float(0.8, "SCAN_INTERVAL_SECONDS"))
+    turn_90_seconds: float = field(default_factory=lambda: _env_float(0.85, "ROBOT_TURN_90_SECONDS"))
+    turn_speed: int = field(default_factory=lambda: _env_int(22, "ROBOT_TURN_SPEED"))
+    action_settle_seconds: float = field(default_factory=lambda: _env_float(0.45, "ROBOT_ACTION_SETTLE_SECONDS"))
+    obstacle_wait_seconds: float = field(default_factory=lambda: _env_float(6.0, "OBSTACLE_WAIT_SECONDS"))
+    avoidance_speed: int = field(default_factory=lambda: _env_int(20, "AVOIDANCE_SPEED"))
+    avoidance_body_seconds: float = field(default_factory=lambda: _env_float(0.50, "AVOIDANCE_BODY_SECONDS"))
+    avoidance_side_clearance_bodies: float = field(default_factory=lambda: _env_float(1.0, "AVOIDANCE_SIDE_CLEARANCE_BODIES"))
+    avoidance_parallel_bodies: float = field(default_factory=lambda: _env_float(2.0, "AVOIDANCE_PARALLEL_BODIES"))
+    avoidance_return_bodies: float = field(default_factory=lambda: _env_float(1.0, "AVOIDANCE_RETURN_BODIES"))
+    avoidance_turn_direction: str = field(default_factory=lambda: _env_text("right", "AVOIDANCE_TURN_DIRECTION"))
+    boundary_min_black_sensors: int = field(default_factory=lambda: _env_int(4, "BOUNDARY_MIN_BLACK_SENSORS"))
+    boundary_confirm_samples: int = field(default_factory=lambda: _env_int(1, "BOUNDARY_CONFIRM_SAMPLES"))
+    boundary_confirm_gap_seconds: float = field(default_factory=lambda: _env_float(0.03, "BOUNDARY_CONFIRM_GAP_SECONDS"))
+    boundary_cooldown_seconds: float = field(default_factory=lambda: _env_float(0.10, "BOUNDARY_COOLDOWN_SECONDS"))
+    line_follow_enabled: bool = field(default_factory=lambda: _env_bool("LINE_FOLLOW_ENABLED", False))
+    line_follow_speed: int = field(default_factory=lambda: _env_int(30, "LINE_FOLLOW_SPEED", "ROBOT_PATROL_SPEED", "ROBOT_SLOW_SPEED"))
+    line_follow_step_seconds: float = field(default_factory=lambda: _env_float(0.14, "LINE_FOLLOW_STEP_SECONDS", "ROBOT_STEP_SECONDS"))
+    line_follow_turn_speed: int = field(
+        default_factory=lambda: _env_int(
+            30,
+            "LINE_FOLLOW_TURN_SPEED",
+            "LINE_FOLLOW_SPEED",
+            "ROBOT_PATROL_SPEED",
+            "ROBOT_SLOW_SPEED",
+        )
+    )
+    line_follow_turn_seconds: float = field(default_factory=lambda: _env_float(0.08, "LINE_FOLLOW_TURN_SECONDS"))
+    line_follow_search_seconds: float = field(default_factory=lambda: _env_float(0.08, "LINE_FOLLOW_SEARCH_SECONDS"))
+    line_follow_poll_seconds: float = field(default_factory=lambda: _env_float(0.01, "LINE_FOLLOW_POLL_SECONDS"))
+    line_follow_max_lost_ticks: int = field(default_factory=lambda: _env_int(15, "LINE_FOLLOW_MAX_LOST_TICKS"))
+    motion_sensor_interval_seconds: float = field(default_factory=lambda: _env_float(0.5, "MOTION_SENSOR_INTERVAL_SECONDS"))
+    boundary_action_pattern: str = field(default_factory=lambda: _env_text(DEFAULT_BOUNDARY_ACTION_PATTERN, "BOUNDARY_ACTION_PATTERN"))
     turns_per_cycle: int = 2
     skip_scan_cycles: int = 1
     camera_device: int = 0
@@ -147,6 +177,9 @@ class RobotRuntime:
         except RobotHardwareError as exc:
             self.store.record_run_mode("robot", False)
             self.store.record_motion_debug("runtime_hardware_error", f"runtime hardware error: {exc}", status="ERROR")
+        except Exception as exc:
+            self.store.record_run_mode("robot", False)
+            self.store.record_motion_debug("runtime_fatal_error", f"runtime fatal error: {exc}", status="ERROR")
 
     def run_continuous_patrol(self, max_iterations: int | None = None) -> None:
         self.store.record_run_mode("robot", True)
@@ -154,7 +187,7 @@ class RobotRuntime:
         self.store.record_cycle(1, True)
         self.store.record_motion_debug(
             "runtime_started",
-            "运动调试巡逻启动：短步前进、列端转向、寻线过渡、B列禁区绕行；当前暂不做货架识别。",
+            "运动调试巡逻启动：短步前进、列端转向、寻线过渡、禁区绕行；当前暂不做货架识别。",
             evidence={
                 "patrol_speed": self.config.patrol_speed,
                 "step_seconds": self.config.step_seconds,
@@ -174,7 +207,7 @@ class RobotRuntime:
 
         iterations = 0
         turn_count = 0
-        cycle_count = 0
+        current_cycle = 1
         last_scan_at = time.monotonic()
 
         while not self._stop_event.is_set():
@@ -192,11 +225,9 @@ class RobotRuntime:
             if boundary_outcome != "none":
                 if boundary_outcome == "turn":
                     turn_count += 1
-                    cycle_count = turn_count // max(1, self.config.turns_per_cycle)
-                    current_cycle = cycle_count + 1
+                    current_cycle = _cycle_from_turn_count(turn_count, self.config.turns_per_cycle)
                     self.store.record_cycle(current_cycle, current_cycle <= self.config.skip_scan_cycles)
                 else:
-                    current_cycle = cycle_count + 1
                     self.store.record_cycle(current_cycle, current_cycle <= self.config.skip_scan_cycles)
                 continue
 
@@ -207,7 +238,6 @@ class RobotRuntime:
             self._drive_patrol_step(tape_state)
             self._show_line_follow() if self._line_follow_active else self._show_normal()
             iterations += 1
-            current_cycle = cycle_count + 1
             self.store.record_cycle(current_cycle, current_cycle <= self.config.skip_scan_cycles)
 
             now = time.monotonic()
@@ -325,7 +355,8 @@ class RobotRuntime:
         self.alarm.show_warning()
         self.store.record_boundary(tape_state, True, action)
         self.store.record_forbidden_zone(zone_id, True)
-        self._turn_90("right")
+        if not _turn_succeeded(self._turn_90("right")):
+            return "none"
         self.store.record_boundary_turn("clockwise", 90)
         self._line_follow_active = action == "turn_follow" and self.config.line_follow_enabled
         self._line_lost_ticks = 0
@@ -419,6 +450,9 @@ class RobotRuntime:
         )
 
     def _drive_line_follow_step(self, tape_state: tuple[int, int, int, int] | None) -> None:
+        if self._stop_event.is_set():
+            self.motion.stop()
+            return
         decision = decide_line_follow_motion(tape_state)
         phase = self._patrol_phase_label()
         evidence = {
@@ -448,6 +482,7 @@ class RobotRuntime:
             evidence["recovery_command"] = recovery_command
             if self._line_lost_ticks >= self.config.line_follow_max_lost_ticks:
                 self.motion.stop()
+                self._line_follow_active = False
                 self.store.record_motion_debug(
                     "line_follow_lost",
                     f"{phase}：寻线丢线超过 {self.config.line_follow_max_lost_ticks} 次，已停车等待。",
@@ -496,34 +531,43 @@ class RobotRuntime:
         time.sleep(max(0.0, self.config.line_follow_poll_seconds))
 
     def _run_line_follow_command(self, command: str, *, search: bool = False) -> None:
+        step_seconds = self.config.line_follow_search_seconds if search else self.config.line_follow_step_seconds
+        turn_seconds = self.config.line_follow_search_seconds if search else self.config.line_follow_turn_seconds
         if command == "forward":
-            self.motion.move_forward_slow(
+            self._run_timed_motion(
+                self.motion.move_forward_slow,
                 speed=self.config.line_follow_speed,
-                duration_seconds=self.config.line_follow_search_seconds if search else self.config.line_follow_step_seconds,
+                duration_seconds=step_seconds,
             )
         elif command == "strafe_left":
-            self.motion.strafe_left_slow(
+            self._run_timed_motion(
+                self.motion.strafe_left_slow,
                 speed=self.config.line_follow_speed,
-                duration_seconds=self.config.line_follow_search_seconds if search else self.config.line_follow_step_seconds,
+                duration_seconds=step_seconds,
             )
         elif command == "strafe_right":
-            self.motion.strafe_right_slow(
+            self._run_timed_motion(
+                self.motion.strafe_right_slow,
                 speed=self.config.line_follow_speed,
-                duration_seconds=self.config.line_follow_search_seconds if search else self.config.line_follow_step_seconds,
+                duration_seconds=step_seconds,
             )
         elif command == "turn_left":
-            self.motion.rotate_left_slow(
+            self._run_timed_motion(
+                self.motion.rotate_left_slow,
                 speed=self.config.line_follow_turn_speed,
-                duration_seconds=self.config.line_follow_search_seconds if search else self.config.line_follow_turn_seconds,
+                duration_seconds=turn_seconds,
             )
         elif command == "turn_right":
-            self.motion.rotate_right_slow(
+            self._run_timed_motion(
+                self.motion.rotate_right_slow,
                 speed=self.config.line_follow_turn_speed,
-                duration_seconds=self.config.line_follow_search_seconds if search else self.config.line_follow_turn_seconds,
+                duration_seconds=turn_seconds,
             )
         else:
             self.motion.stop()
-            return
+
+    def _run_timed_motion(self, mover: Callable[..., None], *, speed: int, duration_seconds: float) -> None:
+        mover(speed=speed, duration_seconds=duration_seconds)
         self.motion.stop()
 
     def _remember_line_correction(self, command: str) -> None:
@@ -628,12 +672,22 @@ class RobotRuntime:
 
     def _avoid_to_safe_side(self, shelf_id: str | None) -> bool:
         direction = self.config.avoidance_turn_direction.strip().lower()
+        if direction not in {"left", "right"}:
+            logger.warning("invalid avoidance turn direction %r; using right", direction)
+            self.store.record_motion_debug(
+                "avoidance_direction_fallback",
+                f"避障转向配置无效：{direction}，已使用 right。",
+                status="AVOIDING_OBSTACLE",
+                evidence={"configured_direction": direction, "fallback": "right"},
+            )
+            direction = "right"
         turn_left = direction != "right"
         away_label = "left" if turn_left else "right"
         back_label = "right" if turn_left else "left"
         self.motion.stop()
         self.store.record_avoidance_step(f"turn_{away_label}_to_safe_side", nested_level=0)
-        self._turn_90(away_label)
+        if not _turn_succeeded(self._turn_90(away_label)):
+            return False
         if not self._avoidance_path_clear("after_first_turn"):
             return False
 
@@ -641,7 +695,8 @@ class RobotRuntime:
             return False
 
         self.store.record_avoidance_step(f"turn_{back_label}_to_original_heading", nested_level=0)
-        self._turn_90(back_label)
+        if not _turn_succeeded(self._turn_90(back_label)):
+            return False
         if not self._avoidance_path_clear("after_restore_heading"):
             return False
 
@@ -649,7 +704,8 @@ class RobotRuntime:
             return False
 
         self.store.record_avoidance_step(f"turn_{back_label}_return_to_line", nested_level=0)
-        self._turn_90(back_label)
+        if not _turn_succeeded(self._turn_90(back_label)):
+            return False
         if not self._avoidance_path_clear("after_return_turn"):
             return False
 
@@ -657,7 +713,8 @@ class RobotRuntime:
             return False
 
         self.store.record_avoidance_step(f"turn_{away_label}_restore_heading", nested_level=0)
-        self._turn_90(away_label)
+        if not _turn_succeeded(self._turn_90(away_label)):
+            return False
         distance_mm = self.sensors.read_distance_mm()
         if distance_mm is None or self._distance_clear(distance_mm):
             self._blocked_count = 0
@@ -703,6 +760,7 @@ class RobotRuntime:
         messages = {
             0: "A列末端禁区/列端触发：顺时针转 90 度，随后进入寻线到B端。",
             1: "B端入口禁区/列端触发：顺时针转 90 度，退出寻线，进入B列短步巡逻。",
+            2: "中段禁区触发：停车后按绕行流程越过禁区。",
             3: "B列末端禁区/列端触发：顺时针转 90 度，随后寻线回A端。",
             4: "A端入口禁区/列端触发：顺时针转 90 度，回到A列起点，进入下一轮。",
         }
@@ -734,7 +792,8 @@ class RobotRuntime:
         if abs(dx) + abs(dy) != 1:
             raise ValueError(f"non-adjacent waypoint transition: {current} -> {target}")
         if heading not in HEADINGS or target_heading not in HEADINGS:
-            self._turn_to_heading(heading, target_heading)
+            if not self._turn_to_heading(heading, target_heading):
+                return heading
             self._forward_step(speed=self.config.patrol_speed, duration_seconds=self.config.step_seconds)
             return target_heading
         delta = (HEADINGS.index(target_heading) - HEADINGS.index(heading)) % len(HEADINGS)
@@ -745,7 +804,8 @@ class RobotRuntime:
             self.motion.stop()
             self._settle()
         elif delta == 2:
-            self._turn_to_heading(heading, target_heading)
+            if not self._turn_to_heading(heading, target_heading):
+                return heading
             self._forward_step(speed=self.config.patrol_speed, duration_seconds=self.config.step_seconds)
             return target_heading
         else:
@@ -754,17 +814,17 @@ class RobotRuntime:
             self._settle()
         return heading
 
-    def _turn_to_heading(self, heading: str, target_heading: str) -> None:
+    def _turn_to_heading(self, heading: str, target_heading: str) -> bool:
         if heading not in HEADINGS or target_heading not in HEADINGS:
-            return
+            return True
         delta = (HEADINGS.index(target_heading) - HEADINGS.index(heading)) % len(HEADINGS)
         if delta == 1:
-            self._turn_90("right")
+            return _turn_succeeded(self._turn_90("right"))
         elif delta == 2:
-            self._turn_90("right")
-            self._turn_90("right")
+            return _turn_succeeded(self._turn_90("right")) and _turn_succeeded(self._turn_90("right"))
         elif delta == 3:
-            self._turn_90("left")
+            return _turn_succeeded(self._turn_90("left"))
+        return True
 
     def _forward_step(self, *, speed: int, duration_seconds: float) -> None:
         self.motion.move_forward_slow(speed=speed, duration_seconds=duration_seconds)
@@ -794,7 +854,6 @@ class RobotRuntime:
                             or "MPU6050 closed-loop 90 degree turn did not converge within correction attempts."
                         )
                         self.store.record_robot_status("ERROR", f"{message} Keeping car stopped.")
-                        raise RobotHardwareError(message)
                     return result
         else:
             legacy_imu_turn = getattr(self.imu, "turn_90", None)
@@ -877,7 +936,8 @@ class RobotRuntime:
         shelf_id = str(step["shelf_id"])
         scan_heading = step.get("heading")
         if isinstance(scan_heading, str):
-            self._turn_to_heading(heading, scan_heading)
+            if not self._turn_to_heading(heading, scan_heading):
+                return heading
             heading = scan_heading
         self.motion.stop()
         self._perform_scan(shelf_id, step["target"])
@@ -923,7 +983,9 @@ class RobotRuntime:
 
     def _play_cue(self, cue: str, message: str) -> None:
         payload, status = start_audio_cue(self.store.root, cue)
-        self.store.record_audio_cue(cue, message if status == 200 else message, None if status == 200 else str(payload.get("error")))
+        error = None if status == 200 else str(payload.get("error", cue))
+        display_message = message if error is None else f"音频播放失败: {error}"
+        self.store.record_audio_cue(cue, display_message, error)
 
 
 def start_background_runtime(
@@ -961,6 +1023,16 @@ def heading_for_delta(current: Cell, target: Cell, fallback: str = "E") -> str:
     return fallback
 
 
+def _cycle_from_turn_count(turn_count: int, turns_per_cycle: int) -> int:
+    if turn_count <= 0:
+        return 1
+    return ((turn_count - 1) // max(1, int(turns_per_cycle))) + 1
+
+
+def _turn_succeeded(result: Mapping[str, object] | None) -> bool:
+    return result is None or bool(result.get("ok", True))
+
+
 def _heading_after_right_turn(heading: str) -> str:
     normalized = _normalize_heading(heading, "E")
     return HEADINGS[(HEADINGS.index(normalized) + 1) % len(HEADINGS)]
@@ -986,7 +1058,7 @@ def _boundary_action_pattern(raw_pattern: str) -> list[str]:
 
 def _format_tape_state(tape_state: tuple[int, int, int, int] | None) -> str:
     if tape_state is None:
-        return "None"
+        return "无读数"
     return "".join(str(value) for value in tape_state)
 
 

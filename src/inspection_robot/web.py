@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import logging
 from pathlib import Path
 
 from flask import Flask, Response, jsonify, render_template, request
@@ -11,6 +13,10 @@ from .robot import gimbal, motion
 from .robot.sensors import RobotHardwareError
 from .state import InspectionStore
 from .test_mode import CalibrationStore, TestSessionManager
+
+
+logger = logging.getLogger(__name__)
+VALID_MANUAL_COMMANDS = {"forward", "backward", "stop", "turn_left_90", "turn_right_90"}
 
 
 def create_app(root: Path | None = None) -> Flask:
@@ -74,6 +80,8 @@ def create_app(root: Path | None = None) -> Flask:
 
     @app.post("/api/simulate/tag/<tag_id>")
     def api_simulate_tag(tag_id: str):
+        if not tag_id.isdigit() or len(tag_id) > 10:
+            return jsonify({"ok": False, "error": f"invalid tag id: {tag_id}"}), 400
         store.handle_tag(tag_id)
         return jsonify({"ok": True})
 
@@ -85,7 +93,7 @@ def create_app(root: Path | None = None) -> Flask:
             return jsonify({"ok": False, "error": str(exc)}), 400
         store.start()
         store.record_path(_flatten_route(route), status="active")
-        return jsonify({"ok": True, "route": route})
+        return jsonify({"ok": True, "route": _json_safe(route)})
 
     @app.post("/api/demo/obstacle")
     def api_demo_obstacle():
@@ -228,6 +236,8 @@ def create_app(root: Path | None = None) -> Flask:
 
     @app.post("/api/control/<command>")
     def api_control(command: str):
+        if command not in VALID_MANUAL_COMMANDS:
+            return jsonify({"ok": False, "error": f"unknown command: {command}"}), 400
         if not _robot_mode_enabled():
             store.record_robot_status("IDLE", "当前为 simulate mode；手动控制不会发送到底盘。请用 RUN_MODE=robot 启动小车端服务。")
             return jsonify({"ok": False, "error": "当前服务是 simulate mode，请用 RUN_MODE=robot 启动小车端服务。"}), 409
@@ -292,8 +302,9 @@ def create_app(root: Path | None = None) -> Flask:
 
     @app.get("/api/export.csv")
     def api_export_csv():
+        prefix = "\ufeff" if str(request.args.get("bom", "")).strip().lower() in {"1", "true", "yes"} else ""
         return Response(
-            "\ufeff" + store.export_events_csv(),
+            prefix + store.export_events_csv(),
             mimetype="text/csv; charset=utf-8",
             headers={"Content-Disposition": "attachment; filename=inspection_events.csv"},
         )
@@ -359,8 +370,8 @@ def create_app(root: Path | None = None) -> Flask:
         if _robot_mode_enabled():
             try:
                 session.read_sensors_now()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("sensor read failed: %s", exc)
             status = session.get_status()
         else:
             # 模拟模式：返回假数据以配合UI效果预览
@@ -448,6 +459,12 @@ def create_app(root: Path | None = None) -> Flask:
                 if not waypoints or waypoints[-1] != point:
                     waypoints.append(point)
         return waypoints
+
+    def _json_safe(value: object) -> object:
+        try:
+            return json.loads(json.dumps(value, ensure_ascii=False))
+        except (TypeError, ValueError):
+            return []
 
     def _int_payload(payload: dict[str, object], key: str, default: int) -> int:
         value = payload.get(key, default)

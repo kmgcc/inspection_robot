@@ -87,6 +87,25 @@ class WebApiTest(unittest.TestCase):
             "事件ID,时间,类型,标签ID,物品,区域,货架,期望货架,颜色,OCR,图像类别,优先级,状态,来源,说明",
         )
 
+    def test_simulate_tag_rejects_non_numeric_or_overlong_ids(self) -> None:
+        bad_alpha = self.client.post("/api/simulate/tag/not-a-number")
+        bad_long = self.client.post("/api/simulate/tag/12345678901")
+        payload = self.client.get("/api/status").get_json()
+
+        self.assertEqual(bad_alpha.status_code, 400)
+        self.assertEqual(bad_long.status_code, 400)
+        self.assertEqual(payload["events"], [])
+
+    def test_export_csv_defaults_to_utf8_without_bom_and_can_opt_in(self) -> None:
+        self.client.post("/api/start")
+        self.client.post("/api/simulate/tag/1")
+
+        plain = self.client.get("/api/export.csv")
+        with_bom = self.client.get("/api/export.csv?bom=1")
+
+        self.assertFalse(plain.data.startswith(b"\xef\xbb\xbf"))
+        self.assertTrue(with_bom.data.startswith(b"\xef\xbb\xbf"))
+
     def test_dashboard_demo_routes_cover_path_obstacle_forbidden_and_scans(self) -> None:
         path = self.client.post("/api/demo/path")
         self.assertEqual(path.status_code, 200)

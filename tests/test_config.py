@@ -75,6 +75,53 @@ class ConfigTest(unittest.TestCase):
             },
         )
 
+    def test_legacy_b_zone_maps_to_b_shelf(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config").mkdir()
+            (root / "config" / "tag_map.json").write_text(
+                json.dumps(
+                    {
+                        "4": {
+                            "name": "Medicine",
+                            "zone": "B区",
+                            "expected_zone": "B区",
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            tag_map = load_tag_map(root)
+
+        self.assertEqual(tag_map["4"]["expected_shelf"], "B1")
+
+    def test_explicit_item_identity_does_not_trigger_legacy_mapping(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config").mkdir()
+            (root / "config" / "tag_map.json").write_text(
+                json.dumps(
+                    {
+                        "4": {
+                            "name": "Medicine",
+                            "kind": "item",
+                            "item_id": "item_04",
+                            "expected_shelf": "B2",
+                            "zone": "B区",
+                            "expected_zone": "B区",
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            tag_map = load_tag_map(root)
+
+        self.assertEqual(tag_map["4"]["expected_shelf"], "B2")
+
     def test_missing_item_identity_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -152,6 +199,23 @@ class ConfigTest(unittest.TestCase):
 
             with self.assertRaisesRegex(ConfigError, "1-50"):
                 load_tag_map(root)
+
+    def test_pose_and_zone_id_ranges_are_enforced(self) -> None:
+        cases = [
+            ("221", {"name": "Pose", "kind": "pose"}, "201-220"),
+            ("321", {"name": "Forbidden", "kind": "zone"}, "301-320"),
+        ]
+        for tag_id, payload, message in cases:
+            with self.subTest(tag_id=tag_id), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "config").mkdir()
+                (root / "config" / "tag_map.json").write_text(
+                    json.dumps({tag_id: payload}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+
+                with self.assertRaisesRegex(ConfigError, message):
+                    load_tag_map(root)
 
     def test_map_and_manifest_validation_reject_invalid_shapes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

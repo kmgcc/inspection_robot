@@ -194,7 +194,7 @@ def _validate_id_range(tag_id: int, kind: str) -> None:
 
 
 def _looks_like_legacy_item(info: dict[str, JsonValue]) -> bool:
-    return "zone" in info and "expected_zone" in info
+    return "zone" in info and "expected_zone" in info and "item_id" not in info and "expected_shelf" not in info
 
 
 def _legacy_shelf_from_zone(zone: str) -> str:
@@ -202,7 +202,7 @@ def _legacy_shelf_from_zone(zone: str) -> str:
     if zone_prefix == "A":
         return "A1"
     if zone_prefix == "B":
-        return "A2"
+        return "B1"
     return "A1"
 
 

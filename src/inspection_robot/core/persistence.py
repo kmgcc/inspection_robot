@@ -12,7 +12,7 @@ def events_to_csv(events: list[EventRecord]) -> str:
     output = StringIO(newline="")
     writer = csv.writer(output)
     writer.writerow(CSV_HEADER)
-    for event in reversed(events):
+    for event in events:
         writer.writerow(
             [
                 event["id"],
@@ -40,7 +40,15 @@ def load_events(path: Path) -> list[EventRecord]:
         data = json.load(file)
     if not isinstance(data, list):
         raise ValueError("events file must contain a list")
-    return [_normalize_event(item) for item in data if isinstance(item, dict)]
+    events: list[EventRecord] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        try:
+            events.append(_normalize_event(item))
+        except (TypeError, ValueError):
+            continue
+    return events
 
 
 def persist_events(path: Path, events: list[EventRecord]) -> Path:
@@ -66,24 +74,36 @@ def _normalize_event(raw: dict[str, JsonValue]) -> EventRecord:
     except (TypeError, ValueError):
         normalized_priority = 1
     return {
-        "id": str(raw.get("id") or fallback["id"]),
-        "time": str(raw.get("time") or fallback["time"]),
-        "type": str(raw.get("type") or "system"),
-        "tag_id": None if raw.get("tag_id") is None else str(raw.get("tag_id")),
-        "item": str(raw.get("item") or "-"),
-        "zone": str(raw.get("zone") or "-"),
-        "expected_zone": None if raw.get("expected_zone") is None else str(raw.get("expected_zone")),
+        "id": _text(raw.get("id") or fallback["id"]),
+        "time": _text(raw.get("time") or fallback["time"]),
+        "type": _text(raw.get("type") or "system"),
+        "tag_id": _optional_text(raw.get("tag_id")),
+        "item": _text(raw.get("item") or "-"),
+        "zone": _text(raw.get("zone") or "-"),
+        "expected_zone": _optional_text(raw.get("expected_zone")),
         "priority": max(normalized_priority, 1),
-        "status": str(raw.get("status") or "info"),
-        "message": str(raw.get("message") or ""),
-        "shelf_id": None if raw.get("shelf_id") is None else str(raw.get("shelf_id")),
-        "expected_shelf": None if raw.get("expected_shelf") is None else str(raw.get("expected_shelf")),
-        "target": None if raw.get("target") is None else str(raw.get("target")),
-        "source": str(raw.get("source") or "core"),
-        "frame_id": None if raw.get("frame_id") is None else str(raw.get("frame_id")),
-        "marker_family": None if raw.get("marker_family") is None else str(raw.get("marker_family")),
-        "ocr_text": None if raw.get("ocr_text") is None else str(raw.get("ocr_text")),
-        "color": None if raw.get("color") is None else str(raw.get("color")),
-        "image_class": None if raw.get("image_class") is None else str(raw.get("image_class")),
+        "status": _text(raw.get("status") or "info"),
+        "message": _text(raw.get("message") or ""),
+        "shelf_id": _optional_text(raw.get("shelf_id")),
+        "expected_shelf": _optional_text(raw.get("expected_shelf")),
+        "target": _optional_text(raw.get("target")),
+        "source": _text(raw.get("source") or "core"),
+        "frame_id": _optional_text(raw.get("frame_id")),
+        "marker_family": _optional_text(raw.get("marker_family")),
+        "ocr_text": _optional_text(raw.get("ocr_text")),
+        "color": _optional_text(raw.get("color")),
+        "image_class": _optional_text(raw.get("image_class")),
         "evidence": raw.get("evidence") if isinstance(raw.get("evidence"), dict) else None,
     }
+
+
+def _optional_text(value: JsonValue) -> str | None:
+    if value is None:
+        return None
+    return _text(value)
+
+
+def _text(value: JsonValue) -> str:
+    if isinstance(value, (dict, list)):
+        raise ValueError("event scalar field must not be an object or list")
+    return str(value)

@@ -36,5 +36,5 @@ def build_status_snapshot(state: DashboardState) -> StatusSnapshot:
         },
         "alarm": copy_json_dict(state.alarm),
         "zones": [zone.copy() for zone in state.zones],
-        "events": [event.copy() for event in state.events],
+        "events": [event.copy() for event in reversed(state.events)],
     }

@@ -45,6 +45,16 @@ class WebRuntimeSafetyTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertLess(calls.index("runtime_stop"), calls.index("test_line_follow"))
 
+    def test_unknown_manual_control_command_does_not_stop_runtime(self) -> None:
+        calls: list[str] = []
+        self.app.config["ROBOT_RUNTIME"] = FakeRuntime(calls)
+        self.app.config["TEST_SESSION"] = FakeTestSession(calls)
+
+        response = self.client.post("/api/control/not_a_real_command", json={"speed": 10})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(calls, [])
+
 
 class FakeRuntime:
     def __init__(self, calls: list[str]) -> None:

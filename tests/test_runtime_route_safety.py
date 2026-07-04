@@ -206,7 +206,7 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
         self.assertIn("obstacle_avoidance_step", event_types)
         self.assertIn(("move_forward", 5, 0), fake_motion.calls)
 
-    def test_forbidden_bypass_uses_one_two_two_body_distances(self) -> None:
+    def test_forbidden_bypass_uses_one_two_one_body_distances(self) -> None:
         store = self.make_store()
         fake_motion = FakeMotion()
         fake_sensors = FakeSensors(
@@ -230,8 +230,8 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
 
         runtime.run_patrol(shelf_order=["A1"], max_steps=1)
 
-        self.assertEqual(fake_motion.calls.count(("move_forward", 14, 1.25)), 1)
-        self.assertEqual(fake_motion.calls.count(("move_forward", 14, 2.5)), 2)
+        self.assertEqual(fake_motion.calls.count(("move_forward", 20, 1.25)), 2)
+        self.assertEqual(fake_motion.calls.count(("move_forward", 20, 2.5)), 1)
 
     def test_planned_boundary_turn_delegates_to_mpu6050_adapter_when_available(self) -> None:
         store = self.make_store()
@@ -272,9 +272,11 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
             imu_adapter=FakeFailedImuAdapter(),
         )
 
-        with self.assertRaisesRegex(Exception, "failed to converge"):
-            runtime.turn_90_closed_loop("right")
+        result = runtime.turn_90_closed_loop("right")
 
+        self.assertIsNotNone(result)
+        self.assertFalse(result["ok"])  # type: ignore[index]
+        self.assertIn("failed to converge", result["message"])  # type: ignore[index]
         self.assertNotIn("rotate_right", fake_motion.names())
         self.assertEqual(store.snapshot()["task_status"], "ERROR")
 

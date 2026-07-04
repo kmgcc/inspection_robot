@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -10,10 +11,20 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from inspection_robot.test_mode import TestSessionManager
+from inspection_robot.test_mode import CalibrationStore, TestSessionManager
 
 
 class TestModeSafetyTest(unittest.TestCase):
+    def test_calibration_load_missing_file_has_no_write_side_effect(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = CalibrationStore(root)
+
+            calibration = store.load()
+
+            self.assertEqual(calibration["straight_speed"], 30)
+            self.assertFalse((root / "config" / "calibration.json").exists())
+
     def test_line_follow_test_uses_bounded_strafe_not_in_place_rotate(self) -> None:
         motion = FakeMotion()
         sensors = FakeSensors(

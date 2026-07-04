@@ -76,6 +76,18 @@ class RobotAdapterTest(unittest.TestCase):
         finally:
             sensors._BOT = original
 
+    def test_ultrasonic_distance_filters_near_echo_noise(self) -> None:
+        fake = FakeBot({sensors.ULTRASONIC_HIGH_REGISTER: [0], sensors.ULTRASONIC_LOW_REGISTER: [19]})
+        original = sensors._BOT
+        sensors._BOT = fake
+        try:
+            self.assertIsNone(sensors.read_distance_mm())
+        finally:
+            sensors._BOT = original
+
+    def test_bot_singleton_exposes_initialization_lock(self) -> None:
+        self.assertTrue(hasattr(sensors, "_BOT_LOCK"))
+
     def test_alarm_uses_buzzer_and_rgb_without_import_time_hardware(self) -> None:
         fake = FakeBot({})
         original = alarm.get_bot

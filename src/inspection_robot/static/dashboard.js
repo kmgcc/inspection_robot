@@ -13,6 +13,8 @@
 
 "use strict";
 
+(() => {
+
 // ============================================================
 // 常量与标签映射
 // ============================================================
@@ -86,11 +88,16 @@ function normalizeShelfId(v) {
 }
 
 async function postJson(url, body = {}) {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  let res;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    throw new Error(`网络请求失败：${err.message || err}`);
+  }
   let payload;
   try { payload = await res.json(); } catch (_) { payload = {}; }
   if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
@@ -892,3 +899,5 @@ loadCalibration();
 startTestPolling();
 
 setInterval(loadStatus, 1500);
+
+})();

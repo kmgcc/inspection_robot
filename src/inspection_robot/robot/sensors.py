@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,6 +19,7 @@ class RobotHardwareError(RuntimeError):
 
 
 _BOT: Any | None = None
+_BOT_LOCK = threading.Lock()
 
 
 def read_distance_mm() -> int | None:
@@ -37,7 +39,7 @@ def read_distance_mm() -> int | None:
     if high is None or low is None:
         return None
     distance = (high << 8) | low
-    if distance <= 0 or distance > 5000:
+    if distance < 20 or distance > 5000:
         return None
     return distance
 
@@ -113,19 +115,22 @@ def describe_tape_boundary(state: tuple[int, int, int, int] | None) -> dict[str,
 def get_bot() -> Any:
     global _BOT
     if _BOT is None:
-        try:
-            from Raspbot_Lib import Raspbot  # type: ignore[import-not-found]
-        except ImportError as exc:
-            raise RobotHardwareError(
-                "Raspbot_Lib is not available. Run this on the RASPBOT image or install the vendor library."
-            ) from exc
-        _BOT = Raspbot()
+        with _BOT_LOCK:
+            if _BOT is None:
+                try:
+                    from Raspbot_Lib import Raspbot  # type: ignore[import-not-found]
+                except ImportError as exc:
+                    raise RobotHardwareError(
+                        "Raspbot_Lib is not available. Run this on the RASPBOT image or install the vendor library."
+                    ) from exc
+                _BOT = Raspbot()
     return _BOT
 
 
 def reset_bot_for_tests() -> None:
     global _BOT
-    _BOT = None
+    with _BOT_LOCK:
+        _BOT = None
 
 
 def _first_int(raw: Any) -> int | None:

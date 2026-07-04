@@ -79,7 +79,10 @@ def evaluate_shelf_scan(
     if not skip_missing:
         for item_id in missing_items:
             tag_entry = item_lookup.get(item_id)
-            tag_id, info = tag_entry if tag_entry is not None else (item_id, {"name": item_id, "priority": 2})
+            tag_id, info = tag_entry if tag_entry is not None else (
+                item_id,
+                {"name": item_id, "kind": "item", "item_id": item_id, "expected_shelf": shelf_id, "priority": 2},
+            )
             events.append(
                 make_event(
                     "missing_item",
@@ -308,8 +311,12 @@ def _item_mismatch(info: TagInfo, detection: Mapping[str, JsonValue]) -> list[st
 def _compare_evidence(mismatch: list[str], label: str, expected: str | None, actual: str | None) -> None:
     if expected is None or actual is None:
         return
-    if expected.upper() != actual.upper():
+    if _normalized_evidence(expected) != _normalized_evidence(actual):
         mismatch.append(f"{label} expected {expected}, got {actual}")
+
+
+def _normalized_evidence(value: str) -> str:
+    return value.strip().casefold()
 
 
 def _shelf_evidence_events(
@@ -326,7 +333,7 @@ def _shelf_evidence_events(
     mismatch: list[str] = []
     if mapped_shelf != shelf_id:
         mismatch.append(f"tag maps to {mapped_shelf}, current shelf is {shelf_id}")
-    if expected_label is not None and ocr_text is not None and expected_label.upper() != ocr_text.upper():
+    if expected_label is not None and ocr_text is not None and _normalized_evidence(expected_label) != _normalized_evidence(ocr_text):
         mismatch.append(f"ocr expected {expected_label}, got {ocr_text}")
     if not mismatch:
         return []

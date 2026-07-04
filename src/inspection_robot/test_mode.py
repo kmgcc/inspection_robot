@@ -35,14 +35,15 @@ CALIBRATION_DEFAULTS: dict[str, Any] = {
     ),
     "_uncalibrated": False,
     "straight_min_speed": 12,       # 最低稳定直行速度
-    "straight_speed": 16,           # 直行测试默认速度
+    "straight_speed": 30,           # 直行测试默认速度
     "straight_step_seconds": 2.0,    # 直行测试默认时长(s)
+    "patrol_step_seconds": 0.25,
     "turn_speed": 22,               # 转向测试默认速度
     "turn_cw90_seconds": 0.85,       # 顺时针约90°所需时间(s)
     "turn_ccw90_seconds": 0.85,      # 逆时针约90°所需时间(s)
     "cw_compensation": 1.0,          # 顺时针左右轮补偿系数
     "ccw_compensation": 1.0,         # 逆时针左右轮补偿系数
-    "line_follow_speed": 16,         # 寻线测试速度
+    "line_follow_speed": 30,         # 寻线测试速度
     "line_follow_step_seconds": 0.14, # 寻线每步时长(s)
 }
 
@@ -50,6 +51,7 @@ CALIBRATION_ALLOWED_KEYS = {
     "straight_min_speed",
     "straight_speed",
     "straight_step_seconds",
+    "patrol_step_seconds",
     "turn_speed",
     "turn_cw90_seconds",
     "turn_ccw90_seconds",
@@ -69,10 +71,8 @@ class CalibrationStore:
         self._lock = threading.Lock()
 
     def load(self) -> dict[str, Any]:
-        """加载标定参数，文件不存在时返回默认值并写入。"""
         with self._lock:
             if not self._path.exists():
-                self._write_unlocked(CALIBRATION_DEFAULTS.copy())
                 return CALIBRATION_DEFAULTS.copy()
             try:
                 with self._path.open("r", encoding="utf-8") as fh:
