@@ -209,13 +209,13 @@ def turn_90_with_result(
         tolerance_degrees=float(os.environ.get("MPU6050_TURN_TOLERANCE_DEGREES", "2.0")),
         sample_seconds=float(os.environ.get("MPU6050_TURN_SAMPLE_SECONDS", "0.01")),
         bias_samples=int(os.environ.get("MPU6050_TURN_BIAS_SAMPLES", "20")),
-        max_correction_attempts=int(os.environ.get("MPU6050_TURN_MAX_CORRECTIONS", "7")),
+        max_correction_attempts=int(os.environ.get("MPU6050_TURN_MAX_CORRECTIONS", "9")),
         min_pulse_seconds=float(os.environ.get("MPU6050_TURN_MIN_PULSE_SECONDS", "0.025")),
-        max_pulse_seconds=float(os.environ.get("MPU6050_TURN_MAX_PULSE_SECONDS", "0.25")),
+        max_pulse_seconds=float(os.environ.get("MPU6050_TURN_MAX_PULSE_SECONDS", "0.35")),
         settle_seconds=float(os.environ.get("MPU6050_TURN_SETTLE_SECONDS", "0.25")),
-        correction_gain=float(os.environ.get("MPU6050_TURN_CORRECTION_GAIN", "0.55")),
+        correction_gain=float(os.environ.get("MPU6050_TURN_CORRECTION_GAIN", "0.8")),
         min_measured_degrees=float(os.environ.get("MPU6050_TURN_MIN_MEASURED_DEGREES", "0.5")),
-        correction_speed=int(os.environ.get("MPU6050_TURN_CORRECTION_SPEED", str(max(5, int(speed) // 3)))),
+        correction_speed=int(os.environ.get("MPU6050_TURN_CORRECTION_SPEED", str(max(8, int(speed) // 2)))),
         turn_axis=os.environ.get("MPU6050_TURN_AXIS", "auto"),
         post_stop_sample_seconds=float(os.environ.get("MPU6050_TURN_POST_STOP_SAMPLE_SECONDS", "0.18")),
     )
@@ -437,7 +437,9 @@ def _correction_duration(
     config: Turn90Config,
 ) -> float:
     if rate_hint_dps is not None and rate_hint_dps > 1.0:
-        raw = error_degrees / rate_hint_dps
+        speed_ratio = _correction_speed(config) / max(1.0, float(config.speed))
+        effective_rate_hint = rate_hint_dps * max(0.1, speed_ratio)
+        raw = error_degrees / effective_rate_hint
     else:
         raw = config.fallback_seconds * (error_degrees / max(1.0, target_degrees))
     raw *= max(0.1, float(config.correction_gain))
@@ -446,7 +448,7 @@ def _correction_duration(
 
 def _correction_speed(config: Turn90Config) -> int:
     if config.correction_speed is None:
-        return max(5, min(100, int(config.speed) // 3))
+        return max(8, min(100, int(config.speed) // 2))
     return max(1, min(100, int(config.correction_speed)))
 
 

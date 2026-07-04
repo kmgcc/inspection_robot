@@ -177,7 +177,7 @@ class WebApiTest(unittest.TestCase):
 
         manual_turn = self.client.post("/api/control/turn_right_90", json={"speed": 20, "duration_seconds": 0.2})
         self.assertEqual(manual_turn.status_code, 200)
-        self.assertEqual(runtime.turns[-1], ("right", 20, 0.6))
+        self.assertEqual(runtime.turns[-1], ("right", 22, 0.85))
 
 
 class FakeRuntime:

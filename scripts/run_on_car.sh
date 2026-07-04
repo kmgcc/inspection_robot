@@ -6,7 +6,7 @@ CAR_DIR="${CAR_DIR:-/home/pi/temp/inspection_robot}"
 RUN_MODE="${RUN_MODE:-robot}"
 AUTO_START_RUNTIME="${AUTO_START_RUNTIME:-0}"
 PORT="${PORT:-5000}"
-LINE_FOLLOW_ENABLED="${LINE_FOLLOW_ENABLED:-1}"
+LINE_FOLLOW_ENABLED="${LINE_FOLLOW_ENABLED:-0}"
 
 case "$RUN_MODE" in
   simulate|robot)

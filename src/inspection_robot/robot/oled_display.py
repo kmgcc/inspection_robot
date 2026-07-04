@@ -14,6 +14,7 @@ _LOCK = threading.Lock()
 _OLED: Any | None = None
 _DISABLED_REASON: str | None = None
 _LAST_REFRESH_AT = 0.0
+_CLEAR_ON_NEXT_RENDER = True
 
 
 def update_motion_sensor(sample: Mapping[str, object]) -> None:
@@ -43,11 +44,12 @@ def disabled_reason() -> str | None:
 
 
 def reset_for_test() -> None:
-    global _OLED, _DISABLED_REASON, _LAST_REFRESH_AT
+    global _OLED, _DISABLED_REASON, _LAST_REFRESH_AT, _CLEAR_ON_NEXT_RENDER
     with _LOCK:
         _OLED = None
         _DISABLED_REASON = None
         _LAST_REFRESH_AT = 0.0
+        _CLEAR_ON_NEXT_RENDER = True
 
 
 def _oled() -> Any:
@@ -68,17 +70,20 @@ def _oled() -> Any:
 
 
 def _render_motion_sensor(oled: Any, sample: Mapping[str, object]) -> None:
+    global _CLEAR_ON_NEXT_RENDER
     ok = bool(sample.get("ok"))
     orientation = sample.get("orientation_deg")
     yaw = orientation.get("yaw") if isinstance(orientation, Mapping) else None
     last_turn = sample.get("last_turn")
-    turn_text = _turn_text(last_turn) if isinstance(last_turn, Mapping) else "Turn: -"
+    turn_text = _turn_text(last_turn) if isinstance(last_turn, Mapping) else "TURN - err --"
 
-    oled.clear()
-    oled.add_line("Inspection Robot", 1)
-    oled.add_line("MPU6050 OK" if ok else "MPU6050 ERR", 2)
-    oled.add_line(_yaw_text(yaw), 3)
-    oled.add_line(turn_text, 4)
+    if _CLEAR_ON_NEXT_RENDER:
+        oled.clear()
+        _CLEAR_ON_NEXT_RENDER = False
+    oled.add_line(_fit_line("INSPECT ROBOT"), 1)
+    oled.add_line(_fit_line("MPU OK" if ok else "MPU ERR"), 2)
+    oled.add_line(_fit_line(_yaw_text(yaw)), 3)
+    oled.add_line(_fit_line(turn_text), 4)
     oled.refresh()
 
 
@@ -86,18 +91,32 @@ def _yaw_text(value: object) -> str:
     try:
         yaw = float(value)
     except (TypeError, ValueError):
-        return "Yaw: -"
-    return f"Yaw:{yaw:7.1f} deg"
+        return "YAW --.- deg"
+    return f"YAW {yaw:+06.1f} deg"
 
 
 def _turn_text(last_turn: Mapping[str, object]) -> str:
-    direction = str(last_turn.get("direction") or "-")[:5]
+    raw_direction = str(last_turn.get("direction") or "-").strip().lower()
+    direction = "R" if raw_direction.startswith("r") else "L" if raw_direction.startswith("l") else "-"
     error = last_turn.get("error_degrees")
     try:
         error_value = float(error)
     except (TypeError, ValueError):
-        return f"Turn:{direction} err:-"
-    return f"Turn:{direction} err:{error_value:4.1f}"
+        return f"TURN {direction} err --"
+    return f"TURN {direction} err {error_value:+4.1f}"
+
+
+def _fit_line(text: str) -> str:
+    width = _line_width()
+    line = str(text).replace("\n", " ")[:width]
+    return line.ljust(width)
+
+
+def _line_width() -> int:
+    try:
+        return max(8, min(32, int(os.environ.get("OLED_LINE_WIDTH", "16"))))
+    except ValueError:
+        return 16
 
 
 def _refresh_interval_seconds() -> float:

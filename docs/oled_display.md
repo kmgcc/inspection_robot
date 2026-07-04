@@ -41,12 +41,12 @@ python3 /home/pi/software/oled_yahboom/yahboom_oled.py &
 3. OLED 刷新挂在 `RobotRuntime.refresh_motion_sensor()` 上，和网页 `/api/status` 使用同一次 MPU6050 样本。
 4. 如果 OLED 库不存在、屏幕初始化失败或 I2C 异常，适配器会静默禁用，不阻塞巡逻和网页。
 
-当前显示内容：
+当前显示内容使用 16 字符定宽短行，避免旧文本残影和错位。内容为：
 
-1. `Inspection Robot`
-2. `MPU6050 OK` 或 `MPU6050 ERR`
-3. `Yaw: xx.x deg`
-4. 最近一次 90 度转向方向和误差
+1. `INSPECT ROBOT`
+2. `MPU OK` 或 `MPU ERR`
+3. `YAW +xx.x deg`
+4. 最近一次 90 度转向方向和误差，例如 `TURN R err -1.2`
 
 ## 三、可调环境变量
 
@@ -55,6 +55,7 @@ python3 /home/pi/software/oled_yahboom/yahboom_oled.py &
 | `OLED_DISPLAY_ENABLED` | `1` | 设为 `0` 可关闭 OLED 刷新。 |
 | `YAHBOOM_OLED_PATH` | `/home/pi/software/oled_yahboom` | 官方 OLED Python 库路径。 |
 | `OLED_REFRESH_SECONDS` | `0.75` | OLED 最小刷新间隔，避免频繁写屏影响主循环。 |
+| `OLED_LINE_WIDTH` | `16` | 每行定宽字符数，默认适配 4 行小屏。 |
 
 ## 四、现场验证
 

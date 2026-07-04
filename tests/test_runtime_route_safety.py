@@ -35,7 +35,7 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
             root=self.root,
         )
 
-    def make_config(self) -> RobotRuntimeConfig:
+    def make_config(self, *, line_follow_enabled: bool = False) -> RobotRuntimeConfig:
         return RobotRuntimeConfig(
             patrol_speed=5,
             step_seconds=0,
@@ -53,6 +53,7 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
             line_follow_search_seconds=0,
             obstacle_wait_seconds=0,
             avoidance_body_seconds=0,
+            line_follow_enabled=line_follow_enabled,
         )
 
     def test_partial_tape_outside_route_line_follow_keeps_patrol_forward(self) -> None:
@@ -63,7 +64,7 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
             store,
             DEFAULT_WAREHOUSE_MAP,
             {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
-            config=self.make_config(),
+            config=self.make_config(line_follow_enabled=True),
             motion_adapter=fake_motion,
             sensor_adapter=fake_sensors,
             alarm_adapter=FakeAlarm(),
@@ -87,7 +88,7 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
             store,
             DEFAULT_WAREHOUSE_MAP,
             {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
-            config=self.make_config(),
+            config=self.make_config(line_follow_enabled=True),
             motion_adapter=fake_motion,
             sensor_adapter=fake_sensors,
             alarm_adapter=FakeAlarm(),
@@ -101,6 +102,31 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
         self.assertIn(("move_forward", 7, 0), fake_motion.calls)
         self.assertIn(("move_forward", 5, 0), fake_motion.calls)
 
+    def test_boundary_pattern_keeps_pure_patrol_when_line_follow_disabled_by_default(self) -> None:
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        fake_sensors = FakeSensors(
+            distances=[400] * 6,
+            tapes=[(0, 0, 0, 0), (1, 0, 0, 1)],
+        )
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=self.make_config(),
+            motion_adapter=fake_motion,
+            sensor_adapter=fake_sensors,
+            alarm_adapter=FakeAlarm(),
+            gimbal_adapter=FakeGimbal(),
+            detection_provider=fake_detection_provider,
+        )
+
+        runtime.run_continuous_patrol(max_iterations=1)
+
+        self.assertEqual(fake_motion.names().count("rotate_right"), 1)
+        self.assertIn(("move_forward", 5, 0), fake_motion.calls)
+        self.assertNotIn(("move_forward", 7, 0), fake_motion.calls)
+
     def test_line_follow_searches_by_last_correction_when_line_is_temporarily_lost(self) -> None:
         store = self.make_store()
         fake_motion = FakeMotion()
@@ -112,7 +138,7 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
             store,
             DEFAULT_WAREHOUSE_MAP,
             {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
-            config=self.make_config(),
+            config=self.make_config(line_follow_enabled=True),
             motion_adapter=fake_motion,
             sensor_adapter=fake_sensors,
             alarm_adapter=FakeAlarm(),
@@ -136,7 +162,7 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
             store,
             DEFAULT_WAREHOUSE_MAP,
             {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
-            config=self.make_config(),
+            config=self.make_config(line_follow_enabled=True),
             motion_adapter=fake_motion,
             sensor_adapter=fake_sensors,
             alarm_adapter=FakeAlarm(),
@@ -227,7 +253,7 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
 
         runtime.run_continuous_patrol(max_iterations=1)
 
-        self.assertEqual(fake_imu.calls, [("right", 20, 0.6)])
+        self.assertEqual(fake_imu.calls, [("right", 22, 0.85)])
         self.assertNotIn("rotate_right", fake_motion.names())
 
     def test_failed_mpu6050_turn_does_not_fall_back_to_open_loop(self) -> None:

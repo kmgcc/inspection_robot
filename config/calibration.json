@@ -1,14 +1,14 @@
 {
   "_note": "此文件由运动测试页面保存。首次使用前请在测试模式中完成实测标定，_uncalibrated 为 true 时界面会显示醒目提示。",
   "_uncalibrated": false,
-  "straight_min_speed": 5,
-  "straight_speed": 5,
+  "straight_min_speed": 12,
+  "straight_speed": 16,
   "straight_step_seconds": 2.0,
-  "turn_speed": 20,
-  "turn_cw90_seconds": 0.6,
-  "turn_ccw90_seconds": 0.6,
+  "turn_speed": 22,
+  "turn_cw90_seconds": 0.85,
+  "turn_ccw90_seconds": 0.85,
   "cw_compensation": 1.0,
   "ccw_compensation": 1.0,
-  "line_follow_speed": 5,
+  "line_follow_speed": 16,
   "line_follow_step_seconds": 0.14
 }

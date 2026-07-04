@@ -142,6 +142,7 @@ class MPU6050Test(unittest.TestCase):
             min_pulse_seconds=0.001,
             max_pulse_seconds=0.2,
             settle_seconds=0,
+            correction_gain=0.2,
         )
 
         result = mpu6050.turn_90_with_gyro("right", motion, gyro, config)
@@ -149,6 +150,22 @@ class MPU6050Test(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertEqual(result.pulses[0].speed, 20)
         self.assertTrue(any(pulse.speed == 6 for pulse in result.pulses[1:]))
+
+    def test_correction_duration_scales_rate_hint_to_correction_speed(self) -> None:
+        config = mpu6050.Turn90Config(
+            speed=20,
+            correction_speed=10,
+            fallback_seconds=0.85,
+            target_degrees=90.0,
+            correction_gain=0.8,
+            min_pulse_seconds=0.01,
+            max_pulse_seconds=1.0,
+        )
+
+        duration = mpu6050._correction_duration(30.0, 90.0, 180.0, config)
+
+        self.assertGreater(duration, 0.25)
+        self.assertLess(duration, 0.28)
 
     def test_measure_turn_pulse_samples_after_motor_stop(self) -> None:
         gyro = FakeGyro(rate_dps=0.0, vector_rate_dps={"x": 0.0, "y": 0.0, "z": 50.0})

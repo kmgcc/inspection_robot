@@ -37,8 +37,8 @@ class OledDisplayTest(unittest.TestCase):
         oled = FakeYahboomOled.instances[0]
         self.assertTrue(oled.initialized)
         self.assertIn(("clear", None), oled.calls)
-        self.assertIn(("line", 3, "Yaw:   42.2 deg"), oled.calls)
-        self.assertIn(("line", 4, "Turn:left err:-1.2"), oled.calls)
+        self.assertIn(("line", 3, "YAW +042.2 deg  "), oled.calls)
+        self.assertIn(("line", 4, "TURN L err -1.2 "), oled.calls)
         self.assertIn(("refresh", None), oled.calls)
 
     def test_update_motion_sensor_disables_after_vendor_import_failure(self) -> None:
