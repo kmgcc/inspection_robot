@@ -280,9 +280,8 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
         self.assertNotIn("rotate_right", fake_motion.names())
         self.assertEqual(store.snapshot()["task_status"], "ERROR")
 
-    def test_motion_sensor_refresh_updates_optional_display(self) -> None:
+    def test_motion_sensor_refresh_updates_state(self) -> None:
         store = self.make_store()
-        fake_display = FakeDisplay()
         sample = {
             "ok": True,
             "orientation_deg": {"roll": 0.0, "pitch": 0.0, "yaw": 12.5},
@@ -298,13 +297,11 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
             gimbal_adapter=FakeGimbal(),
             detection_provider=fake_detection_provider,
             imu_adapter=FakeMotionSensorImu(sample),
-            display_adapter=fake_display,
         )
 
         runtime.refresh_motion_sensor(force=True)
 
         self.assertEqual(store.snapshot()["motion_sensor"], sample)
-        self.assertEqual(fake_display.samples, [sample])
 
     def test_runtime_refreshes_normal_led_during_patrol(self) -> None:
         store = self.make_store()
@@ -432,14 +429,6 @@ class FakeMotionSensorImu:
 
     def read_motion_sample(self) -> dict[str, object]:
         return dict(self.sample)
-
-
-class FakeDisplay:
-    def __init__(self) -> None:
-        self.samples: list[dict[str, object]] = []
-
-    def update_motion_sensor(self, sample: dict[str, object]) -> None:
-        self.samples.append(dict(sample))
 
 
 def fake_detection_provider(**_: object) -> Iterator[dict[str, object]]:
