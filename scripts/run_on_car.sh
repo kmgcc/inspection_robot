@@ -19,7 +19,7 @@ esac
 
 ssh "$CAR_HOST" "
 cd '$CAR_DIR'
-PYTHON_CMD=\$(for candidate in python3.13 python3.12 python3.11 python3.10 python3 python; do
+PYTHON_CMD=\$(for candidate in .venv/bin/python python3.13 python3.12 python3.11 python3.10 python3 python; do
   if command -v \"\$candidate\" >/dev/null 2>&1 && \"\$candidate\" -c 'import sys; raise SystemExit(sys.version_info < (3, 10))' >/dev/null 2>&1; then
     printf '%s' \"\$candidate\"
     exit 0
