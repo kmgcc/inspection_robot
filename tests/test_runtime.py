@@ -168,8 +168,8 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(config.forbidden_avoidance_return_bodies, 1.5)
         self.assertEqual(config.boundary_min_black_sensors, 1)
         self.assertEqual(config.boundary_confirm_samples, 1)
-        self.assertEqual(config.boundary_confirm_gap_seconds, 0.02)
-        self.assertEqual(config.boundary_window_seconds, 0.12)
+        self.assertEqual(config.boundary_confirm_gap_seconds, 0.0)
+        self.assertEqual(config.boundary_window_seconds, 0.25)
         self.assertEqual(config.boundary_cooldown_seconds, 0.0)
         self.assertEqual(config.boundary_retreat_speed, 12)
         self.assertEqual(config.boundary_retreat_seconds, 0.14)
@@ -513,6 +513,53 @@ class RuntimeTest(unittest.TestCase):
         runtime._reset_boundary_window()
 
         self.assertFalse(runtime._feed_boundary_window((1, 1, 1, 1)))
+
+    def test_line_follow_boundary_window_ignores_normal_sequential_line_hits(self) -> None:
+        store = self.make_store()
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=RobotRuntimeConfig(boundary_window_seconds=10.0, boundary_min_black_sensors=1),
+            motion_adapter=FakeMotion(),
+            sensor_adapter=FakeSensors(
+                distances=[400],
+                tapes=[
+                    (0, 1, 1, 1),
+                    (1, 0, 0, 1),
+                    (1, 1, 1, 0),
+                    (1, 0, 1, 1),
+                    (1, 1, 0, 1),
+                ],
+            ),
+            alarm_adapter=FakeAlarm(),
+            detection_provider=fake_detection_provider,
+        )
+        runtime._line_follow_active = True
+
+        for _ in range(5):
+            self.assertFalse(runtime._poll_boundary_during_motion(0.0))
+
+        self.assertIsNone(runtime._pending_boundary_state)
+
+    def test_line_follow_boundary_window_latches_wide_boundary_frame(self) -> None:
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=RobotRuntimeConfig(boundary_window_seconds=10.0, boundary_min_black_sensors=1),
+            motion_adapter=fake_motion,
+            sensor_adapter=FakeSensors(distances=[400], tapes=[(0, 0, 0, 1)]),
+            alarm_adapter=FakeAlarm(),
+            detection_provider=fake_detection_provider,
+        )
+        runtime._line_follow_active = True
+
+        self.assertTrue(runtime._poll_boundary_during_motion(0.0))
+        self.assertEqual(runtime._pending_boundary_state, (0, 0, 0, 1))
+        self.assertIn("stop", fake_motion.calls)
 
     def test_motion_guard_stops_and_retreats_on_boundary_latch(self) -> None:
         store = self.make_store()

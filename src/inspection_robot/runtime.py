@@ -100,8 +100,8 @@ class RobotRuntimeConfig:
     avoidance_turn_direction: str = field(default_factory=lambda: _env_text("right", "AVOIDANCE_TURN_DIRECTION"))
     boundary_min_black_sensors: int = field(default_factory=lambda: _env_int(1, "BOUNDARY_MIN_BLACK_SENSORS"))
     boundary_confirm_samples: int = field(default_factory=lambda: _env_int(1, "BOUNDARY_CONFIRM_SAMPLES"))
-    boundary_confirm_gap_seconds: float = field(default_factory=lambda: _env_float(0.02, "BOUNDARY_CONFIRM_GAP_SECONDS"))
-    boundary_window_seconds: float = field(default_factory=lambda: _env_float(0.12, "BOUNDARY_WINDOW_SECONDS"))
+    boundary_confirm_gap_seconds: float = field(default_factory=lambda: _env_float(0.0, "BOUNDARY_CONFIRM_GAP_SECONDS"))
+    boundary_window_seconds: float = field(default_factory=lambda: _env_float(0.25, "BOUNDARY_WINDOW_SECONDS"))
     boundary_cooldown_seconds: float = field(default_factory=lambda: _env_float(0.0, "BOUNDARY_COOLDOWN_SECONDS"))
     boundary_retreat_speed: int = field(default_factory=lambda: _env_int(12, "BOUNDARY_RETREAT_SPEED"))
     boundary_retreat_seconds: float = field(default_factory=lambda: _env_float(0.14, "BOUNDARY_RETREAT_SECONDS"))
@@ -580,7 +580,10 @@ class RobotRuntime:
             tape_state = self.sensors.read_tape_boundary()
         if self._transfer_line_context is not None:
             return self._handle_transfer_tape_boundary(tape_state)
-        candidate = self._feed_boundary_window(tape_state)
+        if self._line_follow_active:
+            candidate = self._feed_line_follow_boundary_window(tape_state)
+        else:
+            candidate = self._feed_boundary_window(tape_state)
         if not candidate and self._pending_boundary_state is not None:
             tape_state = self._pending_boundary_state
             self._pending_boundary_state = None
@@ -957,6 +960,26 @@ class RobotRuntime:
         recent_black = sum(1 for seen_at in self._black_seen_at if now - seen_at <= window)
         return recent_black >= threshold
 
+    def _feed_line_follow_boundary_window(self, tape_state: tuple[int, int, int, int] | None) -> bool:
+        if tape_state is None:
+            return False
+        if sensors.full_tape_boundary_detected(tape_state):
+            return self._feed_boundary_window(tape_state, min_black=4)
+
+        self._feed_boundary_window(tape_state, min_black=4)
+        black_count = sensors.black_tape_count(tape_state)
+        left, left_center, right_center, right = tape_state
+        if black_count >= 3 and (left == 0 or right == 0) and (left_center == 0 or right_center == 0):
+            return True
+
+        now = time.monotonic()
+        window = max(0.0, float(self.config.boundary_window_seconds))
+        left_recent = now - self._black_seen_at[0] <= window
+        right_recent = now - self._black_seen_at[3] <= window
+        both_centers_now = left_center == 0 and right_center == 0
+        recent_black = sum(1 for seen_at in self._black_seen_at if now - seen_at <= window)
+        return recent_black >= 4 and left_recent and right_recent and both_centers_now
+
     def _boundary_window_state(
         self,
         fallback: tuple[int, int, int, int] | None = None,
@@ -985,9 +1008,13 @@ class RobotRuntime:
                 sample = self.sensors.read_tape_boundary()
             except RobotHardwareError:
                 return None
-            if not self._candidate_boundary(sample):
+            if self._line_follow_active:
+                candidate = self._feed_line_follow_boundary_window(sample)
+            else:
+                candidate = self._feed_boundary_window(sample)
+            if not candidate:
                 return None
-            confirmed_state = sample
+            confirmed_state = self._boundary_window_state(sample)
         return confirmed_state
 
     def _retreat_from_boundary(self, source: str) -> bool:
@@ -1628,7 +1655,11 @@ class RobotRuntime:
                 },
             )
             return True
-        if not self._feed_boundary_window(tape_state):
+        if self._line_follow_active:
+            candidate = self._feed_line_follow_boundary_window(tape_state)
+        else:
+            candidate = self._feed_boundary_window(tape_state)
+        if not candidate:
             return False
         self._pending_boundary_state = self._boundary_window_state(tape_state)
         self.motion.stop()
