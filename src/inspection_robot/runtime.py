@@ -26,7 +26,6 @@ from .vision.tag_detector import VisionDependencyError
 Cell = tuple[int, int]
 DetectionProvider = Callable[..., Iterator[Mapping[str, object]]]
 HEADINGS = ["N", "E", "S", "W"]
-DEFAULT_BOUNDARY_ACTION_PATTERN = "turn_follow,turn_patrol,bypass,turn_follow,turn_patrol"
 logger = logging.getLogger(__name__)
 
 
@@ -148,8 +147,6 @@ class RobotRuntimeConfig:
     line_follow_poll_seconds: float = field(default_factory=lambda: _env_float(0.01, "LINE_FOLLOW_POLL_SECONDS"))
     line_follow_max_lost_ticks: int = field(default_factory=lambda: _env_int(15, "LINE_FOLLOW_MAX_LOST_TICKS"))
     motion_sensor_interval_seconds: float = field(default_factory=lambda: _env_float(0.5, "MOTION_SENSOR_INTERVAL_SECONDS"))
-    boundary_action_pattern: str = field(default_factory=lambda: _env_text(DEFAULT_BOUNDARY_ACTION_PATTERN, "BOUNDARY_ACTION_PATTERN"))
-    turns_per_cycle: int = 2
     skip_scan_cycles: int = 1
     camera_device: int = 0
     patrol_order: tuple[str, ...] = field(default_factory=lambda: ("A1", "A2", "A3", "A4", "B3", "B2", "B1"))
@@ -206,7 +203,9 @@ class RobotRuntime:
         self._blocked_count = 0
         self._obstacle_active = False
         self._last_boundary_turn = 0.0
-        self._boundary_action_index = 0
+        self._boundary_event_index = 0
+        self._last_shelf_anchor: str | None = None
+        self._bypassed_for_shelf_anchors: set[str] = set()
         self._line_follow_active = False
         self._line_lost_ticks = 0
         self._last_line_correction: str | None = None
@@ -344,7 +343,9 @@ class RobotRuntime:
                 "scan_enabled": self.config.scan_enabled,
             },
         )
-        self._boundary_action_index = 0
+        self._boundary_event_index = 0
+        self._last_shelf_anchor = None
+        self._bypassed_for_shelf_anchors = set()
         self._line_follow_active = False
         self._line_lost_ticks = 0
         self._last_line_correction = None
@@ -515,15 +516,16 @@ class RobotRuntime:
         return self._handle_planned_boundary_turn(confirmed_state, action)
 
     def _handle_planned_boundary_turn(self, tape_state: tuple[int, int, int, int], action: str) -> str:
-        action_number = self._boundary_action_index + 1
+        action_number = self._boundary_event_index + 1
         zone_id = f"black-tape-route-{action_number}"
         self.store.record_motion_debug(
             "boundary_action",
             self._boundary_action_message(action),
             status="TURNING_AT_BOUNDARY",
             evidence={
-                "action_index": action_number,
+                "boundary_event_index": action_number,
                 "action": action,
+                "last_shelf_anchor": self._last_shelf_anchor,
                 "tape_state": _json_tape_state(tape_state),
                 "phase_before": self._patrol_phase_label(),
             },
@@ -534,14 +536,14 @@ class RobotRuntime:
         if not _turn_succeeded(self._turn_90("right")):
             return "none"
         self.store.record_boundary_turn("clockwise", 90)
-        self._line_follow_active = action == "turn_follow" and self.config.line_follow_enabled
+        self._line_follow_active = False
         self._line_lost_ticks = 0
         self._last_line_correction = None
         self._reset_boundary_window()
         self._reset_heading_guard()
         self._zupt_recalibrate("post_boundary_turn")
         self.store.record_forbidden_zone(zone_id, False)
-        self._advance_boundary_action()
+        self._advance_boundary_event()
         self.store.record_motion_debug(
             "boundary_action_done",
             f"转向完成，当前阶段：{self._patrol_phase_label()}。",
@@ -553,9 +555,13 @@ class RobotRuntime:
         self._show_line_follow() if self._line_follow_active else self._show_normal()
         return "turn"
 
+    def _line_follow_auto_enter_allowed(self) -> bool:
+        return self._last_shelf_anchor not in {"A4", "B1"}
+
     def _handle_forbidden_bypass(self, tape_state: tuple[int, int, int, int]) -> str:
-        action_number = self._boundary_action_index + 1
+        action_number = self._boundary_event_index + 1
         zone_id = f"black-tape-bypass-{action_number}"
+        anchor = self._last_shelf_anchor
         self._line_follow_active = False
         self.alarm.show_obstacle_wait()
         self.store.record_motion_debug(
@@ -563,7 +569,8 @@ class RobotRuntime:
             self._boundary_action_message("bypass"),
             status="FORBIDDEN_ZONE_WAIT",
             evidence={
-                "action_index": action_number,
+                "boundary_event_index": action_number,
+                "last_shelf_anchor": anchor,
                 "tape_state": _json_tape_state(tape_state),
                 "phase_before": self._patrol_phase_label(),
             },
@@ -574,9 +581,11 @@ class RobotRuntime:
         if self._avoid_to_safe_side(None):
             self.store.record_forbidden_zone(zone_id, False)
             self._show_normal()
+            if anchor is not None:
+                self._bypassed_for_shelf_anchors.add(anchor)
         self._reset_boundary_window()
         self._reset_heading_guard()
-        self._advance_boundary_action()
+        self._advance_boundary_event()
         self.store.record_motion_debug(
             "forbidden_bypass_done",
             f"禁区绕行完成，继续阶段：{self._patrol_phase_label()}。",
@@ -630,7 +639,7 @@ class RobotRuntime:
         if self._line_follow_active and self.config.line_follow_enabled:
             self._drive_line_follow_step(tape_state)
             return
-        if self.config.line_follow_enabled and self.config.line_follow_auto_enter:
+        if self.config.line_follow_enabled and self.config.line_follow_auto_enter and self._line_follow_auto_enter_allowed():
             decision = decide_line_follow_motion(tape_state)
             if decision.line_seen and not decision.boundary_candidate:
                 self._line_follow_active = True
@@ -1130,6 +1139,10 @@ class RobotRuntime:
         normalized = shelf_id.strip().upper()
         if normalized not in order:
             return
+        previous_anchor = self._last_shelf_anchor
+        self._last_shelf_anchor = normalized
+        if normalized == "B3" and previous_anchor != "B3":
+            self._bypassed_for_shelf_anchors.discard(normalized)
         if self._observed_shelf_sequence and self._observed_shelf_sequence[-1] == normalized:
             return
         index = order.index(normalized)
@@ -1331,36 +1344,43 @@ class RobotRuntime:
         return distance_mm is not None and distance_mm >= self.config.clear_distance_mm
 
     def _next_boundary_action(self) -> str:
-        pattern = _boundary_action_pattern(self.config.boundary_action_pattern)
-        return pattern[self._boundary_action_index % len(pattern)]
+        anchor = self._last_shelf_anchor
+        if anchor == "B3" and anchor not in self._bypassed_for_shelf_anchors:
+            return "bypass"
+        return "turn_patrol"
 
-    def _advance_boundary_action(self) -> None:
-        self._boundary_action_index += 1
+    def _advance_boundary_event(self) -> None:
+        self._boundary_event_index += 1
 
     def _boundary_action_message(self, action: str) -> str:
-        pattern_index = self._boundary_action_index % len(_boundary_action_pattern(self.config.boundary_action_pattern))
         if action == "bypass":
-            return "B列中段禁区触发：停车后按右侧绕行流程绕过，再继续B列短步巡逻。"
-        messages = {
-            0: "A列末端禁区/列端触发：顺时针转 90 度，随后进入寻线到B端。",
-            1: "B端入口禁区/列端触发：顺时针转 90 度，退出寻线，进入B列短步巡逻。",
-            2: "中段禁区触发：停车后按绕行流程越过禁区。",
-            3: "B列末端禁区/列端触发：顺时针转 90 度，随后寻线回A端。",
-            4: "A端入口禁区/列端触发：顺时针转 90 度，回到A列起点，进入下一轮。",
-        }
-        return messages.get(pattern_index, f"列端触发：执行 {action} 动作。")
+            return "最近识别到 B3：判定进入B列禁区段，停车后按障碍绕行流程绕过，再继续B列巡逻。"
+        anchor = self._last_shelf_anchor
+        if anchor == "A4":
+            return "最近识别到 A4：判定已到A列末端，黑胶带只触发90度转向，直行前往B列。"
+        if anchor == "B1":
+            return "最近识别到 B1：判定已到B列起点，黑胶带只触发90度转向，直行前往A列。"
+        if anchor == "B3":
+            return "最近识别到 B3 且禁区已处理：黑胶带只作为行驶转向触发。"
+        if anchor is not None:
+            return f"最近识别到 {anchor}：黑胶带只作为行驶转向触发，不参与位置计数。"
+        return "尚未识别到货架锚点：黑胶带按保守行驶转向处理，不参与位置计数。"
 
     def _patrol_phase_label(self) -> str:
-        pattern_index = self._boundary_action_index % len(_boundary_action_pattern(self.config.boundary_action_pattern))
         if self._line_follow_active:
-            if pattern_index == 1:
-                return "A端到B端寻线"
-            if pattern_index == 4:
-                return "B端到A端寻线"
             return "寻线过渡"
-        if pattern_index in {2, 3}:
+        anchor = self._last_shelf_anchor
+        if anchor in {"A1", "A2", "A3"}:
+            return "A列巡逻"
+        if anchor == "A4":
+            return "A列末端到B列转场"
+        if anchor == "B3" and anchor not in self._bypassed_for_shelf_anchors:
+            return "B列禁区前"
+        if anchor in {"B3", "B2"}:
             return "B列短步巡逻"
-        return "A列短步巡逻"
+        if anchor == "B1":
+            return "B列起点到A列转场"
+        return "未识别货架锚点巡逻"
 
     def _safe_side_for_shelf(self, shelf_id: str | None) -> str | None:
         if shelf_id is None:
@@ -2117,12 +2137,6 @@ def heading_for_delta(current: Cell, target: Cell, fallback: str = "E") -> str:
     return fallback
 
 
-def _cycle_from_turn_count(turn_count: int, turns_per_cycle: int) -> int:
-    if turn_count <= 0:
-        return 1
-    return ((turn_count - 1) // max(1, int(turns_per_cycle))) + 1
-
-
 def _turn_succeeded(result: Mapping[str, object] | None) -> bool:
     return result is None or bool(result.get("ok", True))
 
@@ -2142,19 +2156,6 @@ def _heading_after_right_turn(heading: str) -> str:
 def _normalize_heading(value: str, fallback: str) -> str:
     normalized = value.strip().upper()
     return normalized if normalized in HEADINGS else fallback
-
-
-def _boundary_action_pattern(raw_pattern: str) -> list[str]:
-    actions: list[str] = []
-    for item in raw_pattern.split(","):
-        normalized = item.strip().lower().replace("-", "_")
-        if normalized in {"turn_follow", "follow", "line", "line_follow"}:
-            actions.append("turn_follow")
-        elif normalized in {"turn_patrol", "patrol", "exit_line", "line_exit"}:
-            actions.append("turn_patrol")
-        elif normalized in {"bypass", "avoid", "obstacle", "forbidden"}:
-            actions.append("bypass")
-    return actions or ["turn_follow", "turn_patrol", "bypass", "turn_follow", "turn_patrol"]
 
 
 def _format_tape_state(tape_state: tuple[int, int, int, int] | None) -> str:

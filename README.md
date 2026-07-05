@@ -11,7 +11,7 @@
 ## 当前真实主链路
 
 1. 小车放在初始位置。
-2. 开机自启或网页点击“开始”后，小车慢速向前巡逻。
+2. 小车开机后必须保持静止，只有网页点击“开始巡逻”后才慢速向前巡逻。
 3. 云台初始化到侧向，让摄像头面向货架。
 4. 货架通过 AprilTag 识别。
 5. 物品通过 AprilTag、文字、图形识别；颜色可选，有则记录，没有不能报错。
@@ -88,7 +88,7 @@ scripts/deploy_to_car.sh
 RUN_MODE=simulate scripts/run_on_car.sh
 ```
 
-真车模式应启动真实 runtime：
+真车模式启动网页服务并连接真实硬件，巡逻仍需在网页手动点击“开始巡逻”：
 
 ```bash
 RUN_MODE=robot scripts/run_on_car.sh

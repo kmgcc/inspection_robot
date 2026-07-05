@@ -16,6 +16,8 @@ DEFAULT_STEP_SECONDS = float(os.environ.get("ROBOT_STEP_SECONDS", "0.14"))
 COMMAND_REPEAT = max(1, int(os.environ.get("ROBOT_COMMAND_REPEAT", "2")))
 COMMAND_REPEAT_GAP_SECONDS = float(os.environ.get("ROBOT_COMMAND_REPEAT_GAP_SECONDS", "0.02"))
 STOP_POLL_SECONDS = float(os.environ.get("ROBOT_STOP_POLL_SECONDS", "0.01"))
+STOP_REPEAT = max(1, int(os.environ.get("ROBOT_STOP_REPEAT", "8")))
+STOP_REPEAT_GAP_SECONDS = float(os.environ.get("ROBOT_STOP_REPEAT_GAP_SECONDS", "0.08"))
 VENDOR_MOTION_PATHS = (
     Path("/home/pi/project_demo/lib"),
     Path("/home/pi/project_demo/04.Car_motion_control"),
@@ -51,6 +53,8 @@ def rotate_right_slow(speed: int | None = None, duration_seconds: float | None =
 def stop() -> None:
     with _MOTION_LOCK:
         module = _motion_module()
+        if _force_stop_all_motors(module):
+            return
         for name in ("stop_robot", "stop", "car_stop", "motor_stop"):
             func = getattr(module, name, None)
             if callable(func):
@@ -130,6 +134,23 @@ def _stop_quietly() -> None:
         stop()
     except RobotHardwareError:
         pass
+
+
+def _force_stop_all_motors(module: ModuleType) -> bool:
+    bot = getattr(module, "bot", None)
+    ctrl_muto = getattr(bot, "Ctrl_Muto", None)
+    ctrl_car = getattr(bot, "Ctrl_Car", None)
+    if not callable(ctrl_muto) and not callable(ctrl_car):
+        return False
+    for index in range(STOP_REPEAT):
+        for motor_id in range(4):
+            if callable(ctrl_muto):
+                ctrl_muto(motor_id, 0)
+            if callable(ctrl_car):
+                ctrl_car(motor_id, 0, 0)
+        if index < STOP_REPEAT - 1:
+            time.sleep(max(0.0, STOP_REPEAT_GAP_SECONDS))
+    return True
 
 
 def _motion_module() -> ModuleType:

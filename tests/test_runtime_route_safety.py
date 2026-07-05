@@ -78,12 +78,12 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
         self.assertIn(("strafe_left", 7, 0), fake_motion.calls)
         self.assertNotIn(("move_forward", 5, 0), fake_motion.calls)
 
-    def test_fixed_boundary_pattern_enters_and_exits_line_follow(self) -> None:
+    def test_a4_anchor_boundary_turn_does_not_enter_line_follow(self) -> None:
         store = self.make_store()
         fake_motion = FakeMotion()
         fake_sensors = FakeSensors(
             distances=[400] * 8,
-            tapes=[(0, 0, 0, 0), (1, 0, 0, 1), (0, 0, 0, 0), (0, 1, 1, 1)],
+            tapes=[(0, 0, 0, 0), (1, 1, 1, 1)],
         )
         runtime = RobotRuntime(
             store,
@@ -96,12 +96,14 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
             gimbal_adapter=FakeGimbal(),
             detection_provider=fake_detection_provider,
         )
+        runtime._record_observed_shelf("A4")
 
-        runtime.run_continuous_patrol(max_iterations=2)
+        self.assertEqual(runtime._handle_tape_boundary((0, 0, 0, 0)), "turn")
+        runtime._drive_patrol_step((1, 0, 0, 1))
 
-        self.assertEqual(fake_motion.names().count("rotate_right"), 2)
-        self.assertIn(("move_forward", 7, 0), fake_motion.calls)
+        self.assertEqual(fake_motion.names().count("rotate_right"), 1)
         self.assertIn(("move_forward", 5, 0), fake_motion.calls)
+        self.assertNotIn(("move_forward", 7, 0), fake_motion.calls)
 
     def test_boundary_pattern_keeps_pure_patrol_when_line_follow_disabled(self) -> None:
         store = self.make_store()
@@ -175,19 +177,12 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
 
         self.assertIn(("rotate_right", 7, 0), fake_motion.calls)
 
-    def test_third_route_forbidden_zone_is_bypassed_not_line_followed(self) -> None:
+    def test_b3_anchor_forbidden_zone_is_bypassed_not_counted(self) -> None:
         store = self.make_store()
         fake_motion = FakeMotion()
         fake_sensors = FakeSensors(
             distances=[400] * 24,
-            tapes=[
-                (0, 0, 0, 0),
-                (1, 0, 0, 1),
-                (0, 0, 0, 0),
-                (0, 1, 1, 1),
-                (0, 0, 0, 0),
-                (1, 1, 1, 1),
-            ],
+            tapes=[(0, 0, 0, 0), (1, 1, 1, 1)],
         )
         runtime = RobotRuntime(
             store,
@@ -200,12 +195,13 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
             gimbal_adapter=FakeGimbal(),
             detection_provider=fake_detection_provider,
         )
+        runtime._record_observed_shelf("B3")
 
-        runtime.run_continuous_patrol(max_iterations=3)
+        self.assertEqual(runtime._handle_tape_boundary((0, 0, 0, 0)), "bypass")
         event_types = [event["type"] for event in store.snapshot()["events"]]
 
         self.assertIn("obstacle_avoidance_step", event_types)
-        self.assertIn(("move_forward", 5, 0), fake_motion.calls)
+        self.assertIn(("move_forward", 20, 0.0), fake_motion.calls)
 
     def test_forbidden_bypass_uses_shorter_default_body_distances(self) -> None:
         store = self.make_store()

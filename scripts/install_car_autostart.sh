@@ -5,7 +5,6 @@ CAR_HOST="${CAR_HOST:-pi@192.168.1.11}"
 CAR_DIR="${CAR_DIR:-/home/pi/temp/inspection_robot}"
 PORT="${PORT:-5000}"
 SERVICE_NAME="${SERVICE_NAME:-inspection-robot.service}"
-AUTO_START_RUNTIME="${AUTO_START_RUNTIME:-0}"
 LINE_FOLLOW_ENABLED="${LINE_FOLLOW_ENABLED:-0}"
 
 SERVICE_FILE="/tmp/$SERVICE_NAME"
@@ -21,7 +20,6 @@ Type=simple
 User=pi
 WorkingDirectory=$CAR_DIR
 Environment=RUN_MODE=robot
-Environment=AUTO_START_RUNTIME=$AUTO_START_RUNTIME
 Environment=PORT=$PORT
 Environment=ROBOT_SLOW_SPEED=22
 Environment=ROBOT_PATROL_SPEED=22

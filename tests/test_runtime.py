@@ -21,7 +21,6 @@ from inspection_robot.robot import sensors
 from inspection_robot.runtime import (
     RobotRuntime,
     RobotRuntimeConfig,
-    _cycle_from_turn_count,
     _format_tape_state,
     flatten_route,
     heading_for_delta,
@@ -583,12 +582,6 @@ class RuntimeTest(unittest.TestCase):
             self.assertTrue(runtime._avoid_to_safe_side(None))
         self.assertEqual(fake_motion.calls[0:2], ["stop", "rotate_right"])
 
-    def test_cycle_count_advances_after_full_turn_window(self) -> None:
-        self.assertEqual(_cycle_from_turn_count(0, 2), 1)
-        self.assertEqual(_cycle_from_turn_count(1, 2), 1)
-        self.assertEqual(_cycle_from_turn_count(2, 2), 1)
-        self.assertEqual(_cycle_from_turn_count(3, 2), 2)
-
     def test_format_tape_state_uses_readable_missing_value(self) -> None:
         self.assertEqual(_format_tape_state(None), "无读数")
         self.assertEqual(_format_tape_state((1, 0, 0, 1)), "1001")
@@ -648,7 +641,6 @@ class RuntimeTest(unittest.TestCase):
                 scan_interval_seconds=0,
                 action_settle_seconds=0,
                 boundary_cooldown_seconds=0,
-                turns_per_cycle=2,
                 skip_scan_cycles=1,
             ),
             motion_adapter=fake_motion,

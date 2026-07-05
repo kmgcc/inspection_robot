@@ -66,6 +66,26 @@ class RobotAdapterTest(unittest.TestCase):
 
         self.assertEqual(fake.calls, [("move_forward", motion.MIN_RUNNING_SPEED), ("move_forward", motion.MIN_RUNNING_SPEED)])
 
+    def test_motion_stop_repeats_zero_writes_when_vendor_bot_available(self) -> None:
+        fake = FakeMotionModule()
+        fake.bot = FakeMotionBot()
+        original = motion._motion_module
+        original_repeat = motion.STOP_REPEAT
+        original_gap = motion.STOP_REPEAT_GAP_SECONDS
+        motion._motion_module = lambda: fake  # type: ignore[assignment]
+        motion.STOP_REPEAT = 2
+        motion.STOP_REPEAT_GAP_SECONDS = 0
+        try:
+            motion.stop()
+        finally:
+            motion._motion_module = original
+            motion.STOP_REPEAT = original_repeat
+            motion.STOP_REPEAT_GAP_SECONDS = original_gap
+
+        self.assertEqual(fake.calls, [])
+        self.assertEqual(fake.bot.calls.count(("muto", 0, 0)), 2)
+        self.assertEqual(fake.bot.calls.count(("car", 3, 0, 0)), 2)
+
     def test_sensors_normalize_tape_state_and_direction_flags(self) -> None:
         self.assertEqual(sensors.normalize_tape_state([1, 0, 1, 0]), (1, 0, 1, 0))
         self.assertEqual(sensors.normalize_tape_state([0b1010]), (0, 1, 1, 0))
@@ -151,6 +171,17 @@ class FakeMotionModule:
 
     def stop(self) -> None:
         self.calls.append(("stop", None))
+
+
+class FakeMotionBot:
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, ...]] = []
+
+    def Ctrl_Muto(self, motor_id: int, speed: int) -> None:
+        self.calls.append(("muto", motor_id, speed))
+
+    def Ctrl_Car(self, motor_id: int, direction: int, speed: int) -> None:
+        self.calls.append(("car", motor_id, direction, speed))
 
 
 class FakeBot:
