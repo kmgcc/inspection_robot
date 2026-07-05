@@ -16,8 +16,8 @@ DEFAULT_STEP_SECONDS = float(os.environ.get("ROBOT_STEP_SECONDS", "0.14"))
 COMMAND_REPEAT = max(1, int(os.environ.get("ROBOT_COMMAND_REPEAT", "2")))
 COMMAND_REPEAT_GAP_SECONDS = float(os.environ.get("ROBOT_COMMAND_REPEAT_GAP_SECONDS", "0.02"))
 STOP_POLL_SECONDS = float(os.environ.get("ROBOT_STOP_POLL_SECONDS", "0.01"))
-STOP_REPEAT = max(1, int(os.environ.get("ROBOT_STOP_REPEAT", "8")))
-STOP_REPEAT_GAP_SECONDS = float(os.environ.get("ROBOT_STOP_REPEAT_GAP_SECONDS", "0.08"))
+STOP_REPEAT = max(1, int(os.environ.get("ROBOT_STOP_REPEAT", "3")))
+STOP_REPEAT_GAP_SECONDS = float(os.environ.get("ROBOT_STOP_REPEAT_GAP_SECONDS", "0.02"))
 FORWARD_MOTOR_SIGNS = os.environ.get("ROBOT_FORWARD_MOTOR_SIGNS", "1,1,1,1")
 VENDOR_MOTION_PATHS = (
     Path("/home/pi/project_demo/lib"),
@@ -80,10 +80,7 @@ def stop() -> None:
 
 def request_stop() -> None:
     _ABORT.set()
-    try:
-        stop()
-    except RobotHardwareError:
-        pass
+    _quick_stop_nonblocking()
 
 
 def clear_stop() -> None:
@@ -139,8 +136,9 @@ def _call_forward_corrected(
             return
         module = _motion_module()
         bot = getattr(module, "bot", None)
+        ctrl_car = getattr(bot, "Ctrl_Car", None)
         ctrl_muto = getattr(bot, "Ctrl_Muto", None)
-        if not callable(ctrl_muto):
+        if not callable(ctrl_car) and not callable(ctrl_muto):
             _call_motion("move_forward", base_speed, duration_seconds)
             return
         left_speed = base_speed
@@ -158,7 +156,10 @@ def _call_forward_corrected(
                 _stop_quietly()
                 return
             for motor_id, wheel_speed in enumerate(wheel_speeds):
-                ctrl_muto(motor_id, _signed_speed(wheel_speed, signs[motor_id]))
+                if callable(ctrl_car):
+                    ctrl_car(motor_id, 0, _speed(wheel_speed))
+                else:
+                    ctrl_muto(motor_id, _signed_speed(wheel_speed, signs[motor_id]))
             if index < COMMAND_REPEAT - 1:
                 _interruptible_sleep(max(0.0, COMMAND_REPEAT_GAP_SECONDS))
         _interruptible_sleep(_duration(duration_seconds))
@@ -215,6 +216,26 @@ def _stop_quietly() -> None:
         pass
 
 
+def _quick_stop_nonblocking() -> None:
+    acquired = _MOTION_LOCK.acquire(blocking=False)
+    if not acquired:
+        return
+    try:
+        try:
+            module = _motion_module()
+        except RobotHardwareError:
+            return
+        if _write_zero_to_all_motors(module):
+            return
+        for name in ("stop_robot", "stop", "car_stop", "motor_stop"):
+            func = getattr(module, name, None)
+            if callable(func):
+                func()
+                return
+    finally:
+        _MOTION_LOCK.release()
+
+
 def _force_stop_all_motors(module: ModuleType) -> bool:
     bot = getattr(module, "bot", None)
     ctrl_muto = getattr(bot, "Ctrl_Muto", None)
@@ -222,13 +243,23 @@ def _force_stop_all_motors(module: ModuleType) -> bool:
     if not callable(ctrl_muto) and not callable(ctrl_car):
         return False
     for index in range(STOP_REPEAT):
-        for motor_id in range(4):
-            if callable(ctrl_muto):
-                ctrl_muto(motor_id, 0)
-            if callable(ctrl_car):
-                ctrl_car(motor_id, 0, 0)
+        _write_zero_to_all_motors(module)
         if index < STOP_REPEAT - 1:
             time.sleep(max(0.0, STOP_REPEAT_GAP_SECONDS))
+    return True
+
+
+def _write_zero_to_all_motors(module: ModuleType) -> bool:
+    bot = getattr(module, "bot", None)
+    ctrl_muto = getattr(bot, "Ctrl_Muto", None)
+    ctrl_car = getattr(bot, "Ctrl_Car", None)
+    if not callable(ctrl_muto) and not callable(ctrl_car):
+        return False
+    for motor_id in range(4):
+        if callable(ctrl_muto):
+            ctrl_muto(motor_id, 0)
+        if callable(ctrl_car):
+            ctrl_car(motor_id, 0, 0)
     return True
 
 

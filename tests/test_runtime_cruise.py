@@ -339,6 +339,28 @@ class CruiseRuntimeTest(unittest.TestCase):
         self.assertIn("recognition", alarm.calls)
         self.assertEqual(runtime.store.snapshot()["audio"]["last_cue"], "following")
 
+    def test_moving_items_are_committed_to_previous_shelf_when_next_shelf_is_seen(self) -> None:
+        runtime, _, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                smooth_cruise_enabled=True,
+                cruise_recognition_cooldown_seconds=0,
+                action_settle_seconds=0,
+            ),
+        )
+
+        runtime._handle_moving_recognition({"shelf_id": "A1", "tag_id": "118"})
+        runtime._handle_moving_recognition({"item_id": "item_07", "tag_id": "7"})
+        runtime._handle_moving_recognition({"item_id": "item_08", "tag_id": "8"})
+        runtime._handle_moving_recognition({"shelf_id": "A2", "tag_id": "110"})
+
+        snapshot = runtime.store.snapshot()
+        shelf = next(item for item in snapshot["shelves"] if item["shelf_id"] == "A1")
+        item_ids = {item["item_id"] for item in shelf["items"]}
+
+        self.assertEqual(snapshot["scan"]["shelf_id"], "A1")
+        self.assertEqual(item_ids, {"item_07", "item_08"})
+        self.assertFalse(any(event["shelf_id"] == "A2" and event["item"] in {"书本", "衣服"} for event in snapshot["events"]))
+
     def test_indicator_light_holds_orange_during_flash_window(self) -> None:
         runtime, _, alarm = self.make_runtime(
             config=RobotRuntimeConfig(
@@ -385,6 +407,15 @@ class CruiseRuntimeTest(unittest.TestCase):
         self.assertIn((None, "item_07"), keys)
         self.assertEqual(len(pending), 2)
         self.assertEqual(scanner.poll_new(), [])  # drained
+
+    def test_cruise_scanner_pauses_during_row_transfer(self) -> None:
+        runtime, _, _ = self.make_runtime(config=RobotRuntimeConfig(smooth_cruise_enabled=True, cruise_vision_enabled=True))
+
+        runtime._record_observed_shelf("A4")
+        self.assertFalse(runtime._cruise_scanner_allowed_for_phase())
+
+        runtime._record_observed_shelf("B3")
+        self.assertTrue(runtime._cruise_scanner_allowed_for_phase())
 
     # --- R1/R3/R4/R5 regression tests ------------------------------------ #
 

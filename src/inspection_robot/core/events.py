@@ -38,6 +38,7 @@ EVENT_TYPES = {
     "shelf_scanned",
     "scan_failed",
     "normal_item",
+    "added_item",
     "unknown_item",
     "untagged_evidence",
     "wrong_shelf",

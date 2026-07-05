@@ -297,6 +297,7 @@ class InspectionStore:
         with self.lock:
             self.state.scan = {"active": False, "shelf_id": shelf_id, "detected_items": list(detected_items), "frame_id": frame_id, "detections": []}
             self.state.current_shelf = shelf_id
+            previous_items = self._shelf_item_ids_locked(shelf_id)
             events = rules.evaluate_shelf_scan(
                 shelf_id,
                 detected_items,
@@ -305,14 +306,18 @@ class InspectionStore:
                 frame_id=frame_id,
                 skip_missing=self.state.skip_shortage_detection,
             )
+            events.extend(self._inventory_change_events_locked(shelf_id, previous_items, detected_items, frame_id))
+            self._update_shelf_items_locked(shelf_id, detected_items, events)
             self._append_scan_events_locked(events)
             return events
 
     def record_detection_evidence(self, shelf_id: str, detections: list[Mapping[str, JsonValue]], frame_id: str | None = None) -> list[EventRecord]:
         with self.lock:
             normalized = [dict(detection) for detection in detections]
-            self.state.scan = {"active": False, "shelf_id": shelf_id, "detected_items": [], "frame_id": frame_id, "detections": normalized}
+            detected_items = self._item_ids_from_detections(normalized)
+            self.state.scan = {"active": False, "shelf_id": shelf_id, "detected_items": detected_items, "frame_id": frame_id, "detections": normalized}
             self.state.current_shelf = shelf_id
+            previous_items = self._shelf_item_ids_locked(shelf_id)
             events = rules.evaluate_detection_evidence(
                 shelf_id,
                 detections,
@@ -321,6 +326,8 @@ class InspectionStore:
                 frame_id=frame_id,
                 skip_missing=self.state.skip_shortage_detection,
             )
+            events.extend(self._inventory_change_events_locked(shelf_id, previous_items, detected_items, frame_id))
+            self._update_shelf_items_locked(shelf_id, detected_items, events)
             self._append_scan_events_locked(events)
             return events
 
@@ -552,11 +559,14 @@ class InspectionStore:
         if not events:
             return
         has_waiting = any(event["status"] == "waiting_confirm" for event in events)
+        has_warning = any(event["status"] in {"warning", "error"} for event in events)
         for event in events:
             self._append_event_locked(event)
         shelf_id = events[0].get("shelf_id")
         if shelf_id is not None:
-            self._mark_shelf_locked(str(shelf_id), "waiting_confirm" if has_waiting else "normal", sum(1 for event in events if event["status"] == "waiting_confirm"))
+            anomaly_count = sum(1 for event in events if event["status"] in {"waiting_confirm", "warning", "error"})
+            status = "waiting_confirm" if has_waiting else "abnormal" if has_warning else "normal"
+            self._mark_shelf_locked(str(shelf_id), status, anomaly_count)
         latest = events[0]
         self.state.current_tag = latest.get("tag_id")
         self.state.current_item = latest.get("item")
@@ -565,6 +575,11 @@ class InspectionStore:
             self.state.robot_status = "异常告警"
             self.state.alarm = {"level": "warning", "message": "待确认异常", "light": "red"}
             self.state.last_message = f"扫描完成，发现 {sum(1 for event in events if event['status'] == 'waiting_confirm')} 个异常。"
+        elif has_warning:
+            self.state.task_status = "ABNORMAL_ALARM"
+            self.state.robot_status = "库存变化"
+            self.state.alarm = {"level": "warning", "message": "库存变化", "light": "yellow"}
+            self.state.last_message = f"扫描完成，发现 {sum(1 for event in events if event['status'] in {'warning', 'error'})} 个库存变化。"
         else:
             self.state.task_status = "NORMAL_LOGGED"
             self.state.robot_status = "正常已记录"
@@ -578,7 +593,126 @@ class InspectionStore:
                 shelf["status"] = status
                 shelf["anomaly_count"] = anomaly_count
                 return
-        self.state.shelves.append({"shelf_id": shelf_id, "status": status, "anomaly_count": anomaly_count})
+        self.state.shelves.append({"shelf_id": shelf_id, "status": status, "anomaly_count": anomaly_count, "items": []})
+
+    def _shelf_item_ids_locked(self, shelf_id: str) -> list[str]:
+        for shelf in self.state.shelves:
+            if shelf.get("shelf_id") != shelf_id:
+                continue
+            items = shelf.get("items")
+            if not isinstance(items, list):
+                return []
+            result: list[str] = []
+            for item in items:
+                if not isinstance(item, Mapping):
+                    continue
+                item_id = item.get("item_id")
+                if item_id is not None and item.get("status") != "missing":
+                    result.append(str(item_id))
+            return result
+        return []
+
+    def _item_ids_from_detections(self, detections: list[Mapping[str, JsonValue]]) -> list[str]:
+        item_ids: list[str] = []
+        for detection in detections:
+            item_id = detection.get("item_id")
+            if item_id is not None:
+                item_ids.append(str(item_id))
+                continue
+            tag_id = detection.get("tag_id")
+            if tag_id is None:
+                continue
+            info = self.tag_map.get(str(tag_id))
+            if info is not None and str(info.get("kind", "item")) == "item" and info.get("item_id") is not None:
+                item_ids.append(str(info["item_id"]))
+        return item_ids
+
+    def _inventory_change_events_locked(
+        self,
+        shelf_id: str,
+        previous_items: list[str],
+        detected_items: list[str],
+        frame_id: str | None,
+    ) -> list[EventRecord]:
+        if self.state.skip_shortage_detection or not previous_items:
+            return []
+        previous = set(previous_items)
+        current = set(detected_items)
+        events: list[EventRecord] = []
+        for item_id in sorted(current - previous):
+            tag_id, info = self._item_info_for_id(item_id)
+            item_name = str(info.get("name", item_id)) if info is not None else item_id
+            events.append(
+                make_event(
+                    "added_item",
+                    tag_id=tag_id,
+                    item=item_name,
+                    shelf_id=shelf_id,
+                    expected_shelf=shelf_id,
+                    priority=max(int(info.get("priority", 1)) if info is not None else 1, 1),
+                    status="warning",
+                    message=f"{shelf_id} 货架新增 {item_name}。",
+                    source="inventory_diff",
+                    frame_id=frame_id,
+                    evidence={"change": "added", "item_id": item_id},
+                )
+            )
+        for item_id in sorted(previous - current):
+            tag_id, info = self._item_info_for_id(item_id)
+            item_name = str(info.get("name", item_id)) if info is not None else item_id
+            events.append(
+                make_event(
+                    "missing_item",
+                    tag_id=tag_id,
+                    item=item_name,
+                    shelf_id=shelf_id,
+                    expected_shelf=shelf_id,
+                    priority=max(int(info.get("priority", 1)) if info is not None else 1, 1),
+                    status="warning",
+                    message=f"{shelf_id} 货架缺失 {item_name}。",
+                    source="inventory_diff",
+                    frame_id=frame_id,
+                    evidence={"change": "missing", "item_id": item_id},
+                )
+            )
+        return events
+
+    def _update_shelf_items_locked(self, shelf_id: str, detected_items: list[str], events: list[EventRecord]) -> None:
+        detected_set = set(detected_items)
+        missing_ids = {
+            str(event.get("evidence", {}).get("item_id"))
+            for event in events
+            if event.get("type") == "missing_item" and isinstance(event.get("evidence"), Mapping) and event.get("evidence", {}).get("item_id")
+        }
+        added_ids = {
+            str(event.get("evidence", {}).get("item_id"))
+            for event in events
+            if event.get("type") == "added_item" and isinstance(event.get("evidence"), Mapping) and event.get("evidence", {}).get("item_id")
+        }
+        all_ids = sorted(detected_set | missing_ids)
+        items = []
+        for item_id in all_ids:
+            tag_id, info = self._item_info_for_id(item_id)
+            status = "missing" if item_id in missing_ids and item_id not in detected_set else "added" if item_id in added_ids else "present"
+            items.append(
+                {
+                    "item_id": item_id,
+                    "tag_id": tag_id,
+                    "name": str(info.get("name", item_id)) if info is not None else item_id,
+                    "status": status,
+                }
+            )
+        for shelf in self.state.shelves:
+            if shelf.get("shelf_id") == shelf_id:
+                shelf["items"] = items
+                return
+        self.state.shelves.append({"shelf_id": shelf_id, "status": "normal", "anomaly_count": 0, "items": items})
+
+    def _item_info_for_id(self, item_id: str) -> tuple[str | None, Mapping[str, JsonValue] | None]:
+        for tag_id, info in self.tag_map.items():
+            if str(info.get("kind", "item")) == "item" and str(info.get("item_id")) == item_id:
+                return tag_id, info
+        return None, None
 
     def _upsert_forbidden_zone_locked(self, zone_id: str, blocked: bool) -> None:
         for zone in self.state.forbidden_zones:

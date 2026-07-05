@@ -1020,7 +1020,7 @@ details[open] .collapsible-title::after {
 
 .shelf-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: var(--gap-sm);
   width: 100%;
 }
@@ -1042,6 +1042,7 @@ details[open] .collapsible-title::after {
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   background: var(--panel-soft);
+  transition: border-color var(--transition-medium), background var(--transition-medium), transform var(--transition-medium);
 }
 
 .shelf-card.waiting_confirm,
@@ -1053,6 +1054,10 @@ details[open] .collapsible-title::after {
 .shelf-card.normal {
   border-color: var(--ok);
   background: var(--ok-container);
+}
+
+.shelf-card.changed {
+  animation: shelfPulse 900ms var(--ease);
 }
 
 .shelf-title {
@@ -1123,6 +1128,118 @@ details[open] .collapsible-title::after {
   margin: 0;
   font-size: 11px;
   font-weight: 700;
+}
+
+.shelf-items {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.shelf-item-card {
+  min-height: 48px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  display: grid;
+  align-content: center;
+  gap: 2px;
+}
+
+.shelf-item-card strong {
+  font-size: 12px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.shelf-item-card span {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.shelf-item-card.added {
+  border-color: var(--info);
+  background: var(--info-container);
+}
+
+.shelf-item-card.missing {
+  border-color: var(--bad);
+  background: var(--bad-container);
+}
+
+.shelf-empty {
+  margin: 0;
+  padding: 8px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--outline);
+  font-size: 11px;
+  text-align: center;
+}
+
+.toast-root {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 300;
+  display: grid;
+  gap: 8px;
+  width: min(320px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+.toast {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--warn);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  box-shadow: var(--shadow-3);
+  display: grid;
+  gap: 2px;
+  animation: toastIn 180ms var(--ease);
+}
+
+.toast.added_item {
+  border-left-color: var(--info);
+}
+
+.toast.missing_item,
+.toast.wrong_shelf,
+.toast.duplicate_item {
+  border-left-color: var(--bad);
+}
+
+.toast strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.toast span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.toast.leaving {
+  animation: toastOut 180ms var(--ease) forwards;
+}
+
+@keyframes shelfPulse {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.015); box-shadow: 0 0 0 3px rgba(154, 103, 0, 0.12); }
+  100% { transform: scale(1); }
+}
+
+@keyframes toastIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes toastOut {
+  to { opacity: 0; transform: translateY(8px); }
 }
 
 /* =========================================================

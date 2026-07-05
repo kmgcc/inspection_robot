@@ -283,7 +283,7 @@ def create_app(root: Path | None = None) -> Flask:
         config = getattr(runtime, "config", None)
         cal = app.config["CALIBRATION_STORE"].load()
         default_speed = cal.get("straight_speed") or getattr(config, "patrol_speed", 22)
-        default_dur = cal.get("straight_step_seconds") or getattr(config, "step_seconds", 0.14)
+        default_dur = getattr(config, "step_seconds", 0.14)
         speed = _int_payload(payload, "speed", int(default_speed))
         duration = _float_payload(payload, "duration_seconds", float(default_dur))
         try:
@@ -538,7 +538,8 @@ def create_app(root: Path | None = None) -> Flask:
         if command == "stop":
             active_motion.stop()
         elif command == "forward":
-            _run_heading_held_forward(runtime, active_motion, speed=speed, duration_seconds=duration_seconds)
+            active_motion.move_forward_slow(speed=speed, duration_seconds=duration_seconds)
+            active_motion.stop()
         elif command == "backward":
             active_motion.move_backward_slow(speed=speed, duration_seconds=duration_seconds)
             active_motion.stop()

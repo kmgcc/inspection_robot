@@ -104,10 +104,10 @@ class RobotAdapterTest(unittest.TestCase):
         self.assertEqual(
             fake.bot.calls,
             [
-                ("muto", 0, 34),
-                ("muto", 1, 34),
-                ("muto", 2, 26),
-                ("muto", 3, 26),
+                ("car", 0, 0, 34),
+                ("car", 1, 0, 34),
+                ("car", 2, 0, 26),
+                ("car", 3, 0, 26),
             ],
         )
 

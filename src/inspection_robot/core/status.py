@@ -113,7 +113,7 @@ def new_dashboard_state(warehouse_map: WarehouseMap, shelf_manifest: ShelfManife
 
 
 def initial_shelves(manifest: ShelfManifest) -> list[ShelfState]:
-    return [{"shelf_id": shelf_id, "status": "pending", "anomaly_count": 0} for shelf_id in manifest]
+    return [{"shelf_id": shelf_id, "status": "pending", "anomaly_count": 0, "items": []} for shelf_id in manifest]
 
 
 def copy_json_dict(data: Mapping[str, JsonValue]) -> dict[str, JsonValue]:

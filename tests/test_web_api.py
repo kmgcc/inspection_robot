@@ -218,7 +218,7 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(manual_turn.status_code, 200)
         self.assertEqual(runtime.turns[-1], ("right", 22, 0.85))
 
-    def test_manual_forward_uses_runtime_heading_held_forward(self) -> None:
+    def test_manual_forward_uses_direct_motion_for_responsiveness(self) -> None:
         runtime = FakeRuntime()
         self.app.config["RUN_MODE"] = "robot"
         self.app.config["ROBOT_RUNTIME"] = runtime
@@ -226,10 +226,11 @@ class WebApiTest(unittest.TestCase):
         response = self.client.post("/api/control/forward", json={"speed": 20, "duration_seconds": 0.2})
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(("zupt", "manual_forward_start"), runtime.calls)
-        self.assertIn("reset_heading", runtime.calls)
-        self.assertIn(("forward_step", 20, 0.2), runtime.calls)
-        self.assertNotIn(("move_forward", 20, 0.2), runtime.motion.calls)
+        self.assertNotIn(("zupt", "manual_forward_start"), runtime.calls)
+        self.assertNotIn("reset_heading", runtime.calls)
+        self.assertNotIn(("forward_step", 20, 0.2), runtime.calls)
+        self.assertIn(("move_forward", 20, 0.2), runtime.motion.calls)
+        self.assertIn(("stop", None, None), runtime.motion.calls)
 
     def test_cycle_confirm_delegates_to_runtime_fallback_confirmation(self) -> None:
         runtime = FakeRuntime()

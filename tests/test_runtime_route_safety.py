@@ -227,8 +227,8 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
 
         runtime.run_patrol(shelf_order=["A1"], max_steps=1)
 
-        self.assertEqual(fake_motion.calls.count(("move_forward", 20, 1.0)), 2)
-        self.assertEqual(fake_motion.calls.count(("move_forward", 20, 1.75)), 1)
+        self.assertEqual(fake_motion.calls.count(("move_forward", 20, 1.5)), 2)
+        self.assertEqual(fake_motion.calls.count(("move_forward", 20, 1.25)), 1)
 
     def test_b3_forbidden_bypass_uses_extended_clearance_distances(self) -> None:
         store = self.make_store()
@@ -239,9 +239,9 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
         )
         config = self.make_config()
         config.avoidance_body_seconds = 1.0
-        config.forbidden_avoidance_side_clearance_bodies = 1.2
-        config.forbidden_avoidance_parallel_bodies = 2.4
-        config.forbidden_avoidance_return_bodies = 1.2
+        config.forbidden_avoidance_side_clearance_bodies = 1.5
+        config.forbidden_avoidance_parallel_bodies = 1.2
+        config.forbidden_avoidance_return_bodies = 1.5
         runtime = RobotRuntime(
             store,
             DEFAULT_WAREHOUSE_MAP,
@@ -257,8 +257,8 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
 
         self.assertEqual(runtime._handle_tape_boundary((0, 0, 0, 0)), "bypass")
 
-        self.assertEqual(fake_motion.calls.count(("move_forward", 20, 1.2)), 2)
-        self.assertEqual(fake_motion.calls.count(("move_forward", 20, 2.4)), 1)
+        self.assertEqual(fake_motion.calls.count(("move_forward", 20, 1.5)), 2)
+        self.assertEqual(fake_motion.calls.count(("move_forward", 20, 1.2)), 1)
 
     def test_planned_boundary_turn_delegates_to_mpu6050_adapter_when_available(self) -> None:
         store = self.make_store()

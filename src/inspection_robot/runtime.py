@@ -85,12 +85,12 @@ class RobotRuntimeConfig:
     obstacle_wait_seconds: float = field(default_factory=lambda: _env_float(6.0, "OBSTACLE_WAIT_SECONDS"))
     avoidance_speed: int = field(default_factory=lambda: _env_int(20, "AVOIDANCE_SPEED"))
     avoidance_body_seconds: float = field(default_factory=lambda: _env_float(0.35, "AVOIDANCE_BODY_SECONDS"))
-    avoidance_side_clearance_bodies: float = field(default_factory=lambda: _env_float(0.8, "AVOIDANCE_SIDE_CLEARANCE_BODIES"))
-    avoidance_parallel_bodies: float = field(default_factory=lambda: _env_float(1.4, "AVOIDANCE_PARALLEL_BODIES"))
-    avoidance_return_bodies: float = field(default_factory=lambda: _env_float(0.8, "AVOIDANCE_RETURN_BODIES"))
-    forbidden_avoidance_side_clearance_bodies: float = field(default_factory=lambda: _env_float(1.2, "FORBIDDEN_AVOIDANCE_SIDE_CLEARANCE_BODIES"))
-    forbidden_avoidance_parallel_bodies: float = field(default_factory=lambda: _env_float(2.4, "FORBIDDEN_AVOIDANCE_PARALLEL_BODIES"))
-    forbidden_avoidance_return_bodies: float = field(default_factory=lambda: _env_float(1.2, "FORBIDDEN_AVOIDANCE_RETURN_BODIES"))
+    avoidance_side_clearance_bodies: float = field(default_factory=lambda: _env_float(1.2, "AVOIDANCE_SIDE_CLEARANCE_BODIES"))
+    avoidance_parallel_bodies: float = field(default_factory=lambda: _env_float(1.0, "AVOIDANCE_PARALLEL_BODIES"))
+    avoidance_return_bodies: float = field(default_factory=lambda: _env_float(1.2, "AVOIDANCE_RETURN_BODIES"))
+    forbidden_avoidance_side_clearance_bodies: float = field(default_factory=lambda: _env_float(1.5, "FORBIDDEN_AVOIDANCE_SIDE_CLEARANCE_BODIES"))
+    forbidden_avoidance_parallel_bodies: float = field(default_factory=lambda: _env_float(1.2, "FORBIDDEN_AVOIDANCE_PARALLEL_BODIES"))
+    forbidden_avoidance_return_bodies: float = field(default_factory=lambda: _env_float(1.5, "FORBIDDEN_AVOIDANCE_RETURN_BODIES"))
     avoidance_turn_direction: str = field(default_factory=lambda: _env_text("right", "AVOIDANCE_TURN_DIRECTION"))
     boundary_min_black_sensors: int = field(default_factory=lambda: _env_int(1, "BOUNDARY_MIN_BLACK_SENSORS"))
     boundary_confirm_samples: int = field(default_factory=lambda: _env_int(1, "BOUNDARY_CONFIRM_SAMPLES"))
@@ -118,7 +118,7 @@ class RobotRuntimeConfig:
     heading_hold_invert: bool = field(default_factory=lambda: _env_bool("HEADING_HOLD_INVERT", False))
     heading_hold_rate_damping: float = field(default_factory=lambda: _env_float(0.05, "HEADING_HOLD_KD", "HEADING_HOLD_RATE_DAMPING"))
     heading_hold_speed_gain: float = field(default_factory=lambda: _env_float(2.0, "HEADING_HOLD_SPEED_GAIN"))
-    heading_hold_min_sample_interval_seconds: float = field(default_factory=lambda: _env_float(0.03, "HEADING_HOLD_MIN_SAMPLE_INTERVAL_SECONDS"))
+    heading_hold_min_sample_interval_seconds: float = field(default_factory=lambda: _env_float(0.0, "HEADING_HOLD_MIN_SAMPLE_INTERVAL_SECONDS"))
     heading_hold_min_interval_seconds: float = field(default_factory=lambda: _env_float(0.25, "HEADING_HOLD_MIN_INTERVAL_SECONDS"))
     heading_hold_max_consecutive: int = field(default_factory=lambda: _env_int(2, "HEADING_HOLD_MAX_CONSECUTIVE"))
     heading_hold_confirm_samples: int = field(default_factory=lambda: _env_int(1, "HEADING_HOLD_CONFIRM_SAMPLES"))
@@ -228,6 +228,8 @@ class RobotRuntime:
         self._orange_flash_until = 0.0
         self._last_cruise_log_at = 0.0
         self._recognition_last_at: dict[str, float] = {}
+        self._cruise_active_shelf: str | None = None
+        self._cruise_segment_items: dict[str, dict[str, object]] = {}
         self._cruise_scanner: _CruiseVisionScanner | None = None
         self._manual_override = threading.Event()
         self._last_heading_correction_at = 0.0
@@ -290,7 +292,7 @@ class RobotRuntime:
         # Wait for the patrol thread to actually exit so it cannot overwrite the
         # wheels while the manual command is running (R7).
         if self._thread is not None and self._thread.is_alive():
-            self._thread.join(timeout=1.0)
+            self._thread.join(timeout=0.2)
         # Critical: clear so the manual turn_90_closed_loop does not self-abort.
         self._stop_event.clear()
         clearer = getattr(self.motion, "clear_stop", None)
@@ -358,12 +360,14 @@ class RobotRuntime:
         self._orange_flash_until = 0.0
         self._last_cruise_log_at = 0.0
         self._recognition_last_at = {}
+        self._cruise_active_shelf = None
+        self._cruise_segment_items = {}
         self._show_normal()
         self._initialize_gimbal()
         self.refresh_motion_sensor(force=True)
         if cruise:
             self._zupt_recalibrate("cruise_start")
-            self._start_cruise_scanner()
+            self._sync_cruise_scanner_for_phase()
 
         iterations = 0
         last_scan_at = time.monotonic()
@@ -394,6 +398,8 @@ class RobotRuntime:
                 if not self._guard_obstacle(None):
                     continue
 
+                if cruise:
+                    self._sync_cruise_scanner_for_phase()
                 self.refresh_motion_sensor()
                 self._drive_patrol_step(tape_state)
                 self._update_indicator_light()
@@ -403,6 +409,7 @@ class RobotRuntime:
 
                 now = time.monotonic()
                 if cruise:
+                    self._sync_cruise_scanner_for_phase()
                     self._handle_cruise_recognitions()
                     continue
                 if self._maybe_scan_for_object_presence():
@@ -701,7 +708,6 @@ class RobotRuntime:
 
         if self._manual_override.is_set():
             return
-        correction = self._heading_hold_correction()
         if self._stop_event.is_set() or self._manual_override.is_set():
             self.motion.stop()
             return
@@ -725,22 +731,18 @@ class RobotRuntime:
                 },
             )
         self._run_timed_motion(
-            self._forward_mover_for_correction(correction),
+            self.motion.move_forward_slow,
             speed=self.config.cruise_speed,
             duration_seconds=self.config.cruise_tick_seconds,
             watch_boundary=True,
-            heading_hold=False,
+            heading_hold=True,
             keep_running=True,
         )
-        if correction is not None:
-            self._record_heading_hold_correction(correction, speed=self.config.cruise_speed)
         self._log_motion_command(
             "cruise",
-            "move_forward_corrected" if correction is not None else "move_forward",
+            "move_forward",
             speed=self.config.cruise_speed,
             duration_seconds=self.config.cruise_tick_seconds,
-            correction=correction.correction_speed if correction is not None else 0,
-            direction=correction.direction if correction is not None else None,
         )
 
     def _drive_line_follow_step(self, tape_state: tuple[int, int, int, int] | None) -> None:
@@ -1877,7 +1879,19 @@ class RobotRuntime:
         scanner.start()
         self._cruise_scanner = scanner
 
+    def _cruise_scanner_allowed_for_phase(self) -> bool:
+        if not self.config.cruise_vision_enabled:
+            return False
+        return self._patrol_phase_label() not in {"A列末端到B列转场", "B列起点到A列转场"}
+
+    def _sync_cruise_scanner_for_phase(self) -> None:
+        if self._cruise_scanner_allowed_for_phase():
+            self._start_cruise_scanner()
+        else:
+            self._stop_cruise_scanner()
+
     def _stop_cruise_scanner(self) -> None:
+        self._flush_cruise_shelf_segment("scanner_stopped")
         scanner = self._cruise_scanner
         if scanner is None:
             return
@@ -1896,12 +1910,21 @@ class RobotRuntime:
 
         Flashes the orange marker (extra visual cue on top of the audio one),
         keeps the perceptual cycle bookkeeping alive, and logs a lightweight
-        detection. A per-target cooldown stops a target that stays in frame from
-        re-flashing on every tick.
+        detection. Item ownership is determined by shelf boundaries: items are
+        buffered after a shelf tag and committed to that shelf only when the next
+        shelf tag appears.
         """
 
         shelf_id = _optional_text(recognition.get("shelf_id"))
         item_id = _optional_text(recognition.get("item_id"))
+        if shelf_id is not None:
+            shelf_id = shelf_id.strip().upper()
+            if not shelf_id:
+                shelf_id = None
+        if item_id is not None:
+            self._buffer_cruise_item(recognition, item_id)
+        if shelf_id is not None:
+            self._advance_cruise_shelf_segment(shelf_id)
         key = shelf_id or item_id
         if key is None:
             return
@@ -1925,10 +1948,60 @@ class RobotRuntime:
             },
         )
         if shelf_id is not None:
-            self._record_observed_shelf(shelf_id)
             self._play_cue("first", f"识别到 {shelf_id} 货架。")
         else:
             self._play_cue("following", f"识别到物品 {item_id}。")
+
+    def _advance_cruise_shelf_segment(self, shelf_id: str) -> None:
+        if self._cruise_active_shelf == shelf_id:
+            return
+        if self._cruise_active_shelf is not None:
+            self._flush_cruise_shelf_segment("next_shelf_detected")
+        self._cruise_active_shelf = shelf_id
+        self._cruise_segment_items = {}
+        self.store.record_shelf_arrival(shelf_id, target=f"{shelf_id}_SCAN")
+        self._record_observed_shelf(shelf_id)
+
+    def _buffer_cruise_item(self, recognition: Mapping[str, object], item_id: str) -> None:
+        if self._cruise_active_shelf is None:
+            self.store.record_motion_debug(
+                "cruise_item_unassigned",
+                f"移动中识别到物品 {item_id}，但尚未检测到所属货架，暂不归属。",
+                evidence={
+                    "item_id": item_id,
+                    "tag_id": _optional_text(recognition.get("tag_id")),
+                },
+            )
+            return
+        self._cruise_segment_items.setdefault(
+            item_id,
+            {
+                "tag_id": _optional_text(recognition.get("tag_id")),
+                "kind": "item",
+                "item_id": item_id,
+            },
+        )
+
+    def _flush_cruise_shelf_segment(self, reason: str) -> None:
+        shelf_id = self._cruise_active_shelf
+        if shelf_id is None:
+            return
+        frame_id = f"cruise-{shelf_id.lower()}-{int(time.time())}"
+        item_ids = list(self._cruise_segment_items)
+        events = self.store.record_scan_result(shelf_id, item_ids, frame_id=frame_id)
+        self.store.record_motion_debug(
+            "cruise_segment_committed",
+            f"{shelf_id} 货架巡视段已结算，共识别 {len(item_ids)} 个物品。",
+            evidence={
+                "shelf_id": shelf_id,
+                "item_ids": item_ids,
+                "reason": reason,
+                "frame_id": frame_id,
+            },
+        )
+        self._signal_scan_events(events)
+        self._cruise_segment_items = {}
+        self._cruise_active_shelf = None
 
     def _scan_shelf(self, step: RouteStep, heading: str) -> str:
         shelf_id = str(step["shelf_id"])

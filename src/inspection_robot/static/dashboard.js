@@ -39,6 +39,7 @@ const EVENT_TYPE_LABELS = {
   audio_cue: "音频提示", path_planned: "路径规划", path_step: "路径推进",
   forbidden_zone_detected: "禁区触发", obstacle_wait: "障碍等待", obstacle_clear: "障碍解除",
   shelf_arrived: "到达货架", shelf_scanned: "货架扫描", normal_item: "正常物品",
+  added_item: "新增物品",
   unknown_item: "未知物品", wrong_shelf: "错放", missing_item: "缺失",
   duplicate_item: "重复", evidence_mismatch: "证据冲突", untagged_evidence: "无二维码证据",
   scan_failed: "扫描失败", light_cue: "灯光提示", manual_confirm: "人工确认",
@@ -56,6 +57,9 @@ let latestPendingEvent = null;
 let testPollingActive = false;
 let testPollTimer = null;
 let latestVideoFrameId = null;
+let statusSeenOnce = false;
+const notifiedEventIds = new Set();
+const INVENTORY_CHANGE_TYPES = new Set(["added_item", "missing_item", "wrong_shelf", "duplicate_item"]);
 
 // ============================================================
 // 工具函数
@@ -237,6 +241,8 @@ function renderStatus(data) {
   renderShelves(data, events);
   renderDetections(scan, events);
   renderEvents(events);
+  notifyInventoryChanges(events);
+  statusSeenOnce = true;
 }
 
 function renderPosePreview(sensor) {
@@ -573,14 +579,10 @@ function renderCalibration(cal) {
   const ccw90 = cal.turn_ccw90_seconds;
   setText("saved-ccw90", ccw90 != null ? `速度${cal.turn_speed || 18} / ${ccw90}s` : "待标定");
 
-  // 更新手动控制默认速度与时长（若是默认值，自动拉取标定值）
+  // 更新手动控制默认速度（时长保持短按默认值，避免误用直行测试的长时长）
   const manualSpeed = byId("manual-speed");
   if (manualSpeed && cal.straight_speed && (manualSpeed.value === "22" || !manualSpeed.value)) {
     manualSpeed.value = cal.straight_speed;
-  }
-  const manualDuration = byId("manual-duration");
-  if (manualDuration && cal.straight_step_seconds && (manualDuration.value === "0.14" || !manualDuration.value)) {
-    manualDuration.value = cal.straight_step_seconds;
   }
 
   // 寻线速度提示
@@ -771,11 +773,12 @@ function renderShelves(data, events) {
   const shelves = normalizeShelves(data, events);
   const SHELF_STATUS_LABELS = {
     pending: "未巡检", aligning: "对准中", scanning: "扫描中",
-    normal: "正常", abnormal: "异常", waiting_confirm: "待确认",
+    normal: "正常", abnormal: "变化", waiting_confirm: "异常",
   };
   for (const shelf of shelves) {
     const card = document.createElement("article");
     card.className = `shelf-card ${shelf.status}`;
+    if (shelf.changed) card.classList.add("changed");
     const title = document.createElement("div");
     title.className = "shelf-title";
     const h = document.createElement("h3");
@@ -788,9 +791,10 @@ function renderShelves(data, events) {
     details.className = "shelf-details";
     addDetail(details, "AprilTag", shelf.tag_id || "-");
     addDetail(details, "OCR", shelf.ocr_text || shelf.shelf_id);
-    addDetail(details, "最近物品", shelf.latest_item || "-");
+    addDetail(details, "物品数", asArray(shelf.items).filter((item) => item.status !== "missing").length);
     addDetail(details, "异常", shelf.anomaly_count || 0);
-    card.append(title, details);
+    const items = renderShelfItems(shelf);
+    card.append(title, details, items);
 
     const isA = shelf.shelf_id.toUpperCase().startsWith("A");
     if (isA && shelvesA) {
@@ -806,22 +810,26 @@ function renderShelves(data, events) {
 function normalizeShelves(data, events) {
   const shelves = new Map();
   for (const id of PATROL_ORDER) {
-    shelves.set(id, { shelf_id: id, status: "pending", anomaly_count: 0, latest_item: "-", tag_id: "-", ocr_text: id });
+    shelves.set(id, { shelf_id: id, status: "pending", anomaly_count: 0, items: [], tag_id: "-", ocr_text: id });
   }
   for (const shelf of asArray(data.shelves)) {
     const id = normalizeShelfId(shelf.shelf_id || shelf.id);
     if (!id) continue;
-    shelves.set(id, { ...shelves.get(id) || { shelf_id: id }, ...shelf, shelf_id: id });
+    shelves.set(id, { ...(shelves.get(id) || { shelf_id: id }), ...shelf, shelf_id: id, items: asArray(shelf.items) });
   }
   for (const event of [...events].reverse()) {
     const id = normalizeShelfId(event.shelf_id || event.expected_shelf || event.zone);
     if (!id) continue;
-    const shelf = shelves.get(id) || { shelf_id: id, status: "pending", anomaly_count: 0 };
-    if (event.item && event.item !== "-") shelf.latest_item = event.item;
+    const shelf = shelves.get(id) || { shelf_id: id, status: "pending", anomaly_count: 0, items: [] };
+    if (event.item && event.item !== "-") mergeShelfEventItem(shelf, event);
     if (event.tag_id && event.type === "shelf_arrived") shelf.tag_id = event.tag_id;
     if (event.ocr_text) shelf.ocr_text = event.ocr_text;
+    if (INVENTORY_CHANGE_TYPES.has(event.type)) shelf.changed = true;
     if (event.status === "waiting_confirm") {
       shelf.status = "waiting_confirm";
+      shelf.anomaly_count = (shelf.anomaly_count || 0) + 1;
+    } else if (event.status === "warning" && shelf.status !== "waiting_confirm") {
+      shelf.status = "abnormal";
       shelf.anomaly_count = (shelf.anomaly_count || 0) + 1;
     } else if (event.status === "normal" && shelf.status !== "waiting_confirm") {
       shelf.status = "normal";
@@ -829,6 +837,52 @@ function normalizeShelves(data, events) {
     shelves.set(id, shelf);
   }
   return Array.from(shelves.values()).sort((a, b) => a.shelf_id.localeCompare(b.shelf_id));
+}
+
+function mergeShelfEventItem(shelf, event) {
+  const items = asArray(shelf.items).slice();
+  const evidence = event.evidence && typeof event.evidence === "object" ? event.evidence : {};
+  const itemId = evidence.item_id || event.item_id || event.tag_id || event.item;
+  const key = textOrDash(itemId);
+  const status = event.type === "missing_item" ? "missing" : event.type === "added_item" ? "added" : "present";
+  const existing = items.find((item) => textOrDash(item.item_id || item.tag_id || item.name) === key);
+  const next = {
+    item_id: key,
+    tag_id: event.tag_id,
+    name: event.item,
+    status,
+  };
+  if (existing) {
+    Object.assign(existing, next);
+  } else {
+    items.push(next);
+  }
+  shelf.items = items;
+}
+
+function renderShelfItems(shelf) {
+  const root = document.createElement("div");
+  root.className = "shelf-items";
+  const items = asArray(shelf.items);
+  if (items.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "shelf-empty";
+    empty.textContent = "暂无物品";
+    root.appendChild(empty);
+    return root;
+  }
+  for (const item of items) {
+    const chip = document.createElement("article");
+    chip.className = `shelf-item-card ${item.status || "present"}`;
+    const name = document.createElement("strong");
+    name.textContent = textOrDash(item.name || item.item || item.item_id);
+    const meta = document.createElement("span");
+    const labels = { present: "在架", added: "新增", missing: "缺失" };
+    meta.textContent = `${labels[item.status] || "在架"} / ${textOrDash(item.tag_id || item.item_id)}`;
+    chip.append(name, meta);
+    root.appendChild(chip);
+  }
+  return root;
 }
 
 function addDetail(root, label, value) {
@@ -923,6 +977,50 @@ function appendCell(row, value) {
   const td = document.createElement("td");
   td.textContent = textOrDash(value);
   row.appendChild(td);
+}
+
+// ============================================================
+// 库存变化通知
+// ============================================================
+
+function notifyInventoryChanges(events) {
+  for (const event of [...events].reverse()) {
+    if (!event || !event.id || notifiedEventIds.has(event.id)) continue;
+    if (!INVENTORY_CHANGE_TYPES.has(event.type)) {
+      notifiedEventIds.add(event.id);
+      continue;
+    }
+    if (statusSeenOnce) showToast(event);
+    notifiedEventIds.add(event.id);
+  }
+  if (notifiedEventIds.size > 200) {
+    const keep = new Set(asArray(events).slice(0, 80).map((event) => event.id).filter(Boolean));
+    for (const id of notifiedEventIds) {
+      if (!keep.has(id)) notifiedEventIds.delete(id);
+    }
+  }
+}
+
+function showToast(event) {
+  let root = byId("toast-root");
+  if (!root) {
+    root = document.createElement("div");
+    root.id = "toast-root";
+    root.className = "toast-root";
+    document.body.appendChild(root);
+  }
+  const toast = document.createElement("article");
+  toast.className = `toast ${event.type || "info"}`;
+  const title = document.createElement("strong");
+  title.textContent = `${textOrDash(event.shelf_id || event.expected_shelf)} / ${labelFrom(EVENT_TYPE_LABELS, event.type)}`;
+  const body = document.createElement("span");
+  body.textContent = event.message || `${textOrDash(event.item)} 状态变化`;
+  toast.append(title, body);
+  root.appendChild(toast);
+  window.setTimeout(() => {
+    toast.classList.add("leaving");
+    window.setTimeout(() => toast.remove(), 220);
+  }, 4200);
 }
 
 // ============================================================
