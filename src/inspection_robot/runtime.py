@@ -107,7 +107,7 @@ class RobotRuntimeConfig:
     object_roi: str = field(default_factory=lambda: _env_text("", "OBJECT_ROI"))
     object_presence_min_area_ratio: float = field(default_factory=lambda: _env_float(0.015, "OBJECT_PRESENCE_MIN_AREA_RATIO"))
     object_presence_confirm_frames: int = field(default_factory=lambda: _env_int(1, "OBJECT_PRESENCE_CONFIRM_FRAMES"))
-    object_presence_cooldown_seconds: float = field(default_factory=lambda: _env_float(1.0, "OBJECT_PRESENCE_COOLDOWN_SECONDS"))
+    object_presence_cooldown_seconds: float = field(default_factory=lambda: _env_float(1.5, "OBJECT_PRESENCE_COOLDOWN_SECONDS"))
     object_yolo_min_interval_seconds: float = field(default_factory=lambda: _env_float(0.5, "OBJECT_YOLO_MIN_INTERVAL_SECONDS"))
     object_slow_speed: int = field(default_factory=lambda: _env_int(12, "OBJECT_SLOW_SPEED"))
     object_settle_seconds: float = field(default_factory=lambda: _env_float(0.2, "OBJECT_SETTLE_SECONDS"))
@@ -1157,7 +1157,6 @@ class RobotRuntime:
         if self._object_presence_hits < required:
             return False
         self._object_presence_hits = 0
-        self._last_object_presence_at = now
         self.motion.stop()
         self._stop_cruise_scanner()
         self.store.record_motion_debug(
@@ -1178,6 +1177,7 @@ class RobotRuntime:
         self.motion.stop()
         self._reset_heading_guard()
         self._zupt_recalibrate("post_object_scan")
+        self._last_object_presence_at = time.monotonic()
         self.store.record_motion_debug(
             "object_presence_resume",
             "目标识别完成，恢复低速巡逻。",

@@ -134,6 +134,7 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(config.motion_guard_poll_seconds, 0.01)
         self.assertEqual(config.object_detector, "opencv")
         self.assertEqual(config.object_presence_confirm_frames, 1)
+        self.assertEqual(config.object_presence_cooldown_seconds, 1.5)
         self.assertTrue(config.heading_hold_enabled)
         self.assertEqual(config.heading_hold_tolerance_deg, 0.4)
         self.assertEqual(config.heading_hold_gain, 0.012)

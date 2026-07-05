@@ -258,6 +258,29 @@ class CruiseRuntimeTest(unittest.TestCase):
             if event["type"] == "motion_debug" and isinstance(event.get("evidence"), dict)
         })
 
+    def test_object_presence_cooldown_starts_after_scan_finishes(self) -> None:
+        runtime, _, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                smooth_cruise_enabled=True,
+                object_trigger_enabled=True,
+                object_presence_cooldown_seconds=1.5,
+                object_settle_seconds=0,
+                action_settle_seconds=0,
+            ),
+            imu=FakeImu(None),
+        )
+
+        with (
+            mock.patch("inspection_robot.runtime.time.monotonic", side_effect=[100.0, 103.0, 103.0, 103.1, 103.1]),
+            mock.patch("inspection_robot.runtime.tag_detector.detect_object_presence_from_camera", return_value=True) as detector,
+            mock.patch.object(runtime, "_scan_visible_shelf") as scan,
+        ):
+            self.assertTrue(runtime._maybe_scan_for_object_presence())
+            self.assertFalse(runtime._maybe_scan_for_object_presence())
+
+        self.assertEqual(detector.call_count, 1)
+        self.assertEqual(scan.call_count, 1)
+
     # --- anti-oscillation PD heading hold -------------------------------- #
 
     def test_heading_hold_skips_pulse_when_already_recovering(self) -> None:
