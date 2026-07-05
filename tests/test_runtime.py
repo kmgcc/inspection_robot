@@ -108,6 +108,20 @@ class RuntimeTest(unittest.TestCase):
             "LINE_FOLLOW_AUTO_ENTER",
             "LINE_FOLLOW_SPEED",
             "LINE_FOLLOW_TURN_SPEED",
+            "TRANSFER_LINE_ENABLED",
+            "TRANSFER_LINE_SPEED",
+            "TRANSFER_LINE_MIN_SPEED",
+            "TRANSFER_LINE_TICK_SECONDS",
+            "TRANSFER_LINE_KP",
+            "TRANSFER_LINE_KD",
+            "TRANSFER_LINE_TURN_MAX",
+            "TRANSFER_LINE_ERROR_ALPHA",
+            "TRANSFER_LINE_RATE_ALPHA",
+            "TRANSFER_LINE_DEBOUNCE_FRAMES",
+            "TRANSFER_LINE_EXIT_CONFIRM_FRAMES",
+            "TRANSFER_LINE_BRIDGE_SECONDS",
+            "TRANSFER_LINE_SEARCH_SECONDS",
+            "TRANSFER_LINE_FAILSAFE_SECONDS",
             "CRUISE_SPEED",
             "CRUISE_TICK_SECONDS",
             "SMOOTH_CRUISE_SPEED",
@@ -182,6 +196,11 @@ class RuntimeTest(unittest.TestCase):
         self.assertFalse(config.line_follow_auto_enter)
         self.assertEqual(config.line_follow_speed, 16)
         self.assertEqual(config.line_follow_turn_speed, 16)
+        self.assertTrue(config.transfer_line_enabled)
+        self.assertEqual(config.transfer_line_speed, 16)
+        self.assertEqual(config.transfer_line_min_speed, 10)
+        self.assertEqual(config.transfer_line_tick_seconds, 0.04)
+        self.assertEqual(config.transfer_line_exit_confirm_frames, 2)
 
     def test_runtime_config_reads_environment_for_each_new_instance(self) -> None:
         with temporary_env({"ROBOT_PATROL_SPEED": "33", "ROBOT_PATROL_STEP_SECONDS": "0.31"}):
@@ -529,6 +548,144 @@ class RuntimeTest(unittest.TestCase):
                 for event in store.snapshot()["events"]
             )
         )
+
+    def test_a4_boundary_turn_starts_transfer_line_context(self) -> None:
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=RobotRuntimeConfig(
+                action_settle_seconds=0,
+                boundary_retreat_seconds=0,
+                boundary_cooldown_seconds=0,
+                boundary_confirm_samples=1,
+                turn_90_seconds=0,
+            ),
+            motion_adapter=fake_motion,
+            sensor_adapter=FakeSensors(distances=[400] * 4, tapes=[(1, 1, 1, 1)]),
+            alarm_adapter=FakeAlarm(),
+            detection_provider=fake_detection_provider,
+        )
+        runtime._record_observed_shelf("A4")
+
+        self.assertEqual(runtime._handle_tape_boundary((0, 0, 0, 0)), "turn")
+
+        self.assertIsNotNone(runtime._transfer_line_context)
+        self.assertEqual(runtime._transfer_line_context.direction, "A_TO_B")  # type: ignore[union-attr]
+        self.assertTrue(runtime._cruise_vision_suppressed_until_boundary)
+        self.assertIn("rotate_right", fake_motion.calls)
+
+    def test_transfer_start_boundary_does_not_latch_until_centerline_exit(self) -> None:
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=RobotRuntimeConfig(
+                action_settle_seconds=0,
+                boundary_retreat_seconds=0,
+                boundary_cooldown_seconds=0,
+                boundary_confirm_samples=1,
+                boundary_window_seconds=10.0,
+                transfer_line_exit_confirm_frames=2,
+                turn_90_seconds=0,
+            ),
+            motion_adapter=fake_motion,
+            sensor_adapter=FakeSensors(distances=[400] * 4, tapes=[(1, 1, 1, 1)]),
+            alarm_adapter=FakeAlarm(),
+            detection_provider=fake_detection_provider,
+        )
+        runtime._record_observed_shelf("A4")
+        runtime._handle_tape_boundary((0, 0, 0, 0))
+        rotate_count = fake_motion.calls.count("rotate_right")
+
+        self.assertEqual(runtime._handle_tape_boundary((0, 0, 0, 0)), "none")
+        self.assertEqual(fake_motion.calls.count("rotate_right"), rotate_count)
+        runtime._handle_tape_boundary((1, 0, 0, 1))
+        self.assertFalse(runtime._transfer_line_context.endpoint_unlocked)  # type: ignore[union-attr]
+        runtime._handle_tape_boundary((1, 0, 0, 1))
+
+        self.assertTrue(runtime._transfer_line_context.endpoint_unlocked)  # type: ignore[union-attr]
+        self.assertEqual(runtime._handle_tape_boundary((1, 0, 0, 1)), "none")
+        self.assertEqual(fake_motion.calls.count("rotate_right"), rotate_count)
+
+    def test_transfer_endpoint_latches_staggered_four_sensor_window_once_unlocked(self) -> None:
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=RobotRuntimeConfig(
+                action_settle_seconds=0,
+                boundary_retreat_seconds=0,
+                boundary_cooldown_seconds=0,
+                boundary_confirm_samples=1,
+                boundary_window_seconds=10.0,
+                transfer_line_exit_confirm_frames=1,
+                turn_90_seconds=0,
+            ),
+            motion_adapter=fake_motion,
+            sensor_adapter=FakeSensors(distances=[400] * 4, tapes=[(1, 1, 1, 1)]),
+            alarm_adapter=FakeAlarm(),
+            detection_provider=fake_detection_provider,
+        )
+        runtime._record_observed_shelf("B1")
+        runtime._handle_tape_boundary((0, 0, 0, 0))
+        runtime._handle_tape_boundary((1, 0, 0, 1))
+        first_turns = fake_motion.calls.count("rotate_right")
+
+        for state in [(0, 1, 1, 1), (1, 0, 1, 1), (1, 1, 0, 1)]:
+            self.assertEqual(runtime._handle_tape_boundary(state), "none")
+            self.assertEqual(fake_motion.calls.count("rotate_right"), first_turns)
+
+        self.assertEqual(runtime._handle_tape_boundary((1, 1, 1, 0)), "turn")
+        self.assertIsNone(runtime._transfer_line_context)
+        self.assertEqual(fake_motion.calls.count("rotate_right"), first_turns + 1)
+
+    def test_transfer_line_tick_does_not_apply_heading_hold(self) -> None:
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=RobotRuntimeConfig(
+                action_settle_seconds=0,
+                boundary_retreat_seconds=0,
+                boundary_cooldown_seconds=0,
+                boundary_confirm_samples=1,
+                transfer_line_exit_confirm_frames=1,
+                transfer_line_tick_seconds=0,
+                heading_hold_enabled=True,
+                heading_hold_tolerance_deg=0.25,
+                heading_hold_confirm_samples=1,
+                heading_hold_trace_interval_seconds=0,
+                turn_90_seconds=0,
+            ),
+            motion_adapter=fake_motion,
+            sensor_adapter=FakeSensors(distances=[400] * 4, tapes=[(1, 1, 1, 1)]),
+            alarm_adapter=FakeAlarm(),
+            imu_adapter=FakeImuHeading(8.0),
+            detection_provider=fake_detection_provider,
+        )
+        runtime._record_observed_shelf("A4")
+        runtime._handle_tape_boundary((0, 0, 0, 0))
+        runtime._handle_tape_boundary((1, 0, 0, 1))
+
+        runtime._drive_patrol_step((1, 0, 0, 1))
+        stages = [
+            event["evidence"].get("stage")
+            for event in store.snapshot()["events"]
+            if event["type"] == "motion_debug" and isinstance(event.get("evidence"), dict)
+        ]
+
+        self.assertIn("transfer_line_step", stages)
+        self.assertNotIn("heading_hold_correction", stages)
+        self.assertIn("move_forward_corrected:right", fake_motion.calls)
 
     def test_post_motion_boundary_latch_skips_cruise_recognition_same_tick(self) -> None:
         store = self.make_store()

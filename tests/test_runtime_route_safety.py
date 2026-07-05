@@ -35,7 +35,12 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
             root=self.root,
         )
 
-    def make_config(self, *, line_follow_enabled: bool = False) -> RobotRuntimeConfig:
+    def make_config(
+        self,
+        *,
+        line_follow_enabled: bool = False,
+        transfer_line_enabled: bool = False,
+    ) -> RobotRuntimeConfig:
         return RobotRuntimeConfig(
             patrol_speed=5,
             step_seconds=0,
@@ -55,6 +60,11 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
             avoidance_body_seconds=0,
             line_follow_enabled=line_follow_enabled,
             line_follow_auto_enter=line_follow_enabled,
+            transfer_line_enabled=transfer_line_enabled,
+            transfer_line_speed=8,
+            transfer_line_min_speed=5,
+            transfer_line_tick_seconds=0,
+            transfer_line_exit_confirm_frames=1,
         )
 
     def test_partial_tape_auto_enters_line_follow_correction(self) -> None:
@@ -398,6 +408,9 @@ class FakeMotion:
 
     def move_forward_slow(self, *, speed: int, duration_seconds: float) -> None:
         self.calls.append(("move_forward", speed, duration_seconds))
+
+    def move_forward_corrected_slow(self, *, speed: int, correction: int, direction: str, duration_seconds: float) -> None:
+        self.calls.append((f"move_forward_corrected:{direction}:{correction}", speed, duration_seconds))
 
     def move_backward_slow(self, *, speed: int, duration_seconds: float) -> None:
         self.calls.append(("move_backward", speed, duration_seconds))

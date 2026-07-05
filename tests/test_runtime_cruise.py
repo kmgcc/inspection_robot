@@ -637,6 +637,8 @@ class CruiseRuntimeTest(unittest.TestCase):
                 cruise_vision_enabled=True,
                 object_trigger_enabled=False,
                 action_settle_seconds=0,
+                transfer_line_exit_confirm_frames=1,
+                turn_90_seconds=0,
             )
         )
 
@@ -646,6 +648,11 @@ class CruiseRuntimeTest(unittest.TestCase):
         self.assertFalse(runtime._cruise_scanner_allowed_for_phase())
 
         runtime._handle_planned_boundary_turn((0, 1, 1, 1), "turn_patrol")
+
+        self.assertFalse(runtime._cruise_scanner_allowed_for_phase())
+
+        runtime._handle_tape_boundary((1, 0, 0, 1))
+        runtime._handle_tape_boundary((0, 0, 0, 0))
 
         self.assertTrue(runtime._cruise_scanner_allowed_for_phase())
 
