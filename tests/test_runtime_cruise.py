@@ -205,6 +205,7 @@ class CruiseRuntimeTest(unittest.TestCase):
             config=RobotRuntimeConfig(
                 smooth_cruise_enabled=True,
                 cruise_vision_enabled=False,  # keep the scanner thread out of the test
+                object_trigger_enabled=False,
                 cruise_tick_seconds=0,
                 cruise_log_interval_seconds=0,
                 scan_timeout_seconds=0,
@@ -506,6 +507,7 @@ class CruiseRuntimeTest(unittest.TestCase):
         runtime, motion, _ = self.make_runtime(
             config=RobotRuntimeConfig(
                 heading_hold_enabled=True,
+                heading_hold_confirm_samples=2,
                 heading_hold_min_interval_seconds=0.0,
                 action_settle_seconds=0,
             ),

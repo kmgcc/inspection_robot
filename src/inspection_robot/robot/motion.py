@@ -11,6 +11,7 @@ from .sensors import RobotHardwareError
 
 
 DEFAULT_SPEED = int(os.environ.get("ROBOT_SLOW_SPEED", "22"))
+MIN_RUNNING_SPEED = max(0, int(os.environ.get("ROBOT_MIN_SPEED", "5")))
 DEFAULT_STEP_SECONDS = float(os.environ.get("ROBOT_STEP_SECONDS", "0.14"))
 COMMAND_REPEAT = max(1, int(os.environ.get("ROBOT_COMMAND_REPEAT", "2")))
 COMMAND_REPEAT_GAP_SECONDS = float(os.environ.get("ROBOT_COMMAND_REPEAT_GAP_SECONDS", "0.02"))
@@ -20,6 +21,7 @@ VENDOR_MOTION_PATHS = (
     Path("/home/pi/project_demo/04.Car_motion_control"),
 )
 _ABORT = threading.Event()
+_MOTION_LOCK = threading.RLock()
 
 
 def move_forward_slow(speed: int | None = None, duration_seconds: float | None = None) -> None:
@@ -47,17 +49,18 @@ def rotate_right_slow(speed: int | None = None, duration_seconds: float | None =
 
 
 def stop() -> None:
-    module = _motion_module()
-    for name in ("stop_robot", "stop", "car_stop", "motor_stop"):
-        func = getattr(module, name, None)
-        if callable(func):
-            func()
+    with _MOTION_LOCK:
+        module = _motion_module()
+        for name in ("stop_robot", "stop", "car_stop", "motor_stop"):
+            func = getattr(module, name, None)
+            if callable(func):
+                func()
+                return
+        fallback = getattr(module, "move_forward", None)
+        if callable(fallback):
+            fallback(0)
             return
-    fallback = getattr(module, "move_forward", None)
-    if callable(fallback):
-        fallback(0)
-        return
-    raise RobotHardwareError("McLumk_Wheel_Sports does not expose a stop function")
+        raise RobotHardwareError("McLumk_Wheel_Sports does not expose a stop function")
 
 
 def request_stop() -> None:
@@ -80,25 +83,31 @@ def _call_motion(name: str, speed: int | None, duration_seconds: float | None) -
     if _ABORT.is_set():
         _stop_quietly()
         return
-    module = _motion_module()
-    func = getattr(module, name, None)
-    if not callable(func):
-        raise RobotHardwareError(f"McLumk_Wheel_Sports is missing {name}()")
-    for index in range(COMMAND_REPEAT):
+    with _MOTION_LOCK:
         if _ABORT.is_set():
             _stop_quietly()
             return
-        func(_speed(speed))
-        if index < COMMAND_REPEAT - 1:
-            _interruptible_sleep(max(0.0, COMMAND_REPEAT_GAP_SECONDS))
-    _interruptible_sleep(_duration(duration_seconds))
-    if _ABORT.is_set():
-        _stop_quietly()
+        module = _motion_module()
+        func = getattr(module, name, None)
+        if not callable(func):
+            raise RobotHardwareError(f"McLumk_Wheel_Sports is missing {name}()")
+        for index in range(COMMAND_REPEAT):
+            if _ABORT.is_set():
+                _stop_quietly()
+                return
+            func(_speed(speed))
+            if index < COMMAND_REPEAT - 1:
+                _interruptible_sleep(max(0.0, COMMAND_REPEAT_GAP_SECONDS))
+        _interruptible_sleep(_duration(duration_seconds))
+        if _ABORT.is_set():
+            _stop_quietly()
 
 
 def _speed(speed: int | None) -> int:
     value = DEFAULT_SPEED if speed is None else int(speed)
-    return max(0, min(value, 100))
+    if value <= 0:
+        return 0
+    return max(MIN_RUNNING_SPEED, min(value, 100))
 
 
 def _duration(duration_seconds: float | None) -> float:

@@ -54,6 +54,7 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
             obstacle_wait_seconds=0,
             avoidance_body_seconds=0,
             line_follow_enabled=line_follow_enabled,
+            line_follow_auto_enter=line_follow_enabled,
         )
 
     def test_partial_tape_auto_enters_line_follow_correction(self) -> None:

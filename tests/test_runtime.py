@@ -55,6 +55,11 @@ class RuntimeTest(unittest.TestCase):
             "ROBOT_PATROL_SETTLE_SECONDS",
             "ROBOT_ACTION_SETTLE_SECONDS",
             "ROBOT_SCAN_ENABLED",
+            "ROBOT_SCAN_TIMEOUT_SECONDS",
+            "SCAN_TIMEOUT_SECONDS",
+            "ROBOT_SCAN_MAX_DETECTIONS",
+            "SCAN_MAX_DETECTIONS",
+            "ROBOT_MIN_SPEED",
             "AVOIDANCE_SPEED",
             "AVOIDANCE_BODY_SECONDS",
             "AVOIDANCE_SIDE_CLEARANCE_BODIES",
@@ -68,6 +73,7 @@ class RuntimeTest(unittest.TestCase):
             "OBJECT_TRIGGER_ENABLED",
             "OBJECT_PRESENCE_CONFIRM_FRAMES",
             "OBJECT_PRESENCE_COOLDOWN_SECONDS",
+            "OBJECT_SETTLE_SECONDS",
             "HEADING_HOLD_ENABLED",
             "HEADING_HOLD_TOLERANCE_DEG",
             "HEADING_HOLD_GAIN",
@@ -81,14 +87,20 @@ class RuntimeTest(unittest.TestCase):
             "HEADING_HOLD_MAX_CONSECUTIVE",
             "HEADING_HOLD_CONFIRM_SAMPLES",
             "LINE_FOLLOW_ENABLED",
+            "LINE_FOLLOW_AUTO_ENTER",
             "LINE_FOLLOW_SPEED",
             "LINE_FOLLOW_TURN_SPEED",
+            "CRUISE_SPEED",
+            "SMOOTH_CRUISE_SPEED",
+            "CRUISE_VISION_ENABLED",
         ):
             config = RobotRuntimeConfig()
 
         self.assertEqual(config.patrol_speed, 20)
         self.assertEqual(config.step_seconds, 0.18)
         self.assertEqual(config.patrol_settle_seconds, 0.05)
+        self.assertEqual(config.scan_timeout_seconds, 2.0)
+        self.assertEqual(config.scan_max_detections, 3)
         self.assertEqual(config.action_settle_seconds, 0.7)
         self.assertEqual(config.avoidance_speed, 20)
         self.assertEqual(config.avoidance_body_seconds, 0.35)
@@ -98,18 +110,21 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(config.boundary_cooldown_seconds, 0.05)
         self.assertEqual(config.motion_guard_poll_seconds, 0.02)
         self.assertEqual(config.object_detector, "opencv")
-        self.assertEqual(config.object_presence_confirm_frames, 2)
+        self.assertEqual(config.object_presence_confirm_frames, 1)
         self.assertTrue(config.heading_hold_enabled)
-        self.assertEqual(config.heading_hold_tolerance_deg, 6.0)
-        self.assertEqual(config.heading_hold_gain, 0.008)
-        self.assertEqual(config.heading_hold_min_pulse_seconds, 0.02)
-        self.assertEqual(config.heading_hold_max_pulse_seconds, 0.07)
-        self.assertEqual(config.heading_hold_correction_speed, 12)
+        self.assertEqual(config.heading_hold_tolerance_deg, 3.0)
+        self.assertEqual(config.heading_hold_gain, 0.012)
+        self.assertEqual(config.heading_hold_min_pulse_seconds, 0.025)
+        self.assertEqual(config.heading_hold_max_pulse_seconds, 0.10)
+        self.assertEqual(config.heading_hold_correction_speed, 20)
         self.assertTrue(config.heading_hold_invert)
-        self.assertEqual(config.heading_hold_min_interval_seconds, 0.45)
-        self.assertEqual(config.heading_hold_max_consecutive, 1)
-        self.assertEqual(config.heading_hold_confirm_samples, 2)
-        self.assertTrue(config.line_follow_enabled)
+        self.assertEqual(config.heading_hold_min_interval_seconds, 0.25)
+        self.assertEqual(config.heading_hold_max_consecutive, 2)
+        self.assertEqual(config.heading_hold_confirm_samples, 1)
+        self.assertFalse(config.cruise_vision_enabled)
+        self.assertEqual(config.cruise_speed, 8)
+        self.assertFalse(config.line_follow_enabled)
+        self.assertFalse(config.line_follow_auto_enter)
         self.assertEqual(config.line_follow_speed, 30)
         self.assertEqual(config.line_follow_turn_speed, 30)
 
@@ -291,6 +306,8 @@ class RuntimeTest(unittest.TestCase):
             config=RobotRuntimeConfig(
                 step_seconds=0,
                 line_follow_step_seconds=0,
+                line_follow_enabled=True,
+                line_follow_auto_enter=True,
                 scan_timeout_seconds=0,
                 action_settle_seconds=0,
                 boundary_cooldown_seconds=0,
@@ -321,6 +338,8 @@ class RuntimeTest(unittest.TestCase):
             config=RobotRuntimeConfig(
                 step_seconds=0,
                 line_follow_step_seconds=0,
+                line_follow_enabled=True,
+                line_follow_auto_enter=True,
                 scan_timeout_seconds=0,
                 action_settle_seconds=0,
                 boundary_cooldown_seconds=0,

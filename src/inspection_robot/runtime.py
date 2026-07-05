@@ -48,6 +48,9 @@ def _env_int(default: int, *names: str) -> int:
     return int(_env_value(names, str(default)))
 
 
+DEFAULT_MIN_RUNNING_SPEED = max(0, _env_int(5, "ROBOT_MIN_SPEED"))
+
+
 def _env_float(default: float, *names: str) -> float:
     return float(_env_value(names, str(default)))
 
@@ -73,8 +76,8 @@ class RobotRuntimeConfig:
     patrol_settle_seconds: float = field(default_factory=lambda: _env_float(0.05, "ROBOT_PATROL_SETTLE_SECONDS"))
     poll_seconds: float = field(default_factory=lambda: _env_float(0.12, "ROBOT_POLL_SECONDS"))
     scan_enabled: bool = field(default_factory=lambda: _env_bool("ROBOT_SCAN_ENABLED", True))
-    scan_timeout_seconds: float = 4.0
-    scan_max_detections: int = 6
+    scan_timeout_seconds: float = field(default_factory=lambda: _env_float(2.0, "ROBOT_SCAN_TIMEOUT_SECONDS", "SCAN_TIMEOUT_SECONDS"))
+    scan_max_detections: int = field(default_factory=lambda: _env_int(3, "ROBOT_SCAN_MAX_DETECTIONS", "SCAN_MAX_DETECTIONS"))
     scan_interval_seconds: float = field(default_factory=lambda: _env_float(0.8, "SCAN_INTERVAL_SECONDS"))
     turn_90_seconds: float = field(default_factory=lambda: _env_float(0.85, "ROBOT_TURN_90_SECONDS"))
     turn_speed: int = field(default_factory=lambda: _env_int(22, "ROBOT_TURN_SPEED"))
@@ -98,35 +101,36 @@ class RobotRuntimeConfig:
     object_detector_model: str = field(default_factory=lambda: _env_text("", "OBJECT_DETECTOR_MODEL"))
     object_roi: str = field(default_factory=lambda: _env_text("", "OBJECT_ROI"))
     object_presence_min_area_ratio: float = field(default_factory=lambda: _env_float(0.015, "OBJECT_PRESENCE_MIN_AREA_RATIO"))
-    object_presence_confirm_frames: int = field(default_factory=lambda: _env_int(2, "OBJECT_PRESENCE_CONFIRM_FRAMES"))
-    object_presence_cooldown_seconds: float = field(default_factory=lambda: _env_float(2.0, "OBJECT_PRESENCE_COOLDOWN_SECONDS"))
+    object_presence_confirm_frames: int = field(default_factory=lambda: _env_int(1, "OBJECT_PRESENCE_CONFIRM_FRAMES"))
+    object_presence_cooldown_seconds: float = field(default_factory=lambda: _env_float(1.0, "OBJECT_PRESENCE_COOLDOWN_SECONDS"))
     object_yolo_min_interval_seconds: float = field(default_factory=lambda: _env_float(0.5, "OBJECT_YOLO_MIN_INTERVAL_SECONDS"))
     object_slow_speed: int = field(default_factory=lambda: _env_int(12, "OBJECT_SLOW_SPEED"))
-    object_settle_seconds: float = field(default_factory=lambda: _env_float(0.25, "OBJECT_SETTLE_SECONDS"))
+    object_settle_seconds: float = field(default_factory=lambda: _env_float(0.2, "OBJECT_SETTLE_SECONDS"))
     heading_hold_enabled: bool = field(default_factory=lambda: _env_bool("HEADING_HOLD_ENABLED", True))
-    heading_hold_tolerance_deg: float = field(default_factory=lambda: _env_float(6.0, "HEADING_HOLD_TOLERANCE_DEG"))
-    heading_hold_gain: float = field(default_factory=lambda: _env_float(0.008, "HEADING_HOLD_GAIN"))
-    heading_hold_min_pulse_seconds: float = field(default_factory=lambda: _env_float(0.02, "HEADING_HOLD_MIN_PULSE_SECONDS"))
-    heading_hold_max_pulse_seconds: float = field(default_factory=lambda: _env_float(0.07, "HEADING_HOLD_MAX_PULSE_SECONDS"))
-    heading_hold_correction_speed: int = field(default_factory=lambda: _env_int(12, "HEADING_HOLD_CORRECTION_SPEED"))
+    heading_hold_tolerance_deg: float = field(default_factory=lambda: _env_float(3.0, "HEADING_HOLD_TOLERANCE_DEG"))
+    heading_hold_gain: float = field(default_factory=lambda: _env_float(0.012, "HEADING_HOLD_GAIN"))
+    heading_hold_min_pulse_seconds: float = field(default_factory=lambda: _env_float(0.025, "HEADING_HOLD_MIN_PULSE_SECONDS"))
+    heading_hold_max_pulse_seconds: float = field(default_factory=lambda: _env_float(0.10, "HEADING_HOLD_MAX_PULSE_SECONDS"))
+    heading_hold_correction_speed: int = field(default_factory=lambda: _env_int(20, "HEADING_HOLD_CORRECTION_SPEED"))
     heading_hold_invert: bool = field(default_factory=lambda: _env_bool("HEADING_HOLD_INVERT", True))
     heading_hold_rate_damping: float = field(default_factory=lambda: _env_float(0.03, "HEADING_HOLD_KD", "HEADING_HOLD_RATE_DAMPING"))
     heading_hold_min_sample_interval_seconds: float = field(default_factory=lambda: _env_float(0.08, "HEADING_HOLD_MIN_SAMPLE_INTERVAL_SECONDS"))
-    heading_hold_min_interval_seconds: float = field(default_factory=lambda: _env_float(0.45, "HEADING_HOLD_MIN_INTERVAL_SECONDS"))
-    heading_hold_max_consecutive: int = field(default_factory=lambda: _env_int(1, "HEADING_HOLD_MAX_CONSECUTIVE"))
-    heading_hold_confirm_samples: int = field(default_factory=lambda: _env_int(2, "HEADING_HOLD_CONFIRM_SAMPLES"))
+    heading_hold_min_interval_seconds: float = field(default_factory=lambda: _env_float(0.25, "HEADING_HOLD_MIN_INTERVAL_SECONDS"))
+    heading_hold_max_consecutive: int = field(default_factory=lambda: _env_int(2, "HEADING_HOLD_MAX_CONSECUTIVE"))
+    heading_hold_confirm_samples: int = field(default_factory=lambda: _env_int(1, "HEADING_HOLD_CONFIRM_SAMPLES"))
     heading_zupt_enabled: bool = field(default_factory=lambda: _env_bool("HEADING_ZUPT_ENABLED", True))
     heading_zupt_samples: int = field(default_factory=lambda: _env_int(15, "HEADING_ZUPT_SAMPLES"))
     heading_zupt_sample_seconds: float = field(default_factory=lambda: _env_float(0.005, "HEADING_ZUPT_SAMPLE_SECONDS"))
     smooth_cruise_enabled: bool = field(default_factory=lambda: _env_bool("SMOOTH_CRUISE_ENABLED", False))
-    cruise_speed: int = field(default_factory=lambda: _env_int(14, "CRUISE_SPEED", "SMOOTH_CRUISE_SPEED"))
+    cruise_speed: int = field(default_factory=lambda: _env_int(8, "CRUISE_SPEED", "SMOOTH_CRUISE_SPEED"))
     cruise_tick_seconds: float = field(default_factory=lambda: _env_float(0.05, "CRUISE_TICK_SECONDS"))
     cruise_log_interval_seconds: float = field(default_factory=lambda: _env_float(1.0, "CRUISE_LOG_INTERVAL_SECONDS"))
-    cruise_vision_enabled: bool = field(default_factory=lambda: _env_bool("CRUISE_VISION_ENABLED", True))
+    cruise_vision_enabled: bool = field(default_factory=lambda: _env_bool("CRUISE_VISION_ENABLED", False))
     cruise_recognition_flash_seconds: float = field(default_factory=lambda: _env_float(0.12, "CRUISE_RECOGNITION_FLASH_SECONDS"))
     cruise_recognition_cooldown_seconds: float = field(default_factory=lambda: _env_float(1.5, "CRUISE_RECOGNITION_COOLDOWN_SECONDS"))
     cruise_vision_reopen_seconds: float = field(default_factory=lambda: _env_float(0.3, "CRUISE_VISION_REOPEN_SECONDS"))
-    line_follow_enabled: bool = field(default_factory=lambda: _env_bool("LINE_FOLLOW_ENABLED", True))
+    line_follow_enabled: bool = field(default_factory=lambda: _env_bool("LINE_FOLLOW_ENABLED", False))
+    line_follow_auto_enter: bool = field(default_factory=lambda: _env_bool("LINE_FOLLOW_AUTO_ENTER", False))
     line_follow_speed: int = field(default_factory=lambda: _env_int(30, "LINE_FOLLOW_SPEED", "ROBOT_PATROL_SPEED", "ROBOT_SLOW_SPEED"))
     line_follow_step_seconds: float = field(default_factory=lambda: _env_float(0.14, "LINE_FOLLOW_STEP_SECONDS", "ROBOT_STEP_SECONDS"))
     line_follow_turn_speed: int = field(
@@ -164,6 +168,9 @@ class RobotRuntimeConfig:
         default_factory=lambda: _env_float(30.0, "CAMERA_FAILURE_REQUEST_COOLDOWN_SECONDS")
     )
     missing_alert_cooldown_seconds: float = field(default_factory=lambda: _env_float(8.0, "MISSING_ALERT_COOLDOWN_SECONDS"))
+
+    def __post_init__(self) -> None:
+        _clamp_config_speeds(self)
 
 
 class RobotRuntime:
@@ -390,6 +397,8 @@ class RobotRuntime:
 
                 now = time.monotonic()
                 if cruise:
+                    if self._maybe_scan_for_object_presence():
+                        continue
                     self._handle_cruise_recognitions()
                     continue
                 if self._maybe_scan_for_object_presence():
@@ -620,7 +629,7 @@ class RobotRuntime:
         if self._line_follow_active and self.config.line_follow_enabled:
             self._drive_line_follow_step(tape_state)
             return
-        if self.config.line_follow_enabled:
+        if self.config.line_follow_enabled and self.config.line_follow_auto_enter:
             decision = decide_line_follow_motion(tape_state)
             if decision.line_seen and not decision.boundary_candidate:
                 self._line_follow_active = True
@@ -1066,7 +1075,7 @@ class RobotRuntime:
         self.motion.stop()
         self.store.record_motion_debug(
             "object_presence_triggered",
-            "object presence detected; stopped for full vision recognition.",
+            "检测到画面中有新目标进入：已停车，执行一次完整视觉识别后继续巡逻。",
             status="SCANNING_SHELF",
             evidence={
                 "detector": detector,
@@ -1079,6 +1088,14 @@ class RobotRuntime:
         if self._stop_event.is_set():
             return True
         self._scan_visible_shelf()
+        self.motion.stop()
+        self._reset_heading_guard()
+        self._zupt_recalibrate("post_object_scan")
+        self.store.record_motion_debug(
+            "object_presence_resume",
+            "目标识别完成，恢复低速巡逻。",
+            evidence={"cooldown_seconds": cooldown},
+        )
         return True
 
     def _shelf_id_from_detections(self, detections: list[dict[str, object]]) -> str | None:
@@ -2191,6 +2208,29 @@ def _cells_from_step(step: RouteStep) -> list[Cell]:
     return [(int(cell[0]), int(cell[1])) for cell in step["path"]]
 
 
+def _running_speed(value: int | None) -> int:
+    if value is None:
+        return DEFAULT_MIN_RUNNING_SPEED
+    parsed = int(value)
+    if parsed <= 0:
+        return 0
+    return max(DEFAULT_MIN_RUNNING_SPEED, min(parsed, 100))
+
+
+def _clamp_config_speeds(config: RobotRuntimeConfig) -> None:
+    for name in (
+        "patrol_speed",
+        "turn_speed",
+        "avoidance_speed",
+        "object_slow_speed",
+        "heading_hold_correction_speed",
+        "cruise_speed",
+        "line_follow_speed",
+        "line_follow_turn_speed",
+    ):
+        setattr(config, name, _running_speed(getattr(config, name)))
+
+
 def load_calibration_into_config(config: RobotRuntimeConfig, root: Path) -> None:
     path = root / "config" / "calibration.json"
     if path.exists():
@@ -2213,5 +2253,6 @@ def load_calibration_into_config(config: RobotRuntimeConfig, root: Path) -> None
                 config.line_follow_speed = int(data["line_follow_speed"])
             if data.get("line_follow_step_seconds") is not None:
                 config.line_follow_step_seconds = float(data["line_follow_step_seconds"])
+            _clamp_config_speeds(config)
         except (OSError, json.JSONDecodeError, TypeError, ValueError):
             pass
