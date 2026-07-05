@@ -31,6 +31,10 @@ def move_forward_slow(speed: int | None = None, duration_seconds: float | None =
     _call_motion("move_forward", speed, duration_seconds)
 
 
+def start_forward_slow(speed: int | None = None) -> None:
+    _start_motion("move_forward", speed)
+
+
 def move_forward_corrected_slow(
     *,
     speed: int | None = None,
@@ -39,6 +43,15 @@ def move_forward_corrected_slow(
     duration_seconds: float | None = None,
 ) -> None:
     _call_forward_corrected(speed, correction, direction, duration_seconds)
+
+
+def start_forward_corrected_slow(
+    *,
+    speed: int | None = None,
+    correction: int = 0,
+    direction: str = "right",
+) -> None:
+    _start_forward_corrected(speed, correction, direction)
 
 
 def move_backward_slow(speed: int | None = None, duration_seconds: float | None = None) -> None:
@@ -115,6 +128,21 @@ def _call_motion(name: str, speed: int | None, duration_seconds: float | None) -
             _stop_quietly()
 
 
+def _start_motion(name: str, speed: int | None) -> None:
+    if _ABORT.is_set():
+        _stop_quietly()
+        return
+    with _MOTION_LOCK:
+        if _ABORT.is_set():
+            _stop_quietly()
+            return
+        module = _motion_module()
+        func = getattr(module, name, None)
+        if not callable(func):
+            raise RobotHardwareError(f"McLumk_Wheel_Sports is missing {name}()")
+        func(_speed(speed))
+
+
 def _call_forward_corrected(
     speed: int | None,
     correction: int,
@@ -165,6 +193,44 @@ def _call_forward_corrected(
         _interruptible_sleep(_duration(duration_seconds))
         if _ABORT.is_set():
             _stop_quietly()
+
+
+def _start_forward_corrected(speed: int | None, correction: int, direction: str) -> None:
+    if _ABORT.is_set():
+        _stop_quietly()
+        return
+    base_speed = _speed(speed)
+    correction_speed = max(0, min(int(correction), base_speed))
+    normalized_direction = str(direction).strip().lower()
+    if correction_speed <= 0 or normalized_direction not in {"left", "right"}:
+        _start_motion("move_forward", base_speed)
+        return
+    with _MOTION_LOCK:
+        if _ABORT.is_set():
+            _stop_quietly()
+            return
+        module = _motion_module()
+        bot = getattr(module, "bot", None)
+        ctrl_car = getattr(bot, "Ctrl_Car", None)
+        ctrl_muto = getattr(bot, "Ctrl_Muto", None)
+        if not callable(ctrl_car) and not callable(ctrl_muto):
+            _start_motion("move_forward", base_speed)
+            return
+        left_speed = base_speed
+        right_speed = base_speed
+        if normalized_direction == "right":
+            left_speed = min(100, base_speed + correction_speed)
+            right_speed = max(0, base_speed - correction_speed)
+        else:
+            left_speed = max(0, base_speed - correction_speed)
+            right_speed = min(100, base_speed + correction_speed)
+        wheel_speeds = (left_speed, left_speed, right_speed, right_speed)
+        signs = _forward_motor_signs()
+        for motor_id, wheel_speed in enumerate(wheel_speeds):
+            if callable(ctrl_car):
+                ctrl_car(motor_id, 0, _speed(wheel_speed))
+            else:
+                ctrl_muto(motor_id, _signed_speed(wheel_speed, signs[motor_id]))
 
 
 def _speed(speed: int | None) -> int:

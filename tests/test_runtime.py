@@ -115,10 +115,14 @@ class RuntimeTest(unittest.TestCase):
             "TRANSFER_LINE_KP",
             "TRANSFER_LINE_KD",
             "TRANSFER_LINE_TURN_MAX",
+            "TRANSFER_LINE_GUARD_POLL_SECONDS",
             "TRANSFER_LINE_ERROR_ALPHA",
             "TRANSFER_LINE_RATE_ALPHA",
             "TRANSFER_LINE_DEBOUNCE_FRAMES",
             "TRANSFER_LINE_EXIT_CONFIRM_FRAMES",
+            "TRANSFER_ENDPOINT_WINDOW_SECONDS",
+            "TRANSFER_ENDPOINT_MIN_BLACK_SENSORS",
+            "TRANSFER_ENDPOINT_CONFIRM_FRAMES",
             "TRANSFER_LINE_BRIDGE_SECONDS",
             "TRANSFER_LINE_SEARCH_SECONDS",
             "TRANSFER_LINE_FAILSAFE_SECONDS",
@@ -200,7 +204,11 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(config.transfer_line_speed, 16)
         self.assertEqual(config.transfer_line_min_speed, 10)
         self.assertEqual(config.transfer_line_tick_seconds, 0.04)
+        self.assertEqual(config.transfer_line_guard_poll_seconds, 0.004)
         self.assertEqual(config.transfer_line_exit_confirm_frames, 2)
+        self.assertEqual(config.transfer_endpoint_window_seconds, 0.04)
+        self.assertEqual(config.transfer_endpoint_min_black_sensors, 3)
+        self.assertEqual(config.transfer_endpoint_confirm_frames, 2)
 
     def test_runtime_config_reads_environment_for_each_new_instance(self) -> None:
         with temporary_env({"ROBOT_PATROL_SPEED": "33", "ROBOT_PATROL_STEP_SECONDS": "0.31"}):
@@ -612,7 +620,7 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(runtime._handle_tape_boundary((1, 0, 0, 1)), "none")
         self.assertEqual(fake_motion.calls.count("rotate_right"), rotate_count)
 
-    def test_transfer_endpoint_latches_staggered_four_sensor_window_once_unlocked(self) -> None:
+    def test_transfer_endpoint_ignores_centerline_sweep_once_unlocked(self) -> None:
         store = self.make_store()
         fake_motion = FakeMotion()
         runtime = RobotRuntime(
@@ -625,6 +633,7 @@ class RuntimeTest(unittest.TestCase):
                 boundary_cooldown_seconds=0,
                 boundary_confirm_samples=1,
                 boundary_window_seconds=10.0,
+                transfer_endpoint_window_seconds=10.0,
                 transfer_line_exit_confirm_frames=1,
                 turn_90_seconds=0,
             ),
@@ -638,12 +647,71 @@ class RuntimeTest(unittest.TestCase):
         runtime._handle_tape_boundary((1, 0, 0, 1))
         first_turns = fake_motion.calls.count("rotate_right")
 
-        for state in [(0, 1, 1, 1), (1, 0, 1, 1), (1, 1, 0, 1)]:
+        for state in [(1, 0, 1, 1), (1, 0, 0, 1), (1, 1, 0, 1), (0, 0, 1, 1), (1, 1, 0, 0)]:
             self.assertEqual(runtime._handle_tape_boundary(state), "none")
             self.assertEqual(fake_motion.calls.count("rotate_right"), first_turns)
 
-        self.assertEqual(runtime._handle_tape_boundary((1, 1, 1, 0)), "turn")
+        self.assertIsNotNone(runtime._transfer_line_context)
+        self.assertEqual(fake_motion.calls.count("rotate_right"), first_turns)
+
+    def test_transfer_endpoint_latches_wide_staggered_boundary_once_unlocked(self) -> None:
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=RobotRuntimeConfig(
+                action_settle_seconds=0,
+                boundary_retreat_seconds=0,
+                boundary_cooldown_seconds=0,
+                boundary_confirm_samples=1,
+                transfer_endpoint_window_seconds=10.0,
+                transfer_line_exit_confirm_frames=1,
+                turn_90_seconds=0,
+            ),
+            motion_adapter=fake_motion,
+            sensor_adapter=FakeSensors(distances=[400] * 4, tapes=[(1, 1, 1, 1)]),
+            alarm_adapter=FakeAlarm(),
+            detection_provider=fake_detection_provider,
+        )
+        runtime._record_observed_shelf("B1")
+        runtime._handle_tape_boundary((0, 0, 0, 0))
+        runtime._handle_tape_boundary((1, 0, 0, 1))
+        first_turns = fake_motion.calls.count("rotate_right")
+
+        self.assertEqual(runtime._handle_tape_boundary((0, 0, 0, 1)), "none")
+        self.assertEqual(fake_motion.calls.count("rotate_right"), first_turns)
+        self.assertEqual(runtime._handle_tape_boundary((1, 0, 0, 0)), "turn")
         self.assertIsNone(runtime._transfer_line_context)
+        self.assertEqual(fake_motion.calls.count("rotate_right"), first_turns + 1)
+
+    def test_transfer_endpoint_latches_full_black_immediately(self) -> None:
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=RobotRuntimeConfig(
+                action_settle_seconds=0,
+                boundary_retreat_seconds=0,
+                boundary_cooldown_seconds=0,
+                boundary_confirm_samples=1,
+                transfer_line_exit_confirm_frames=1,
+                turn_90_seconds=0,
+            ),
+            motion_adapter=fake_motion,
+            sensor_adapter=FakeSensors(distances=[400] * 4, tapes=[(1, 1, 1, 1)]),
+            alarm_adapter=FakeAlarm(),
+            detection_provider=fake_detection_provider,
+        )
+        runtime._record_observed_shelf("A4")
+        runtime._handle_tape_boundary((0, 0, 0, 0))
+        runtime._handle_tape_boundary((1, 0, 0, 1))
+        first_turns = fake_motion.calls.count("rotate_right")
+
+        self.assertEqual(runtime._handle_tape_boundary((0, 0, 0, 0)), "turn")
         self.assertEqual(fake_motion.calls.count("rotate_right"), first_turns + 1)
 
     def test_transfer_line_tick_does_not_apply_heading_hold(self) -> None:
@@ -685,7 +753,46 @@ class RuntimeTest(unittest.TestCase):
 
         self.assertIn("transfer_line_step", stages)
         self.assertNotIn("heading_hold_correction", stages)
-        self.assertIn("move_forward_corrected:right", fake_motion.calls)
+        self.assertIn("start_forward_corrected:right", fake_motion.calls)
+
+    def test_transfer_guard_polls_boundary_without_repeating_motor_command(self) -> None:
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        fake_sensors = FakeSensors(distances=[400] * 4, tapes=[(1, 1, 1, 1), (0, 0, 0, 0)])
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=RobotRuntimeConfig(
+                action_settle_seconds=0,
+                boundary_retreat_seconds=0,
+                boundary_cooldown_seconds=0,
+                boundary_confirm_samples=1,
+                transfer_line_exit_confirm_frames=1,
+                transfer_line_tick_seconds=0.003,
+                transfer_line_guard_poll_seconds=0.001,
+                turn_90_seconds=0,
+            ),
+            motion_adapter=fake_motion,
+            sensor_adapter=fake_sensors,
+            alarm_adapter=FakeAlarm(),
+            detection_provider=fake_detection_provider,
+        )
+        runtime._record_observed_shelf("A4")
+        runtime._handle_tape_boundary((0, 0, 0, 0))
+        runtime._handle_tape_boundary((1, 0, 0, 1))
+
+        runtime._drive_patrol_step((1, 0, 0, 1))
+        stages = [
+            event["evidence"].get("stage")
+            for event in store.snapshot()["events"]
+            if event["type"] == "motion_debug" and isinstance(event.get("evidence"), dict)
+        ]
+
+        self.assertEqual(fake_motion.calls.count("start_forward_corrected:right"), 1)
+        self.assertNotIn("move_forward_corrected:right", fake_motion.calls)
+        self.assertEqual(runtime._pending_boundary_state, (0, 0, 0, 0))
+        self.assertIn("transfer_motion_guard_endpoint_latched", stages)
 
     def test_post_motion_boundary_latch_skips_cruise_recognition_same_tick(self) -> None:
         store = self.make_store()
@@ -1179,8 +1286,14 @@ class FakeMotion:
     def move_forward_slow(self, **_: object) -> None:
         self.calls.append("move_forward")
 
+    def start_forward_slow(self, **_: object) -> None:
+        self.calls.append("start_forward")
+
     def move_forward_corrected_slow(self, **kwargs: object) -> None:
         self.calls.append(f"move_forward_corrected:{kwargs.get('direction')}")
+
+    def start_forward_corrected_slow(self, **kwargs: object) -> None:
+        self.calls.append(f"start_forward_corrected:{kwargs.get('direction')}")
 
     def move_backward_slow(self, **_: object) -> None:
         self.calls.append("move_backward")

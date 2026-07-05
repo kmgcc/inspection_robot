@@ -177,10 +177,14 @@ class RobotRuntimeConfig:
     transfer_line_kp: float = field(default_factory=lambda: _env_float(10.0, "TRANSFER_LINE_KP"))
     transfer_line_kd: float = field(default_factory=lambda: _env_float(2.0, "TRANSFER_LINE_KD"))
     transfer_line_turn_max: int = field(default_factory=lambda: _env_int(10, "TRANSFER_LINE_TURN_MAX"))
+    transfer_line_guard_poll_seconds: float = field(default_factory=lambda: _env_float(0.004, "TRANSFER_LINE_GUARD_POLL_SECONDS"))
     transfer_line_error_alpha: float = field(default_factory=lambda: _env_float(0.45, "TRANSFER_LINE_ERROR_ALPHA"))
     transfer_line_rate_alpha: float = field(default_factory=lambda: _env_float(0.35, "TRANSFER_LINE_RATE_ALPHA"))
     transfer_line_debounce_frames: int = field(default_factory=lambda: _env_int(1, "TRANSFER_LINE_DEBOUNCE_FRAMES"))
     transfer_line_exit_confirm_frames: int = field(default_factory=lambda: _env_int(2, "TRANSFER_LINE_EXIT_CONFIRM_FRAMES"))
+    transfer_endpoint_window_seconds: float = field(default_factory=lambda: _env_float(0.04, "TRANSFER_ENDPOINT_WINDOW_SECONDS"))
+    transfer_endpoint_min_black_sensors: int = field(default_factory=lambda: _env_int(3, "TRANSFER_ENDPOINT_MIN_BLACK_SENSORS"))
+    transfer_endpoint_confirm_frames: int = field(default_factory=lambda: _env_int(2, "TRANSFER_ENDPOINT_CONFIRM_FRAMES"))
     transfer_line_bridge_seconds: float = field(default_factory=lambda: _env_float(0.18, "TRANSFER_LINE_BRIDGE_SECONDS"))
     transfer_line_search_seconds: float = field(default_factory=lambda: _env_float(0.65, "TRANSFER_LINE_SEARCH_SECONDS"))
     transfer_line_failsafe_seconds: float = field(default_factory=lambda: _env_float(1.2, "TRANSFER_LINE_FAILSAFE_SECONDS"))
@@ -219,6 +223,9 @@ class TransferLineContext:
     endpoint_unlocked: bool = False
     endpoint_latched: bool = False
     exit_confirm_count: int = 0
+    endpoint_black_seen_at: list[float] = field(default_factory=lambda: [-1e9, -1e9, -1e9, -1e9])
+    endpoint_wide_frame_count: int = 0
+    endpoint_last_wide_at: float = -1e9
 
 
 class RobotRuntime:
@@ -708,6 +715,7 @@ class RobotRuntime:
         self._transfer_line_context = context
         self._transfer_line_controller = TransferLineController(self._transfer_line_settings())
         self._reset_boundary_window()
+        self._reset_transfer_endpoint_window(context)
         self._cruise_vision_suppressed_until_boundary = True
         self._stop_cruise_scanner()
         self.store.record_motion_debug(
@@ -722,7 +730,7 @@ class RobotRuntime:
         if context is None:
             return "none"
         if context.endpoint_latched:
-            endpoint_state = self._pending_boundary_state or self._boundary_window_state(tape_state) or tape_state
+            endpoint_state = self._pending_boundary_state or self._transfer_endpoint_window_state(tape_state) or tape_state
             return self._handle_transfer_endpoint_boundary(endpoint_state)
         if not context.endpoint_unlocked:
             self._observe_transfer_line_exit(tape_state)
@@ -734,7 +742,7 @@ class RobotRuntime:
             candidate = True
         elif candidate:
             self._pending_boundary_state = None
-            tape_state = self._boundary_window_state(tape_state)
+            tape_state = self._transfer_endpoint_window_state(tape_state)
         if not candidate:
             return "none"
         context.endpoint_latched = True
@@ -746,7 +754,8 @@ class RobotRuntime:
             evidence={
                 **self._transfer_line_context_evidence(context),
                 "tape_state": _json_tape_state(tape_state),
-                "boundary_window_seconds": self.config.boundary_window_seconds,
+                "endpoint_window_seconds": self.config.transfer_endpoint_window_seconds,
+                "endpoint_min_black_sensors": self.config.transfer_endpoint_min_black_sensors,
             },
         )
         return self._handle_transfer_endpoint_boundary(tape_state)
@@ -765,6 +774,7 @@ class RobotRuntime:
         context.endpoint_unlocked = True
         context.exit_confirm_count = 0
         self._reset_boundary_window()
+        self._reset_transfer_endpoint_window(context)
         self.store.record_motion_debug(
             "transfer_endpoint_unlocked",
             f"{context.direction} 已离开起点横线，终点边界检测解锁。",
@@ -779,7 +789,49 @@ class RobotRuntime:
         context = self._transfer_line_context
         if context is None or not context.endpoint_unlocked or context.endpoint_latched:
             return False
-        return self._feed_boundary_window(tape_state, min_black=4)
+        if tape_state is None:
+            return False
+        now = time.monotonic()
+        black_count = sensors.black_tape_count(tape_state)
+        if black_count >= 4:
+            for index in range(4):
+                context.endpoint_black_seen_at[index] = now
+            context.endpoint_wide_frame_count = max(context.endpoint_wide_frame_count, 1)
+            context.endpoint_last_wide_at = now
+            return True
+        minimum = max(3, min(4, int(self.config.transfer_endpoint_min_black_sensors)))
+        if black_count < minimum:
+            return False
+        window = max(0.0, float(self.config.transfer_endpoint_window_seconds))
+        if now - context.endpoint_last_wide_at > window:
+            self._reset_transfer_endpoint_window(context)
+        context.endpoint_last_wide_at = now
+        context.endpoint_wide_frame_count += 1
+        for index, value in enumerate(tape_state[:4]):
+            if int(value) == 0:
+                context.endpoint_black_seen_at[index] = now
+        recent_black = sum(1 for seen_at in context.endpoint_black_seen_at if now - seen_at <= window)
+        required_frames = max(1, int(self.config.transfer_endpoint_confirm_frames))
+        return recent_black >= 4 and context.endpoint_wide_frame_count >= required_frames
+
+    def _reset_transfer_endpoint_window(self, context: TransferLineContext | None = None) -> None:
+        context = self._transfer_line_context if context is None else context
+        if context is None:
+            return
+        context.endpoint_black_seen_at = [-1e9, -1e9, -1e9, -1e9]
+        context.endpoint_wide_frame_count = 0
+        context.endpoint_last_wide_at = -1e9
+
+    def _transfer_endpoint_window_state(
+        self,
+        fallback: tuple[int, int, int, int] | None = None,
+    ) -> tuple[int, int, int, int] | None:
+        context = self._transfer_line_context
+        if context is None or all(seen_at <= -1e8 for seen_at in context.endpoint_black_seen_at):
+            return fallback
+        now = time.monotonic()
+        window = max(0.0, float(self.config.transfer_endpoint_window_seconds))
+        return tuple(0 if now - seen_at <= window else 1 for seen_at in context.endpoint_black_seen_at)  # type: ignore[return-value]
 
     def _handle_transfer_endpoint_boundary(self, tape_state: tuple[int, int, int, int] | None) -> str:
         context = self._transfer_line_context
@@ -1065,6 +1117,7 @@ class RobotRuntime:
 
     def _run_transfer_line_motion(self, command: TransferLineCommand) -> None:
         corrected = getattr(self.motion, "move_forward_corrected_slow", None)
+        starter = getattr(self.motion, "start_forward_corrected_slow", None)
         if callable(corrected):
 
             def mover(*, speed: int, duration_seconds: float) -> None:
@@ -1076,9 +1129,29 @@ class RobotRuntime:
                 )
 
             command_name = "move_forward_corrected"
+            if callable(starter):
+
+                def start_mover(*, speed: int) -> None:
+                    starter(speed=speed, correction=command.correction, direction=command.direction)
+
+            else:
+
+                def start_mover(*, speed: int) -> None:
+                    mover(speed=speed, duration_seconds=0.0)
+
         else:
             mover = self.motion.move_forward_slow
+            forward_starter = getattr(self.motion, "start_forward_slow", None)
             command_name = "move_forward"
+            if callable(forward_starter):
+
+                def start_mover(*, speed: int) -> None:
+                    forward_starter(speed=speed)
+
+            else:
+
+                def start_mover(*, speed: int) -> None:
+                    mover(speed=speed, duration_seconds=0.0)
         self._log_motion_command(
             "transfer_line",
             command_name,
@@ -1088,14 +1161,39 @@ class RobotRuntime:
             direction=command.direction,
             state=command.state,
         )
-        self._run_timed_motion(
-            mover,
+        self._run_transfer_guarded_motion(
+            start_mover,
             speed=command.speed,
             duration_seconds=self.config.transfer_line_tick_seconds,
-            watch_boundary=True,
-            heading_hold=False,
-            keep_running=True,
         )
+
+    def _run_transfer_guarded_motion(
+        self,
+        starter: Callable[..., None],
+        *,
+        speed: int,
+        duration_seconds: float,
+    ) -> None:
+        if self._stop_event.is_set() or self._manual_override.is_set():
+            self.motion.stop()
+            return
+        starter(speed=speed)
+        duration = max(0.0, float(duration_seconds))
+        poll_seconds = max(0.001, float(self.config.transfer_line_guard_poll_seconds))
+        deadline = time.monotonic() + duration
+        latched = self._poll_boundary_during_motion(0.0)
+        while (
+            not latched
+            and time.monotonic() < deadline
+            and not self._stop_event.is_set()
+            and not self._manual_override.is_set()
+        ):
+            remaining = max(0.0, deadline - time.monotonic())
+            time.sleep(min(poll_seconds, remaining))
+            elapsed = max(0.0, duration - max(0.0, deadline - time.monotonic()))
+            latched = self._poll_boundary_during_motion(elapsed)
+        if self._manual_override.is_set() or self._stop_event.is_set() or latched:
+            self.motion.stop()
 
     def _drive_cruise_step(self, tape_state: tuple[int, int, int, int] | None) -> None:
         """One tick of constant-velocity cruise.
@@ -1440,12 +1538,12 @@ class RobotRuntime:
             if not self._feed_transfer_endpoint_window(tape_state):
                 return False
             context.endpoint_latched = True
-            self._pending_boundary_state = self._boundary_window_state(tape_state)
+            self._pending_boundary_state = self._transfer_endpoint_window_state(tape_state)
             self.motion.stop()
             self.store.record_motion_debug(
                 "transfer_motion_guard_endpoint_latched",
                 (
-                    "转场巡线运动中捕捉到终点横线四路窗口覆盖，已立即停车并锁存读数，"
+                    "转场巡线运动中捕捉到终点横线候选，已立即停车并锁存读数，"
                     "下一轮控制循环将执行第二次90度转向。"
                 ),
                 status="TURNING_AT_BOUNDARY",
@@ -1453,8 +1551,9 @@ class RobotRuntime:
                     **self._transfer_line_context_evidence(context),
                     "tape_state": _json_tape_state(self._pending_boundary_state),
                     "elapsed_seconds": round(max(0.0, float(elapsed_seconds)), 3),
-                    "guard_poll_seconds": self.config.motion_guard_poll_seconds,
-                    "boundary_window_seconds": self.config.boundary_window_seconds,
+                    "guard_poll_seconds": self.config.transfer_line_guard_poll_seconds,
+                    "endpoint_window_seconds": self.config.transfer_endpoint_window_seconds,
+                    "endpoint_min_black_sensors": self.config.transfer_endpoint_min_black_sensors,
                 },
             )
             return True
@@ -3149,6 +3248,14 @@ def load_calibration_into_config(config: RobotRuntimeConfig, root: Path) -> None
                 config.transfer_line_kd = float(data["transfer_line_kd"])
             if data.get("transfer_line_turn_max") is not None:
                 config.transfer_line_turn_max = int(data["transfer_line_turn_max"])
+            if data.get("transfer_line_guard_poll_seconds") is not None:
+                config.transfer_line_guard_poll_seconds = float(data["transfer_line_guard_poll_seconds"])
+            if data.get("transfer_endpoint_window_seconds") is not None:
+                config.transfer_endpoint_window_seconds = float(data["transfer_endpoint_window_seconds"])
+            if data.get("transfer_endpoint_min_black_sensors") is not None:
+                config.transfer_endpoint_min_black_sensors = int(data["transfer_endpoint_min_black_sensors"])
+            if data.get("transfer_endpoint_confirm_frames") is not None:
+                config.transfer_endpoint_confirm_frames = int(data["transfer_endpoint_confirm_frames"])
             _clamp_config_speeds(config)
         except (OSError, json.JSONDecodeError, TypeError, ValueError):
             pass
