@@ -18,11 +18,12 @@ from inspection_robot.robot.sensors import RobotHardwareError
 
 def main() -> int:
     seconds = float(os.environ.get("TAPE_TEST_SECONDS", "20"))
-    min_black = int(os.environ.get("BOUNDARY_MIN_BLACK_SENSORS", "4"))
+    min_black = int(os.environ.get("BOUNDARY_MIN_BLACK_SENSORS", "1"))
+    poll_seconds = float(os.environ.get("TAPE_TEST_POLL_SECONDS", "0.02"))
     deadline = time.monotonic() + seconds
     print(
-        f"tape boundary test: 0 means black tape, turn only when >= {min_black} sensors are black; "
-        "middle two black is line-follow center, not a turn trigger",
+        f"tape boundary test: 0 means black tape, boundary locks when >= {min_black} sensor(s) are black; "
+        f"poll={poll_seconds:.3f}s",
         flush=True,
     )
     try:
@@ -36,7 +37,7 @@ def main() -> int:
                 motion.rotate_right_slow(duration_seconds=float(os.environ.get("ROBOT_TURN_90_SECONDS", "0.75")))
                 motion.stop()
                 time.sleep(float(os.environ.get("ROBOT_ACTION_SETTLE_SECONDS", "0.35")))
-            time.sleep(0.2)
+            time.sleep(max(0.0, poll_seconds))
     except KeyboardInterrupt:
         print("stopped by user", flush=True)
     except RobotHardwareError as exc:

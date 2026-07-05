@@ -262,6 +262,7 @@ class CruiseRuntimeTest(unittest.TestCase):
         runtime, _, _ = self.make_runtime(
             config=RobotRuntimeConfig(
                 smooth_cruise_enabled=True,
+                cruise_vision_enabled=False,
                 object_trigger_enabled=True,
                 object_presence_cooldown_seconds=1.5,
                 object_settle_seconds=0,
@@ -281,7 +282,7 @@ class CruiseRuntimeTest(unittest.TestCase):
         self.assertEqual(detector.call_count, 1)
         self.assertEqual(scan.call_count, 1)
 
-    def test_cruise_recognition_stops_for_parked_scan(self) -> None:
+    def test_cruise_recognition_drains_queue_without_parked_scan(self) -> None:
         runtime, motion, _ = self.make_runtime(
             config=RobotRuntimeConfig(
                 smooth_cruise_enabled=True,
@@ -298,14 +299,45 @@ class CruiseRuntimeTest(unittest.TestCase):
             enrich=runtime._enrich_detection,
             stop_event=runtime._stop_event,
         )
-        scanner._pending = [{"tag_id": "118", "kind": "shelf", "shelf_id": "A1"}]
+        scanner._pending = [
+            {"tag_id": "118", "kind": "shelf", "shelf_id": "A1"},
+            {"tag_id": "7", "kind": "item", "item_id": "item_07"},
+            {"tag_id": "118", "kind": "shelf", "shelf_id": "A1"},
+        ]
         runtime._cruise_scanner = scanner
 
         with mock.patch.object(runtime, "_perform_scan") as scan:
             self.assertTrue(runtime._handle_cruise_recognitions())
 
-        self.assertIn("stop", motion.calls)
-        scan.assert_called_once_with("A1", "A1_SCAN")
+        self.assertNotIn("stop", motion.calls)
+        scan.assert_not_called()
+        stages = [
+            event.get("evidence", {}).get("stage")
+            for event in runtime.store.snapshot()["events"]
+            if event["type"] == "motion_debug" and isinstance(event.get("evidence"), dict)
+        ]
+        self.assertEqual(stages.count("cruise_recognition"), 2)
+        self.assertEqual(scanner.poll_new(), [])
+
+    def test_cruise_with_vision_skips_object_presence_parked_scan(self) -> None:
+        runtime, motion, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                smooth_cruise_enabled=True,
+                cruise_vision_enabled=True,
+                object_trigger_enabled=True,
+                action_settle_seconds=0,
+            ),
+            imu=FakeImu(None),
+        )
+
+        with mock.patch(
+            "inspection_robot.runtime.tag_detector.detect_object_presence_from_camera",
+            return_value=True,
+        ) as detector:
+            self.assertFalse(runtime._maybe_scan_for_object_presence())
+
+        detector.assert_not_called()
+        self.assertNotIn("stop", motion.calls)
 
     # --- anti-oscillation PD heading hold -------------------------------- #
 

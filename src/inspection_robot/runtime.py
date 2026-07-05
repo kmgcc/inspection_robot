@@ -92,7 +92,7 @@ class RobotRuntimeConfig:
     forbidden_avoidance_parallel_bodies: float = field(default_factory=lambda: _env_float(1.2, "FORBIDDEN_AVOIDANCE_PARALLEL_BODIES"))
     forbidden_avoidance_return_bodies: float = field(default_factory=lambda: _env_float(1.5, "FORBIDDEN_AVOIDANCE_RETURN_BODIES"))
     avoidance_turn_direction: str = field(default_factory=lambda: _env_text("right", "AVOIDANCE_TURN_DIRECTION"))
-    boundary_min_black_sensors: int = field(default_factory=lambda: _env_int(2, "BOUNDARY_MIN_BLACK_SENSORS"))
+    boundary_min_black_sensors: int = field(default_factory=lambda: _env_int(1, "BOUNDARY_MIN_BLACK_SENSORS"))
     boundary_confirm_samples: int = field(default_factory=lambda: _env_int(1, "BOUNDARY_CONFIRM_SAMPLES"))
     boundary_confirm_gap_seconds: float = field(default_factory=lambda: _env_float(0.02, "BOUNDARY_CONFIRM_GAP_SECONDS"))
     boundary_window_seconds: float = field(default_factory=lambda: _env_float(0.12, "BOUNDARY_WINDOW_SECONDS"))
@@ -418,6 +418,13 @@ class RobotRuntime:
                     self._sync_cruise_scanner_for_phase()
                 self.refresh_motion_sensor()
                 self._drive_patrol_step(tape_state)
+                if self._pending_boundary_state is not None:
+                    boundary_outcome = self._handle_tape_boundary()
+                    if boundary_outcome != "none":
+                        iterations += 1
+                        current_cycle = self._current_cycle()
+                        self.store.record_cycle(current_cycle, self._skip_shortage_for_cycle(current_cycle))
+                        continue
                 self._update_indicator_light()
                 iterations += 1
                 current_cycle = self._current_cycle()
@@ -1134,6 +1141,9 @@ class RobotRuntime:
 
     def _maybe_scan_for_object_presence(self) -> bool:
         if not self.config.scan_enabled or not self.config.object_trigger_enabled or self._stop_event.is_set():
+            return False
+        if self.config.smooth_cruise_enabled and self.config.cruise_vision_enabled:
+            self._object_presence_hits = 0
             return False
         now = time.monotonic()
         cooldown = max(0.0, float(self.config.object_presence_cooldown_seconds))
@@ -2182,10 +2192,11 @@ class RobotRuntime:
                     },
                 )
             return False
+        handled = False
         for recognition in scanner.poll_new():
-            self._stop_for_cruise_recognition(recognition)
-            return True
-        return False
+            self._handle_moving_recognition(recognition)
+            handled = True
+        return handled
 
     def _stop_for_cruise_recognition(self, recognition: Mapping[str, object]) -> None:
         recognition = self._enrich_detection(recognition)

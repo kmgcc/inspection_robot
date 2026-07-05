@@ -133,7 +133,7 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(config.forbidden_avoidance_side_clearance_bodies, 1.5)
         self.assertEqual(config.forbidden_avoidance_parallel_bodies, 1.2)
         self.assertEqual(config.forbidden_avoidance_return_bodies, 1.5)
-        self.assertEqual(config.boundary_min_black_sensors, 2)
+        self.assertEqual(config.boundary_min_black_sensors, 1)
         self.assertEqual(config.boundary_confirm_samples, 1)
         self.assertEqual(config.boundary_confirm_gap_seconds, 0.02)
         self.assertEqual(config.boundary_window_seconds, 0.12)
@@ -516,6 +516,56 @@ class RuntimeTest(unittest.TestCase):
             )
         )
 
+    def test_post_motion_boundary_latch_skips_cruise_recognition_same_tick(self) -> None:
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        fake_sensors = FakeSensors(
+            distances=[400] * 6,
+            tapes=[
+                (1, 1, 1, 1),
+                (0, 1, 1, 1),
+                (1, 1, 1, 1),
+            ],
+        )
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=RobotRuntimeConfig(
+                smooth_cruise_enabled=True,
+                cruise_vision_enabled=False,
+                object_trigger_enabled=False,
+                cruise_tick_seconds=0.02,
+                motion_guard_poll_seconds=0.01,
+                boundary_min_black_sensors=1,
+                boundary_retreat_seconds=0,
+                turn_90_seconds=0,
+                action_settle_seconds=0,
+            ),
+            motion_adapter=fake_motion,
+            sensor_adapter=fake_sensors,
+            alarm_adapter=FakeAlarm(),
+            gimbal_adapter=FakeGimbal(),
+            imu_adapter=object(),
+            detection_provider=empty_detection_provider,
+        )
+
+        with mock.patch.object(
+            runtime,
+            "_handle_cruise_recognitions",
+            side_effect=AssertionError("vision ran after a latched boundary"),
+        ):
+            runtime.run_continuous_patrol(max_iterations=1)
+
+        event_stages = [
+            event["evidence"].get("stage")
+            for event in store.snapshot()["events"]
+            if event["type"] == "motion_debug" and isinstance(event.get("evidence"), dict)
+        ]
+        self.assertIn("motion_guard_boundary_latched", event_stages)
+        self.assertIn("boundary_action", event_stages)
+        self.assertIn("rotate_right", fake_motion.calls)
+
     def test_heading_hold_inserts_forward_speed_correction(self) -> None:
         store = self.make_store()
         fake_motion = FakeMotion()
@@ -546,7 +596,7 @@ class RuntimeTest(unittest.TestCase):
         self.assertNotIn("rotate_left", fake_motion.calls)
         self.assertNotIn("rotate_right", fake_motion.calls)
 
-    def test_continuous_patrol_ignores_single_sensor_black_by_default(self) -> None:
+    def test_continuous_patrol_locks_single_sensor_black_by_default(self) -> None:
         store = self.make_store()
         fake_motion = FakeMotion()
         fake_sensors = FakeSensors(distances=[400] * 6, tapes=[(0, 1, 1, 1)])
@@ -571,9 +621,16 @@ class RuntimeTest(unittest.TestCase):
         )
 
         runtime.run_continuous_patrol(max_iterations=1)
+        event_stages = [
+            event["evidence"].get("stage")
+            for event in store.snapshot()["events"]
+            if event["type"] == "motion_debug" and isinstance(event.get("evidence"), dict)
+        ]
 
+        self.assertIn("rotate_right", fake_motion.calls)
         self.assertIn("move_forward", fake_motion.calls)
-        self.assertNotIn("rotate_right", fake_motion.calls)
+        self.assertLess(fake_motion.calls.index("rotate_right"), fake_motion.calls.index("move_forward"))
+        self.assertIn("boundary_action", event_stages)
 
     def test_motion_guard_latches_fast_full_black_boundary_during_line_follow(self) -> None:
         store = self.make_store()
