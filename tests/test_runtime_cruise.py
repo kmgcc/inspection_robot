@@ -231,7 +231,7 @@ class CruiseRuntimeTest(unittest.TestCase):
         # Cruise never parks to scan, so the parked-scan pipeline must not run.
         self.assertNotIn("vision_scan_start", stages)
 
-    def test_cruise_skips_parked_object_presence_trigger(self) -> None:
+    def test_cruise_stops_for_opencv_object_presence_scan(self) -> None:
         runtime, motion, _ = self.make_runtime(
             config=RobotRuntimeConfig(
                 smooth_cruise_enabled=True,
@@ -246,12 +246,13 @@ class CruiseRuntimeTest(unittest.TestCase):
 
         with mock.patch(
             "inspection_robot.runtime.tag_detector.detect_object_presence_from_camera",
-            side_effect=AssertionError("smooth cruise must not run parked object trigger"),
+            return_value=True,
         ):
-            runtime.run_continuous_patrol(max_iterations=2)
+            runtime.run_continuous_patrol(max_iterations=1)
 
-        self.assertGreaterEqual(motion.calls.count("move_forward"), 2)
-        self.assertNotIn("vision_scan_start", {
+        self.assertIn("stop", motion.calls)
+        self.assertNotIn("move_forward", motion.calls)
+        self.assertIn("vision_scan_start", {
             event.get("evidence", {}).get("stage")
             for event in runtime.store.snapshot()["events"]
             if event["type"] == "motion_debug" and isinstance(event.get("evidence"), dict)
@@ -323,7 +324,7 @@ class CruiseRuntimeTest(unittest.TestCase):
             for event in runtime.store.snapshot()["events"]
             if event["type"] == "motion_debug" and event.get("evidence", {}).get("stage") == "heading_hold_correction"
         ]
-        self.assertEqual(correction_events[-1]["evidence"]["correction_speed"], 9)
+        self.assertEqual(correction_events[-1]["evidence"]["correction_speed"], 12)
 
     def test_heading_hold_throttles_back_to_back_corrections(self) -> None:
         guard = FakeGuard(deviation=8.0, rate=0.0)
@@ -446,7 +447,7 @@ class CruiseRuntimeTest(unittest.TestCase):
         def provider(**_: object) -> Iterator[dict[str, object]]:
             yield from detections
 
-        runtime, _, _ = self.make_runtime(config=RobotRuntimeConfig(smooth_cruise_enabled=True))
+        runtime, _, _ = self.make_runtime(config=RobotRuntimeConfig(smooth_cruise_enabled=True, object_trigger_enabled=False))
         scanner = _CruiseVisionScanner(
             provider=provider,
             config=runtime.config,
@@ -464,7 +465,9 @@ class CruiseRuntimeTest(unittest.TestCase):
         self.assertEqual(scanner.poll_new(), [])  # drained
 
     def test_cruise_scanner_pauses_during_row_transfer(self) -> None:
-        runtime, _, _ = self.make_runtime(config=RobotRuntimeConfig(smooth_cruise_enabled=True, cruise_vision_enabled=True))
+        runtime, _, _ = self.make_runtime(
+            config=RobotRuntimeConfig(smooth_cruise_enabled=True, cruise_vision_enabled=True, object_trigger_enabled=False)
+        )
 
         runtime._record_observed_shelf("A4")
         self.assertFalse(runtime._cruise_scanner_allowed_for_phase())
@@ -477,6 +480,7 @@ class CruiseRuntimeTest(unittest.TestCase):
             config=RobotRuntimeConfig(
                 smooth_cruise_enabled=True,
                 cruise_vision_enabled=True,
+                object_trigger_enabled=False,
                 action_settle_seconds=0,
             )
         )
