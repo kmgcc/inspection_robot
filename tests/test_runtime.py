@@ -105,6 +105,10 @@ class RuntimeTest(unittest.TestCase):
             "HEADING_HOLD_SPEED_GAIN",
             "HEADING_HOLD_MIN_CORRECTION_SPEED",
             "HEADING_HOLD_MAX_SPEED_FRACTION",
+            "HEADING_HOLD_INTEGRAL_GAIN",
+            "HEADING_HOLD_INTEGRAL_ALPHA",
+            "HEADING_HOLD_INTEGRAL_LIMIT_DEG",
+            "HEADING_HOLD_MAX_CORRECTION_STEP",
             "HEADING_HOLD_MIN_SAMPLE_INTERVAL_SECONDS",
             "HEADING_HOLD_MIN_INTERVAL_SECONDS",
             "HEADING_HOLD_MAX_CONSECUTIVE",
@@ -160,12 +164,12 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(config.action_settle_seconds, 0.12)
         self.assertEqual(config.avoidance_speed, 20)
         self.assertEqual(config.avoidance_body_seconds, 0.35)
-        self.assertEqual(config.avoidance_side_clearance_bodies, 1.2)
-        self.assertEqual(config.avoidance_parallel_bodies, 1.0)
-        self.assertEqual(config.avoidance_return_bodies, 1.2)
-        self.assertEqual(config.forbidden_avoidance_side_clearance_bodies, 1.5)
-        self.assertEqual(config.forbidden_avoidance_parallel_bodies, 1.2)
-        self.assertEqual(config.forbidden_avoidance_return_bodies, 1.5)
+        self.assertEqual(config.avoidance_side_clearance_bodies, 1.0)
+        self.assertEqual(config.avoidance_parallel_bodies, 1.6)
+        self.assertEqual(config.avoidance_return_bodies, 1.0)
+        self.assertEqual(config.forbidden_avoidance_side_clearance_bodies, 1.2)
+        self.assertEqual(config.forbidden_avoidance_parallel_bodies, 1.6)
+        self.assertEqual(config.forbidden_avoidance_return_bodies, 1.2)
         self.assertEqual(config.boundary_min_black_sensors, 1)
         self.assertEqual(config.boundary_confirm_samples, 1)
         self.assertEqual(config.boundary_confirm_gap_seconds, 0.0)
@@ -190,6 +194,10 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(config.heading_hold_speed_gain, 3.0)
         self.assertEqual(config.heading_hold_min_correction_speed, 6)
         self.assertEqual(config.heading_hold_max_speed_fraction, 0.8)
+        self.assertEqual(config.heading_hold_integral_gain, 0.45)
+        self.assertEqual(config.heading_hold_integral_alpha, 0.15)
+        self.assertEqual(config.heading_hold_integral_limit_deg, 10.0)
+        self.assertEqual(config.heading_hold_max_correction_step, 8)
         self.assertEqual(config.heading_hold_min_sample_interval_seconds, 0.0)
         self.assertEqual(config.heading_hold_min_interval_seconds, 0.05)
         self.assertEqual(config.heading_hold_max_consecutive, 5)
@@ -198,7 +206,7 @@ class RuntimeTest(unittest.TestCase):
         self.assertTrue(config.cruise_vision_enabled)
         self.assertEqual(config.cruise_speed, 24)
         self.assertEqual(config.cruise_tick_seconds, 0.03)
-        self.assertTrue(config.timed_stop_scan_enabled)
+        self.assertFalse(config.timed_stop_scan_enabled)
         self.assertEqual(config.timed_stop_scan_speed, 15)
         self.assertEqual(config.timed_stop_scan_drive_seconds, 0.8)
         self.assertEqual(config.timed_stop_scan_settle_seconds, 0.2)
@@ -1307,6 +1315,50 @@ class RuntimeTest(unittest.TestCase):
         speak.assert_called_once()
         self.assertIn("检测到 A区一号货架 缺少", speak.call_args.args[1])
         self.assertEqual(store.snapshot()["audio"]["last_cue"], "missing_item")
+
+    def test_second_cycle_added_item_triggers_orange_light_and_speech(self) -> None:
+        manifest = {"A1": {"expected_items": []}}
+        store = InspectionStore(
+            DEFAULT_TAG_MAP,
+            warehouse_map=DEFAULT_WAREHOUSE_MAP,
+            shelf_manifest=manifest,
+            root=self.root,
+        )
+        fake_alarm = FakeAlarm()
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            manifest,
+            config=RobotRuntimeConfig(scan_timeout_seconds=0, action_settle_seconds=0),
+            motion_adapter=FakeMotion(),
+            sensor_adapter=FakeSensors(distances=[400] * 4, tapes=[(1, 1, 1, 1)] * 4),
+            alarm_adapter=fake_alarm,
+            gimbal_adapter=FakeGimbal(),
+            detection_provider=fake_detection_provider,
+        )
+        store.record_cycle(1, True)
+        store.record_scan_result("A1", [], frame_id="learn-empty")
+        store.record_cycle(2, False)
+
+        with mock.patch("inspection_robot.runtime.start_spoken_message", return_value=({"ok": True}, 200)) as speak:
+            runtime._perform_scan(
+                "A1",
+                "A1_SCAN",
+                detections=[
+                    {
+                        "tag_id": "46",
+                        "kind": "item",
+                        "item_id": "item_46",
+                        "marker_family": "TAG36H11",
+                        "color": "RED",
+                    }
+                ],
+            )
+
+        self.assertIn("recognition", fake_alarm.calls)
+        speak.assert_called_once()
+        self.assertIn("检测到 A区一号货架 新增", speak.call_args.args[1])
+        self.assertEqual(store.snapshot()["audio"]["last_cue"], "added_item")
 
     def test_camera_failure_requests_manual_cycle_fallback_confirmation(self) -> None:
         store = InspectionStore(

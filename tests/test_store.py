@@ -254,6 +254,78 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(item_states["item_03"], "added")
         self.assertEqual(second["task_status"], "ABNORMAL_ALARM")
 
+    def test_first_pass_empty_shelf_is_normal_then_second_pass_addition_warns(self) -> None:
+        store = InspectionStore(
+            sample_tag_map(),
+            warehouse_map=DEFAULT_WAREHOUSE_MAP,
+            shelf_manifest={"A1": {"expected_items": []}},
+            root=self.root,
+        )
+        store.start()
+        store.record_cycle(1, skip_shortage_detection=True)
+        first_events = store.record_scan_result("A1", [], frame_id="learn-empty")
+        first = store.snapshot()
+
+        shelf = next(item for item in first["shelves"] if item["shelf_id"] == "A1")
+        self.assertEqual(shelf["items"], [])
+        self.assertEqual(shelf["status"], "normal")
+        self.assertTrue(shelf["inventory_observed"])
+        self.assertFalse(any(event["type"] == "missing_item" for event in first_events))
+
+        store.record_cycle(2, skip_shortage_detection=False)
+        second_events = store.record_scan_result("A1", ["item_01"], frame_id="diff-added")
+        second = store.snapshot()
+
+        self.assertIn("added_item", [event["type"] for event in second_events])
+        shelf = next(item for item in second["shelves"] if item["shelf_id"] == "A1")
+        self.assertEqual(shelf["items"][0]["status"], "added")
+
+    def test_confirm_inventory_change_marks_event_and_shelf_resolved(self) -> None:
+        store = InspectionStore(
+            sample_tag_map(),
+            warehouse_map=DEFAULT_WAREHOUSE_MAP,
+            shelf_manifest={"A1": {"expected_items": []}},
+            root=self.root,
+        )
+        store.start()
+        store.record_cycle(1, skip_shortage_detection=True)
+        store.record_scan_result("A1", ["item_01", "item_02"], frame_id="learn")
+        store.record_cycle(2, skip_shortage_detection=False)
+        store.record_scan_result("A1", ["item_02"], frame_id="missing")
+        before = store.snapshot()
+        missing = next(event for event in before["events"] if event["type"] == "missing_item")
+
+        self.assertTrue(store.confirm(missing["id"]))
+        after = store.snapshot()
+        shelf = next(item for item in after["shelves"] if item["shelf_id"] == "A1")
+
+        self.assertEqual(next(event for event in after["events"] if event["id"] == missing["id"])["status"], "confirmed")
+        self.assertEqual(shelf["status"], "normal")
+        self.assertFalse(any(item.get("status") == "missing" for item in shelf["items"]))
+
+    def test_confirm_added_item_accepts_it_as_present_baseline(self) -> None:
+        store = InspectionStore(
+            sample_tag_map(),
+            warehouse_map=DEFAULT_WAREHOUSE_MAP,
+            shelf_manifest={"A1": {"expected_items": []}},
+            root=self.root,
+        )
+        store.start()
+        store.record_cycle(1, skip_shortage_detection=True)
+        store.record_scan_result("A1", [], frame_id="learn-empty")
+        store.record_cycle(2, skip_shortage_detection=False)
+        store.record_scan_result("A1", ["item_01"], frame_id="added")
+        before = store.snapshot()
+        added = next(event for event in before["events"] if event["type"] == "added_item")
+
+        self.assertTrue(store.confirm(added["id"]))
+        store.record_scan_result("A1", ["item_01"], frame_id="still-present")
+        after = store.snapshot()
+        shelf = next(item for item in after["shelves"] if item["shelf_id"] == "A1")
+
+        self.assertEqual(shelf["items"][0]["status"], "present")
+        self.assertEqual(len([event for event in after["events"] if event["type"] == "added_item"]), 1)
+
     def test_motion_updates_do_not_clear_waiting_confirmation(self) -> None:
         store = InspectionStore(
             sample_tag_map(),

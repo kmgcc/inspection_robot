@@ -59,7 +59,9 @@ let testPollTimer = null;
 let latestVideoFrameId = null;
 let statusSeenOnce = false;
 const notifiedEventIds = new Set();
+const notifiedInventoryKeys = new Set(loadNotifiedInventoryKeys());
 const INVENTORY_CHANGE_TYPES = new Set(["added_item", "missing_item", "wrong_shelf", "duplicate_item"]);
+const ACTIONABLE_INVENTORY_TYPES = new Set(["added_item", "missing_item"]);
 const SHELF_ITEM_EVENT_TYPES = new Set(["normal_item", "added_item", "missing_item", "unknown_item", "wrong_shelf", "duplicate_item"]);
 
 // ============================================================
@@ -87,6 +89,19 @@ function showEl(id, show) {
 function labelFrom(map, v) { return map[v] || textOrDash(v); }
 function asArray(v) { return Array.isArray(v) ? v : []; }
 function isPending(e) { return e && e.status === "waiting_confirm"; }
+function isActionableInventory(e) {
+  return e && ACTIONABLE_INVENTORY_TYPES.has(e.type) && ["warning", "info"].includes(e.status);
+}
+function isActionableEvent(e) { return isPending(e) || isActionableInventory(e); }
+
+function loadNotifiedInventoryKeys() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem("notifiedInventoryKeys") || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [];
+  }
+}
 
 function normalizeShelfId(v) {
   const t = textOrDash(v);
@@ -191,7 +206,7 @@ function renderStatus(data) {
   const audio = data.audio || {};
   const gimbal = data.gimbal || {};
   const motionSensor = data.motion_sensor || {};
-  const pending = events.filter(isPending);
+  const pending = events.filter(isActionableEvent);
   latestEventId = pending.length > 0 ? pending[0].id : null;
   latestPendingEvent = pending.length > 0 ? pending[0] : null;
 
@@ -678,6 +693,17 @@ function initManualControls() {
 // ============================================================
 
 document.addEventListener("click", async (e) => {
+  const confirmEventBtn = e.target.closest("[data-confirm-event-id]");
+  if (confirmEventBtn) {
+    try {
+      await postJson("/api/confirm", { event_id: confirmEventBtn.dataset.confirmEventId });
+      await loadStatus();
+    } catch (err) {
+      window.alert(`处理失败：${err.message}`);
+    }
+    return;
+  }
+
   const postBtn = e.target.closest("[data-post]");
   if (postBtn && !postBtn.closest("[data-manual-cmd]")) {
     try {
@@ -767,7 +793,7 @@ function renderMap(data, events) {
   const nodes = asArray(topology.nodes);
   const edges = asArray(topology.edges);
   const currentNode = topology.current_node || data.current_shelf;
-  const pending = new Set(events.filter(isPending).map((e) => normalizeShelfId(e.shelf_id)).filter(Boolean));
+  const pending = new Set(events.filter(isActionableEvent).map((e) => normalizeShelfId(e.shelf_id)).filter(Boolean));
 
   if (nodes.length === 0) {
     const p = document.createElement("p");
@@ -923,7 +949,7 @@ function normalizeShelves(data, events) {
     if (event.tag_id && event.type === "shelf_arrived") shelf.tag_id = event.tag_id;
     if (event.ocr_text) shelf.ocr_text = event.ocr_text;
     if (INVENTORY_CHANGE_TYPES.has(event.type)) shelf.changed = true;
-    if (event.status === "waiting_confirm") {
+    if (isActionableEvent(event)) {
       shelf.status = "waiting_confirm";
       shelf.anomaly_count = Math.max(Number(shelf.anomaly_count || 0), 1);
     } else if (event.status === "warning" && shelf.status !== "waiting_confirm") {
@@ -957,6 +983,10 @@ function mergeShelfEventItem(shelf, event) {
     tag_id: event.tag_id,
     name: event.item,
     status,
+    event_id: event.id,
+    event_type: event.type,
+    event_status: event.status,
+    confirmable: isActionableInventory(event),
   };
   if (existing) {
     Object.assign(existing, next);
@@ -1012,6 +1042,14 @@ function renderShelfItems(shelf) {
     const text = document.createElement("div");
     text.append(name, meta);
     chip.append(dot, text);
+    if (item.confirmable && item.event_id) {
+      const action = document.createElement("button");
+      action.type = "button";
+      action.className = "btn btn-xs shelf-item-action";
+      action.dataset.confirmEventId = item.event_id;
+      action.textContent = "处理";
+      chip.appendChild(action);
+    }
     root.appendChild(chip);
   }
   return root;
@@ -1099,7 +1137,16 @@ function renderEvents(events) {
     const span = document.createElement("span");
     span.className = `badge ${event.status || "info"}`;
     span.textContent = STATUS_LABELS_EV[event.status] || event.status || "信息";
-    statusCell.appendChild(span); tr.appendChild(statusCell);
+    statusCell.appendChild(span);
+    if (isActionableEvent(event) && event.id) {
+      const action = document.createElement("button");
+      action.type = "button";
+      action.className = "btn btn-xs event-action";
+      action.dataset.confirmEventId = event.id;
+      action.textContent = "处理";
+      statusCell.appendChild(action);
+    }
+    tr.appendChild(statusCell);
     [event.source, event.ocr_text, event.color, event.image_class, event.message].forEach((v) => appendCell(tr, v));
     tbody.appendChild(tr);
   }
@@ -1122,7 +1169,12 @@ function notifyInventoryChanges(events) {
       notifiedEventIds.add(event.id);
       continue;
     }
-    if (statusSeenOnce) showToast(event);
+    const key = inventoryNotificationKey(event);
+    if (event.status !== "confirmed" && statusSeenOnce && !notifiedInventoryKeys.has(key)) {
+      showToast(event);
+      notifiedInventoryKeys.add(key);
+      rememberInventoryNotificationKeys();
+    }
     notifiedEventIds.add(event.id);
   }
   if (notifiedEventIds.size > 200) {
@@ -1131,6 +1183,22 @@ function notifyInventoryChanges(events) {
       if (!keep.has(id)) notifiedEventIds.delete(id);
     }
   }
+}
+
+function inventoryNotificationKey(event) {
+  const evidence = event.evidence && typeof event.evidence === "object" ? event.evidence : {};
+  return [
+    event.type || "inventory",
+    normalizeShelfId(event.shelf_id || event.expected_shelf) || "-",
+    evidence.item_id || event.item_id || event.tag_id || event.item || "-",
+  ].map((part) => String(part).trim()).join(":");
+}
+
+function rememberInventoryNotificationKeys() {
+  const keep = Array.from(notifiedInventoryKeys).slice(-300);
+  notifiedInventoryKeys.clear();
+  for (const key of keep) notifiedInventoryKeys.add(key);
+  window.localStorage.setItem("notifiedInventoryKeys", JSON.stringify(keep));
 }
 
 function showToast(event) {

@@ -117,6 +117,9 @@ def iter_detections(
     stability_max_angle_delta_deg: float = 8.0,
     image_classifier_enabled: bool = False,
     vision_state_machine_enabled: bool = False,
+    vote_frames: int = 3,
+    require_consensus: bool = True,
+    yield_all_detections: bool = False,
 ) -> Iterator[dict[str, object]]:
     """Yield tag/OCR/color/image evidence from the side camera."""
 
@@ -150,8 +153,10 @@ def iter_detections(
             capture,
             detector,
             cv2,
+            vote_frames=vote_frames,
             tracker=tracker,
             image_classifier_enabled=image_classifier_enabled,
+            require_consensus=require_consensus,
         )
         if not detections:
             if idle_timeout_seconds is not None and time.monotonic() - idle_started >= idle_timeout_seconds:
@@ -159,8 +164,20 @@ def iter_detections(
             time.sleep(0.05)
             continue
         idle_started = time.monotonic()
-        tag_id, _ = Counter(_detection_group_key(item) for item in detections).most_common(1)[0]
         now = time.monotonic()
+        if yield_all_detections:
+            for detection in detections:
+                tag_id = _detection_group_key(detection)
+                if now - last_seen.get(tag_id, 0.0) < cooldown_seconds:
+                    continue
+                last_seen[tag_id] = now
+                if state_machine is not None:
+                    state = state_machine.run_until_done(detection)
+                    detection = dict(detection)
+                    detection["vision_state"] = state.value
+                yield detection
+            continue
+        tag_id, _ = Counter(_detection_group_key(item) for item in detections).most_common(1)[0]
         if now - last_seen.get(tag_id, 0.0) < cooldown_seconds:
             continue
         last_seen[tag_id] = now
@@ -187,6 +204,7 @@ def _read_stable_detections(
     *,
     tracker: DetectionStabilityTracker | None = None,
     image_classifier_enabled: bool = False,
+    require_consensus: bool = True,
 ) -> list[dict[str, object]]:
     detections: list[dict[str, object]] = []
     for _ in range(max(1, vote_frames)):
@@ -204,6 +222,8 @@ def _read_stable_detections(
         time.sleep(0.02)
     if not detections:
         return []
+    if not require_consensus:
+        return detections
     counts = Counter(_detection_group_key(item) for item in detections)
     stable_ids = {tag_id for tag_id, count in counts.items() if count >= 2}
     if not stable_ids:

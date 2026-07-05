@@ -91,12 +91,12 @@ class RobotRuntimeConfig:
     obstacle_wait_seconds: float = field(default_factory=lambda: _env_float(6.0, "OBSTACLE_WAIT_SECONDS"))
     avoidance_speed: int = field(default_factory=lambda: _env_int(20, "AVOIDANCE_SPEED"))
     avoidance_body_seconds: float = field(default_factory=lambda: _env_float(0.35, "AVOIDANCE_BODY_SECONDS"))
-    avoidance_side_clearance_bodies: float = field(default_factory=lambda: _env_float(1.2, "AVOIDANCE_SIDE_CLEARANCE_BODIES"))
-    avoidance_parallel_bodies: float = field(default_factory=lambda: _env_float(1.0, "AVOIDANCE_PARALLEL_BODIES"))
-    avoidance_return_bodies: float = field(default_factory=lambda: _env_float(1.2, "AVOIDANCE_RETURN_BODIES"))
-    forbidden_avoidance_side_clearance_bodies: float = field(default_factory=lambda: _env_float(1.5, "FORBIDDEN_AVOIDANCE_SIDE_CLEARANCE_BODIES"))
-    forbidden_avoidance_parallel_bodies: float = field(default_factory=lambda: _env_float(1.2, "FORBIDDEN_AVOIDANCE_PARALLEL_BODIES"))
-    forbidden_avoidance_return_bodies: float = field(default_factory=lambda: _env_float(1.5, "FORBIDDEN_AVOIDANCE_RETURN_BODIES"))
+    avoidance_side_clearance_bodies: float = field(default_factory=lambda: _env_float(1.0, "AVOIDANCE_SIDE_CLEARANCE_BODIES"))
+    avoidance_parallel_bodies: float = field(default_factory=lambda: _env_float(1.6, "AVOIDANCE_PARALLEL_BODIES"))
+    avoidance_return_bodies: float = field(default_factory=lambda: _env_float(1.0, "AVOIDANCE_RETURN_BODIES"))
+    forbidden_avoidance_side_clearance_bodies: float = field(default_factory=lambda: _env_float(1.2, "FORBIDDEN_AVOIDANCE_SIDE_CLEARANCE_BODIES"))
+    forbidden_avoidance_parallel_bodies: float = field(default_factory=lambda: _env_float(1.6, "FORBIDDEN_AVOIDANCE_PARALLEL_BODIES"))
+    forbidden_avoidance_return_bodies: float = field(default_factory=lambda: _env_float(1.2, "FORBIDDEN_AVOIDANCE_RETURN_BODIES"))
     avoidance_turn_direction: str = field(default_factory=lambda: _env_text("right", "AVOIDANCE_TURN_DIRECTION"))
     boundary_min_black_sensors: int = field(default_factory=lambda: _env_int(1, "BOUNDARY_MIN_BLACK_SENSORS"))
     boundary_confirm_samples: int = field(default_factory=lambda: _env_int(1, "BOUNDARY_CONFIRM_SAMPLES"))
@@ -129,6 +129,10 @@ class RobotRuntimeConfig:
     heading_hold_speed_gain: float = field(default_factory=lambda: _env_float(3.0, "HEADING_HOLD_SPEED_GAIN"))
     heading_hold_min_correction_speed: int = field(default_factory=lambda: _env_int(6, "HEADING_HOLD_MIN_CORRECTION_SPEED"))
     heading_hold_max_speed_fraction: float = field(default_factory=lambda: _env_float(0.8, "HEADING_HOLD_MAX_SPEED_FRACTION"))
+    heading_hold_integral_gain: float = field(default_factory=lambda: _env_float(0.45, "HEADING_HOLD_INTEGRAL_GAIN"))
+    heading_hold_integral_alpha: float = field(default_factory=lambda: _env_float(0.15, "HEADING_HOLD_INTEGRAL_ALPHA"))
+    heading_hold_integral_limit_deg: float = field(default_factory=lambda: _env_float(10.0, "HEADING_HOLD_INTEGRAL_LIMIT_DEG"))
+    heading_hold_max_correction_step: int = field(default_factory=lambda: _env_int(8, "HEADING_HOLD_MAX_CORRECTION_STEP"))
     heading_hold_min_sample_interval_seconds: float = field(default_factory=lambda: _env_float(0.0, "HEADING_HOLD_MIN_SAMPLE_INTERVAL_SECONDS"))
     heading_hold_min_interval_seconds: float = field(default_factory=lambda: _env_float(0.05, "HEADING_HOLD_MIN_INTERVAL_SECONDS"))
     heading_hold_max_consecutive: int = field(default_factory=lambda: _env_int(5, "HEADING_HOLD_MAX_CONSECUTIVE"))
@@ -145,7 +149,7 @@ class RobotRuntimeConfig:
     cruise_recognition_flash_seconds: float = field(default_factory=lambda: _env_float(0.12, "CRUISE_RECOGNITION_FLASH_SECONDS"))
     cruise_recognition_cooldown_seconds: float = field(default_factory=lambda: _env_float(1.5, "CRUISE_RECOGNITION_COOLDOWN_SECONDS"))
     cruise_vision_reopen_seconds: float = field(default_factory=lambda: _env_float(0.3, "CRUISE_VISION_REOPEN_SECONDS"))
-    timed_stop_scan_enabled: bool = field(default_factory=lambda: _env_bool("TIMED_STOP_SCAN_ENABLED", _env_bool("STOP_SCAN_CRUISE_ENABLED", True)))
+    timed_stop_scan_enabled: bool = field(default_factory=lambda: _env_bool("TIMED_STOP_SCAN_ENABLED", _env_bool("STOP_SCAN_CRUISE_ENABLED", False)))
     timed_stop_scan_speed: int = field(default_factory=lambda: _env_int(15, "TIMED_STOP_SCAN_SPEED", "STOP_SCAN_CRUISE_SPEED"))
     timed_stop_scan_drive_seconds: float = field(
         default_factory=lambda: _env_float(0.8, "TIMED_STOP_SCAN_DRIVE_SECONDS", "STOP_SCAN_CRUISE_DRIVE_SECONDS")
@@ -289,12 +293,15 @@ class RobotRuntime:
         self._recognition_last_at: dict[str, float] = {}
         self._cruise_active_shelf: str | None = None
         self._cruise_segment_items: dict[str, dict[str, object]] = {}
+        self._cruise_unassigned_items: dict[str, dict[str, object]] = {}
         self._cruise_scanner: _CruiseVisionScanner | None = None
         self._manual_override = threading.Event()
         self._last_heading_correction_at = 0.0
         self._last_heading_sample_log_at = 0.0
         self._heading_consecutive_count = 0
         self._heading_over_tolerance_count = 0
+        self._heading_integral_degrees = 0.0
+        self._heading_previous_correction_speed = 0
         self._cruise_vision_suppressed_until_boundary = False
 
     def start(self, shelf_order: Iterable[str] | None = None) -> None:
@@ -444,6 +451,7 @@ class RobotRuntime:
         self._recognition_last_at = {}
         self._cruise_active_shelf = None
         self._cruise_segment_items = {}
+        self._cruise_unassigned_items = {}
         self._cruise_vision_suppressed_until_boundary = False
         self._last_heading_sample_log_at = 0.0
         self._show_normal()
@@ -1826,6 +1834,9 @@ class RobotRuntime:
 
     def _scan_visible_shelf(self) -> None:
         detections = self._collect_detections()
+        if self.config.smooth_cruise_enabled:
+            self._accumulate_cruise_scan_detections(detections, reason="visible_scan")
+            return
         shelf_id = self._shelf_id_from_detections(detections)
         if shelf_id is None:
             if detections:
@@ -1938,7 +1949,7 @@ class RobotRuntime:
             enriched.pop("shelf_id", None)
         return enriched
 
-    def _record_observed_shelf(self, shelf_id: str) -> None:
+    def _record_observed_shelf(self, shelf_id: str, *, complete_cycle_on_last: bool = True) -> None:
         order = [str(item).strip().upper() for item in self.config.patrol_order if str(item).strip()]
         normalized = shelf_id.strip().upper()
         if normalized not in order:
@@ -1971,10 +1982,12 @@ class RobotRuntime:
         if index > previous_index:
             self._observed_shelf_sequence.append(normalized)
         elif index == 0:
+            if not complete_cycle_on_last and self._observed_shelf_sequence[-1] == order[-1]:
+                self._complete_observed_cycle(order)
             self._observed_shelf_sequence = [normalized]
         else:
             return
-        if normalized == order[-1]:
+        if complete_cycle_on_last and normalized == order[-1]:
             self._complete_observed_cycle(order)
 
     def _record_empty_vision_scan(self) -> None:
@@ -2029,35 +2042,45 @@ class RobotRuntime:
 
     def _signal_scan_events(self, events: list[EventRecord]) -> None:
         waiting = [event for event in events if event.get("status") == "waiting_confirm"]
-        missing_alerts = [
+        inventory_alerts = [
             event
             for event in events
-            if event.get("type") == "missing_item" and event.get("status") in {"warning", "waiting_confirm"}
+            if event.get("type") in {"missing_item", "added_item"} and event.get("status") in {"warning", "waiting_confirm", "info"}
         ]
-        if not waiting and not missing_alerts:
+        if not waiting and not inventory_alerts:
             return
         self._trigger_orange_flash()
         self.store.record_light_cue("orange", "扫描到货架/物品异常，橙色指示灯已触发。")
-        if missing_alerts:
-            self._play_missing_alert(missing_alerts)
+        if inventory_alerts:
+            self._play_inventory_alert(inventory_alerts)
 
-    def _play_missing_alert(self, events: list[EventRecord]) -> None:
+    def _play_inventory_alert(self, events: list[EventRecord]) -> None:
         missing = [event for event in events if event.get("type") == "missing_item"]
-        if not missing:
+        added = [event for event in events if event.get("type") == "added_item"]
+        if not missing and not added:
             return
         now = time.monotonic()
         cooldown = max(0.0, float(self.config.missing_alert_cooldown_seconds))
         if now - self._last_missing_alert_at < cooldown:
             return
         self._last_missing_alert_at = now
-        names = [str(event.get("item") or "物品") for event in missing[:3]]
-        shelf_id = str(missing[0].get("shelf_id") or self.store.snapshot().get("current_shelf") or "当前货架")
-        if len(missing) > 3:
-            names.append(f"等 {len(missing)} 项")
-        spoken = f"检测到 {_spoken_shelf_id(shelf_id)} 缺少 {'、'.join(names)}。"
+        shelf_id = str((missing or added)[0].get("shelf_id") or self.store.snapshot().get("current_shelf") or "当前货架")
+        parts: list[str] = []
+        if missing:
+            names = [str(event.get("item") or "物品") for event in missing[:3]]
+            if len(missing) > 3:
+                names.append(f"等 {len(missing)} 项")
+            parts.append(f"缺少 {'、'.join(names)}")
+        if added:
+            names = [str(event.get("item") or "物品") for event in added[:3]]
+            if len(added) > 3:
+                names.append(f"等 {len(added)} 项")
+            parts.append(f"新增 {'、'.join(names)}")
+        spoken = f"检测到 {_spoken_shelf_id(shelf_id)} {'，'.join(parts)}。"
         payload, status = start_spoken_message(self.store.root, spoken)
         error = None if status == 200 else str(payload.get("error", "speech alert failed"))
-        self.store.record_audio_cue("missing_item", spoken if error is None else f"缺货语音报警失败: {error}", error)
+        cue = "missing_item" if missing and not added else "added_item" if added and not missing else "inventory_change"
+        self.store.record_audio_cue(cue, spoken if error is None else f"库存变化语音报警失败: {error}", error)
 
     def _wait_for_obstacle_clear(self, shelf_id: str | None) -> bool:
         started_at = time.monotonic()
@@ -2461,6 +2484,8 @@ class RobotRuntime:
     def _reset_heading_guard(self) -> None:
         self._heading_consecutive_count = 0
         self._heading_over_tolerance_count = 0
+        self._heading_integral_degrees = 0.0
+        self._heading_previous_correction_speed = 0
         guard = self._heading_guard
         if guard is not None:
             reset = getattr(guard, "reset", None)
@@ -2599,6 +2624,10 @@ class RobotRuntime:
             speed_gain=self.config.heading_hold_speed_gain,
             min_correction_speed=self.config.heading_hold_min_correction_speed,
             max_speed_fraction=self.config.heading_hold_max_speed_fraction,
+            integral_degrees=self._heading_integral_degrees,
+            integral_gain=self.config.heading_hold_integral_gain,
+            previous_correction_speed=self._heading_previous_correction_speed,
+            max_correction_step=self.config.heading_hold_max_correction_step,
         )
 
     def _heading_hold_correction(self, fallback_speed: int | None = None) -> HeadingHoldCorrection | None:
@@ -2633,11 +2662,14 @@ class RobotRuntime:
         if abs(deviation) <= tolerance:
             self._heading_consecutive_count = 0
             self._heading_over_tolerance_count = 0
+            self._heading_previous_correction_speed = 0
+            self._decay_heading_integral()
             self._record_heading_hold_sample(
                 "within_deadband",
                 deviation_degrees=deviation,
                 rate_dps=rate,
                 tolerance_degrees=tolerance,
+                integral_degrees=round(self._heading_integral_degrees, 3),
             )
             return None
         min_interval = max(0.0, float(self.config.heading_hold_min_interval_seconds))
@@ -2674,6 +2706,7 @@ class RobotRuntime:
                 confirm_samples=confirm_samples,
             )
             return None
+        self._update_heading_integral(deviation)
         try:
             correction = compute_heading_hold_correction(
                 guard,
@@ -2686,17 +2719,36 @@ class RobotRuntime:
             self._record_heading_hold_sample("controller_error")
             return None
         if correction is None:
+            self._heading_previous_correction_speed = 0
             self._record_heading_hold_sample(
                 "controller_rejected",
                 deviation_degrees=deviation,
                 rate_dps=rate,
                 tolerance_degrees=tolerance,
+                integral_degrees=round(self._heading_integral_degrees, 3),
             )
             return None
         self._last_heading_correction_at = now
         self._heading_consecutive_count += 1
         self._heading_over_tolerance_count = 0
+        self._heading_previous_correction_speed = (
+            correction.correction_speed if correction.direction == "right" else -correction.correction_speed
+        )
         return correction
+
+    def _update_heading_integral(self, deviation: float) -> None:
+        alpha = max(0.0, min(1.0, float(self.config.heading_hold_integral_alpha)))
+        limit = max(0.0, float(self.config.heading_hold_integral_limit_deg))
+        updated = self._heading_integral_degrees * (1.0 - alpha) + float(deviation) * alpha
+        self._heading_integral_degrees = max(-limit, min(limit, updated))
+
+    def _decay_heading_integral(self) -> None:
+        alpha = max(0.0, min(1.0, float(self.config.heading_hold_integral_alpha)))
+        if alpha <= 0.0:
+            return
+        self._heading_integral_degrees *= max(0.0, 1.0 - alpha)
+        if abs(self._heading_integral_degrees) < 0.01:
+            self._heading_integral_degrees = 0.0
 
     def _record_heading_hold_sample(self, reason: str, **evidence: object) -> None:
         interval = max(0.0, float(self.config.heading_hold_trace_interval_seconds))
@@ -2775,6 +2827,7 @@ class RobotRuntime:
                 "direction": correction.direction,
                 "correction_speed": correction.correction_speed,
                 "consecutive_count": self._heading_consecutive_count,
+                "integral_degrees": round(self._heading_integral_degrees, 3),
             },
         )
 
@@ -2872,7 +2925,6 @@ class RobotRuntime:
             self._stop_cruise_scanner()
 
     def _stop_cruise_scanner(self) -> None:
-        self._flush_cruise_shelf_segment("scanner_stopped")
         scanner = self._cruise_scanner
         if scanner is None:
             return
@@ -2998,16 +3050,36 @@ class RobotRuntime:
         self._cruise_active_shelf = shelf_id
         self._cruise_segment_items = {}
         self.store.record_shelf_arrival(shelf_id, target=f"{shelf_id}_SCAN")
-        self._record_observed_shelf(shelf_id)
+        self._record_observed_shelf(shelf_id, complete_cycle_on_last=False)
+        if self._cruise_unassigned_items:
+            self._cruise_segment_items.update(self._cruise_unassigned_items)
+            self.store.record_motion_debug(
+                "cruise_unassigned_items_attached",
+                f"{shelf_id} 货架标签出现，已归并此前移动中暂存的物品标签。",
+                evidence={
+                    "shelf_id": shelf_id,
+                    "item_ids": list(self._cruise_unassigned_items),
+                },
+            )
+            self._cruise_unassigned_items = {}
 
     def _buffer_cruise_item(self, recognition: Mapping[str, object], item_id: str) -> None:
         if self._cruise_active_shelf is None:
+            self._cruise_unassigned_items.setdefault(
+                item_id,
+                {
+                    "tag_id": _optional_text(recognition.get("tag_id")),
+                    "kind": "item",
+                    "item_id": item_id,
+                },
+            )
             self.store.record_motion_debug(
                 "cruise_item_unassigned",
-                f"移动中识别到物品 {item_id}，但尚未检测到所属货架，暂不归属。",
+                f"移动中识别到物品 {item_id}，但尚未检测到所属货架，已先暂存。",
                 evidence={
                     "item_id": item_id,
                     "tag_id": _optional_text(recognition.get("tag_id")),
+                    "buffered_items": list(self._cruise_unassigned_items),
                 },
             )
             return
@@ -3017,6 +3089,37 @@ class RobotRuntime:
                 "tag_id": _optional_text(recognition.get("tag_id")),
                 "kind": "item",
                 "item_id": item_id,
+            },
+        )
+
+    def _accumulate_cruise_scan_detections(self, detections: list[dict[str, object]], *, reason: str) -> None:
+        if not detections:
+            self._record_empty_vision_scan()
+            return
+        shelf_count = 0
+        item_count = 0
+        for detection in [self._enrich_detection(item) for item in detections]:
+            shelf_id = _optional_text(detection.get("shelf_id"))
+            if shelf_id is not None:
+                shelf_id = shelf_id.strip().upper()
+                if shelf_id:
+                    shelf_count += 1
+                    self._advance_cruise_shelf_segment(shelf_id)
+            item_id = _optional_text(detection.get("item_id"))
+            if item_id is not None:
+                item_count += 1
+                self._buffer_cruise_item(detection, item_id)
+        if shelf_count:
+            self._empty_vision_scans = 0
+        self.store.record_motion_debug(
+            "cruise_scan_accumulated",
+            "巡航扫描结果已并入当前货架段，等待下一个货架码后再结算。",
+            evidence={
+                "reason": reason,
+                "shelf_count": shelf_count,
+                "item_count": item_count,
+                "active_shelf": self._cruise_active_shelf,
+                "buffered_items": list(self._cruise_segment_items),
             },
         )
 
@@ -3232,18 +3335,21 @@ class _CruiseVisionScanner:
         try:
             return self._provider(
                 device=self._config.camera_device,
-                cooldown_seconds=0.5,
+                cooldown_seconds=0.05,
                 idle_timeout_seconds=self._config.scan_timeout_seconds,
-                stability_enabled=self._config.vision_stability_enabled,
+                stability_enabled=False,
                 stability_min_frames=self._config.vision_min_stable_frames,
                 stability_max_center_shift_px=self._config.vision_max_center_shift_px,
                 stability_max_corner_shift_px=self._config.vision_max_corner_shift_px,
                 stability_max_angle_delta_deg=self._config.vision_max_angle_delta_deg,
                 image_classifier_enabled=self._config.image_classifier_enabled,
-                vision_state_machine_enabled=self._config.vision_state_machine_enabled,
+                vision_state_machine_enabled=False,
+                vote_frames=1,
+                require_consensus=False,
+                yield_all_detections=True,
             )
         except TypeError:
-            return self._provider(device=self._config.camera_device, cooldown_seconds=0.5)
+            return self._provider(device=self._config.camera_device, cooldown_seconds=0.05)
 
     def _ingest(self, iterator: Iterator[Mapping[str, object]]) -> None:
         for detection in iterator:

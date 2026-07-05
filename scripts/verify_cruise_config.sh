@@ -39,6 +39,12 @@ if grep -q 'SMOOTH_CRUISE_ENABLED="${SMOOTH_CRUISE_ENABLED:-1}"' scripts/run_on_
 else
     echo "  ⚠️  SMOOTH_CRUISE_ENABLED 配置异常"
 fi
+
+if grep -q 'TIMED_STOP_SCAN_ENABLED="${TIMED_STOP_SCAN_ENABLED:-0}"' scripts/run_on_car.sh; then
+    echo "  ✅ TIMED_STOP_SCAN_ENABLED 默认值为 0（移动中识别，不强制停车扫描）"
+else
+    echo "  ⚠️  TIMED_STOP_SCAN_ENABLED 配置异常"
+fi
 echo ""
 
 # 2. 检查小车端运行状态（如果可访问）
@@ -103,7 +109,8 @@ echo "   1. LINE_FOLLOW_ENABLED=0 (循线禁用)"
 echo "   2. TRANSFER_LINE_ENABLED=0 (货架间巡线禁用)"
 echo "   3. 开机后只启动网页服务，巡逻不能自动启动"
 echo "   4. SMOOTH_CRUISE_ENABLED=1 (匀速巡航)"
-echo "   5. 网页手动点击'开始巡逻'按钮启动"
+echo "   5. TIMED_STOP_SCAN_ENABLED=0 (标签移动中识别并加入处理逻辑)"
+echo "   6. 网页手动点击'开始巡逻'按钮启动"
 echo ""
 echo "📖 详细测试步骤请参考: CRUISE_TEST_CONFIG.md"
 echo ""

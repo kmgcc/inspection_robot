@@ -91,8 +91,14 @@ class RobotAdapterTest(unittest.TestCase):
         fake.bot = FakeMotionBot()
         original = motion._motion_module
         original_repeat = motion.COMMAND_REPEAT
+        original_split = motion.FORWARD_CORRECTION_SPLIT
+        original_left_trim = motion.FORWARD_LEFT_TRIM
+        original_right_trim = motion.FORWARD_RIGHT_TRIM
         motion._motion_module = lambda: fake  # type: ignore[assignment]
         motion.COMMAND_REPEAT = 1
+        motion.FORWARD_CORRECTION_SPLIT = 0.5
+        motion.FORWARD_LEFT_TRIM = 0
+        motion.FORWARD_RIGHT_TRIM = 0
         motion.clear_stop()
         try:
             motion.move_forward_corrected_slow(speed=30, correction=4, direction="right", duration_seconds=0)
@@ -100,14 +106,48 @@ class RobotAdapterTest(unittest.TestCase):
             motion.clear_stop()
             motion._motion_module = original
             motion.COMMAND_REPEAT = original_repeat
+            motion.FORWARD_CORRECTION_SPLIT = original_split
+            motion.FORWARD_LEFT_TRIM = original_left_trim
+            motion.FORWARD_RIGHT_TRIM = original_right_trim
 
         self.assertEqual(
             fake.bot.calls,
             [
-                ("car", 0, 0, 34),
-                ("car", 1, 0, 34),
-                ("car", 2, 0, 26),
-                ("car", 3, 0, 26),
+                ("car", 0, 0, 32),
+                ("car", 1, 0, 32),
+                ("car", 2, 0, 28),
+                ("car", 3, 0, 28),
+            ],
+        )
+
+    def test_motion_forward_trim_applies_to_plain_forward(self) -> None:
+        fake = FakeMotionModule()
+        fake.bot = FakeMotionBot()
+        original = motion._motion_module
+        original_repeat = motion.COMMAND_REPEAT
+        original_left_trim = motion.FORWARD_LEFT_TRIM
+        original_right_trim = motion.FORWARD_RIGHT_TRIM
+        motion._motion_module = lambda: fake  # type: ignore[assignment]
+        motion.COMMAND_REPEAT = 1
+        motion.FORWARD_LEFT_TRIM = -2
+        motion.FORWARD_RIGHT_TRIM = 1
+        motion.clear_stop()
+        try:
+            motion.move_forward_slow(speed=30, duration_seconds=0)
+        finally:
+            motion.clear_stop()
+            motion._motion_module = original
+            motion.COMMAND_REPEAT = original_repeat
+            motion.FORWARD_LEFT_TRIM = original_left_trim
+            motion.FORWARD_RIGHT_TRIM = original_right_trim
+
+        self.assertEqual(
+            fake.bot.calls,
+            [
+                ("car", 0, 0, 28),
+                ("car", 1, 0, 28),
+                ("car", 2, 0, 31),
+                ("car", 3, 0, 31),
             ],
         )
 

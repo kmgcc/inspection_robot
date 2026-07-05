@@ -216,6 +216,37 @@ class VisionDetectorTest(unittest.TestCase):
         self.assertEqual(synthetic[0]["image_class"], "CUP")
         self.assertEqual(synthetic[0]["color"], "GREEN")
 
+    def test_snapshot_detection_can_keep_all_single_frame_tags(self) -> None:
+        frame = np.zeros((120, 160, 3), dtype=np.uint8)
+        raws = [
+            FakeRawDetection(
+                tag_id=118,
+                center=(40.0, 50.0),
+                corners=((20.0, 30.0), (60.0, 30.0), (60.0, 70.0), (20.0, 70.0)),
+                decision_margin=82.0,
+                hamming=0,
+                goodness=0.91,
+            ),
+            FakeRawDetection(
+                tag_id=7,
+                center=(110.0, 50.0),
+                corners=((90.0, 30.0), (130.0, 30.0), (130.0, 70.0), (90.0, 70.0)),
+                decision_margin=80.0,
+                hamming=0,
+                goodness=0.9,
+            ),
+        ]
+
+        detections = tag_detector._read_stable_detections(
+            FakeCapture([frame]),
+            FakeDetector(raws),
+            cv2,
+            vote_frames=1,
+            require_consensus=False,
+        )
+
+        self.assertEqual({item["tag_id"] for item in detections}, {"118", "7"})
+
     def test_video_overlay_draws_bbox_and_multimodal_labels(self) -> None:
         frame = np.zeros((120, 160, 3), dtype=np.uint8)
         detection = {
@@ -278,6 +309,16 @@ class FakeDetector:
 
     def detect(self, _: np.ndarray) -> list[FakeRawDetection]:
         return self.detections
+
+
+class FakeCapture:
+    def __init__(self, frames: list[np.ndarray]) -> None:
+        self.frames = list(frames)
+
+    def read(self) -> tuple[bool, np.ndarray | None]:
+        if not self.frames:
+            return False, None
+        return True, self.frames.pop(0)
 
 
 class FakeTesseractModule(ModuleType):

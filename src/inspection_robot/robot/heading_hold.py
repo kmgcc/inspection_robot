@@ -18,6 +18,10 @@ class HeadingHoldSettings:
     speed_gain: float = 1.8
     min_correction_speed: int = 4
     max_speed_fraction: float = 0.8
+    integral_degrees: float = 0.0
+    integral_gain: float = 0.0
+    previous_correction_speed: int = 0
+    max_correction_step: int = 0
 
 
 @dataclass(slots=True)
@@ -104,7 +108,8 @@ def compute_heading_hold_correction(
 
     rate = _guard_rate(guard)
     damping = max(0.0, float(settings.rate_damping))
-    effective = deviation + damping * rate
+    integral = float(settings.integral_degrees) * max(0.0, float(settings.integral_gain))
+    effective = deviation + damping * rate + integral
     if effective == 0.0 or (effective > 0.0) != (deviation > 0.0):
         return None
 
@@ -119,10 +124,21 @@ def compute_heading_hold_correction(
         settings.correction_speed or fallback_speed,
         max(1, int(round(fallback_speed * max_speed_fraction))),
     )
-    correction_speed = min(
+    target_speed = min(
         max_speed,
         max(int(settings.min_correction_speed), int(round(abs(effective) * max(0.0, float(settings.speed_gain))))),
     )
+    max_step = max(0, int(settings.max_correction_step))
+    previous_speed = int(settings.previous_correction_speed)
+    previous_direction = 1 if previous_speed > 0 else -1 if previous_speed < 0 else 0
+    target_direction = 1 if turn_right else -1
+    if max_step > 0 and previous_direction in {0, target_direction}:
+        previous_abs = abs(previous_speed)
+        if previous_abs > 0:
+            target_speed = min(target_speed, max(previous_abs + max_step, int(settings.min_correction_speed)))
+        elif target_speed > int(settings.min_correction_speed):
+            target_speed = min(target_speed, max(max_step, int(settings.min_correction_speed)))
+    correction_speed = target_speed
     if correction_speed <= 0:
         return None
     return HeadingHoldCorrection(

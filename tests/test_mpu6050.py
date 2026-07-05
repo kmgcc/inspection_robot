@@ -169,6 +169,24 @@ class MPU6050Test(unittest.TestCase):
         self.assertEqual(result.message, "MPU6050 turn aborted before motion.")
         self.assertEqual(motion.calls, [("stop", None, None)])
 
+    def test_gyro_bias_calibration_trims_single_sample_spikes(self) -> None:
+        bias = mpu6050._robust_gyro_bias_average(
+            [
+                {"x": 1.0, "y": -2.0, "z": 3.0},
+                {"x": 1.1, "y": -2.1, "z": 3.1},
+                {"x": 0.9, "y": -1.9, "z": 2.9},
+                {"x": 1.0, "y": -2.0, "z": 3.0},
+                {"x": 1.0, "y": -2.0, "z": 3.0},
+                {"x": 1.1, "y": -2.1, "z": 3.1},
+                {"x": 0.9, "y": -1.9, "z": 2.9},
+                {"x": 45.0, "y": -35.0, "z": 60.0},
+            ]
+        )
+
+        self.assertAlmostEqual(bias["x"], 1.0167, places=3)
+        self.assertAlmostEqual(bias["y"], -2.0167, places=3)
+        self.assertAlmostEqual(bias["z"], 3.0167, places=3)
+
     def test_correction_duration_scales_rate_hint_to_correction_speed(self) -> None:
         config = mpu6050.Turn90Config(
             speed=20,

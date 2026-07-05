@@ -231,12 +231,13 @@ class CruiseRuntimeTest(unittest.TestCase):
         self.assertIn("cruise_step", stages)
         self.assertNotIn("vision_scan_start", stages)
 
-    def test_continuous_patrol_runs_timed_stop_scan_by_default(self) -> None:
+    def test_continuous_patrol_runs_timed_stop_scan_when_enabled(self) -> None:
         runtime, motion, _ = self.make_runtime(
             config=RobotRuntimeConfig(
                 smooth_cruise_enabled=True,
                 cruise_vision_enabled=False,
                 object_trigger_enabled=False,
+                timed_stop_scan_enabled=True,
                 timed_stop_scan_drive_seconds=0,
                 timed_stop_scan_settle_seconds=0,
                 scan_timeout_seconds=0,
@@ -441,6 +442,7 @@ class CruiseRuntimeTest(unittest.TestCase):
                 heading_hold_tolerance_deg=3.0,
                 heading_hold_correction_speed=35,
                 heading_hold_speed_gain=5.0,
+                heading_hold_max_correction_step=0,
                 heading_hold_min_interval_seconds=0.0,
                 heading_hold_confirm_samples=1,
                 cruise_speed=20,
@@ -458,6 +460,34 @@ class CruiseRuntimeTest(unittest.TestCase):
             if event["type"] == "motion_debug" and event.get("evidence", {}).get("stage") == "heading_hold_correction"
         ]
         self.assertEqual(correction_events[-1]["evidence"]["correction_speed"], 16)
+
+    def test_heading_hold_ramps_large_correction_steps(self) -> None:
+        guard = FakeGuard(deviation=50.0, rate=0.0)
+        runtime, motion, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                heading_hold_enabled=True,
+                heading_hold_tolerance_deg=3.0,
+                heading_hold_correction_speed=35,
+                heading_hold_speed_gain=5.0,
+                heading_hold_max_correction_step=8,
+                heading_hold_min_interval_seconds=0.0,
+                heading_hold_confirm_samples=1,
+                cruise_speed=20,
+                action_settle_seconds=0,
+            ),
+            imu=FakeImu(guard),
+        )
+
+        runtime._apply_heading_hold()
+        runtime._apply_heading_hold()
+
+        correction_events = [
+            event
+            for event in runtime.store.snapshot()["events"]
+            if event["type"] == "motion_debug" and event.get("evidence", {}).get("stage") == "heading_hold_correction"
+        ]
+        self.assertEqual(correction_events[-1]["evidence"]["correction_speed"], 8)
+        self.assertEqual(correction_events[-2]["evidence"]["correction_speed"], 16)
 
     def test_heading_hold_throttles_back_to_back_corrections(self) -> None:
         guard = FakeGuard(deviation=8.0, rate=0.0)
@@ -572,6 +602,51 @@ class CruiseRuntimeTest(unittest.TestCase):
         self.assertEqual(shelf_a2["items"], [])
         self.assertEqual(snapshot["current_shelf"], "A2")
 
+    def test_cruise_visible_scan_defers_inventory_diff_until_next_shelf(self) -> None:
+        runtime, _, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                smooth_cruise_enabled=True,
+                cruise_recognition_cooldown_seconds=0,
+                scan_max_detections=3,
+                action_settle_seconds=0,
+            ),
+        )
+        runtime.store.record_cycle(1, skip_shortage_detection=True)
+        runtime.store.record_scan_result("A1", ["item_07", "item_08"], frame_id="learn-a1")
+        runtime.store.record_cycle(2, skip_shortage_detection=False)
+        baseline_event_count = len(runtime.store.snapshot()["events"])
+
+        batches = [
+            [{"tag_id": "118"}, {"tag_id": "7"}],
+            [{"tag_id": "46"}],
+            [{"tag_id": "110"}],
+        ]
+
+        def provider(**_: object) -> Iterator[dict[str, object]]:
+            yield from batches.pop(0)
+
+        runtime.detection_provider = provider
+
+        runtime._scan_visible_shelf()
+        runtime._scan_visible_shelf()
+        interim_events = runtime.store.snapshot()["events"][baseline_event_count:]
+        self.assertFalse(any(event["type"] in {"added_item", "missing_item"} for event in interim_events))
+
+        runtime._scan_visible_shelf()
+        snapshot = runtime.store.snapshot()
+        new_events = snapshot["events"][baseline_event_count:]
+        event_types = [event["type"] for event in new_events]
+        shelf_a1 = next(item for item in snapshot["shelves"] if item["shelf_id"] == "A1")
+        item_states = {item["item_id"]: item["status"] for item in shelf_a1["items"]}
+
+        self.assertIn("added_item", event_types)
+        self.assertIn("missing_item", event_types)
+        self.assertEqual(item_states["item_07"], "present")
+        self.assertEqual(item_states["item_08"], "missing")
+        self.assertEqual(item_states["item_46"], "added")
+        self.assertEqual(snapshot["scan"]["shelf_id"], "A1")
+        self.assertEqual(snapshot["current_shelf"], "A2")
+
     def test_indicator_light_holds_orange_during_flash_window(self) -> None:
         runtime, _, alarm = self.make_runtime(
             config=RobotRuntimeConfig(
@@ -618,6 +693,56 @@ class CruiseRuntimeTest(unittest.TestCase):
         self.assertIn((None, "item_07"), keys)
         self.assertEqual(len(pending), 2)
         self.assertEqual(scanner.poll_new(), [])  # drained
+
+    def test_cruise_vision_scanner_uses_single_frame_all_tag_mode(self) -> None:
+        captured: dict[str, object] = {}
+
+        def provider(**kwargs: object) -> Iterator[dict[str, object]]:
+            captured.update(kwargs)
+            return iter(())
+
+        runtime, _, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                smooth_cruise_enabled=True,
+                object_trigger_enabled=False,
+                vision_stability_enabled=True,
+                vision_state_machine_enabled=True,
+            )
+        )
+        scanner = _CruiseVisionScanner(
+            provider=provider,
+            config=runtime.config,
+            enrich=runtime._enrich_detection,
+            stop_event=runtime._stop_event,
+        )
+
+        list(scanner._open_iterator())
+
+        self.assertEqual(captured["vote_frames"], 1)
+        self.assertFalse(captured["require_consensus"])
+        self.assertTrue(captured["yield_all_detections"])
+        self.assertFalse(captured["stability_enabled"])
+        self.assertFalse(captured["vision_state_machine_enabled"])
+        self.assertEqual(captured["cooldown_seconds"], 0.05)
+
+    def test_unassigned_moving_items_attach_to_first_seen_shelf(self) -> None:
+        runtime, _, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                smooth_cruise_enabled=True,
+                cruise_recognition_cooldown_seconds=0,
+                action_settle_seconds=0,
+            ),
+        )
+
+        runtime._handle_moving_recognition({"item_id": "item_07", "tag_id": "7"})
+        runtime._handle_moving_recognition({"shelf_id": "A1", "tag_id": "118"})
+        runtime._handle_moving_recognition({"shelf_id": "A2", "tag_id": "110"})
+
+        snapshot = runtime.store.snapshot()
+        shelf_a1 = next(item for item in snapshot["shelves"] if item["shelf_id"] == "A1")
+
+        self.assertEqual([item["item_id"] for item in shelf_a1["items"]], ["item_07"])
+        self.assertEqual(runtime._cruise_unassigned_items, {})
 
     def test_cruise_scanner_pauses_during_row_transfer(self) -> None:
         runtime, _, _ = self.make_runtime(

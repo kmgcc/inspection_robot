@@ -19,6 +19,9 @@ STOP_POLL_SECONDS = float(os.environ.get("ROBOT_STOP_POLL_SECONDS", "0.01"))
 STOP_REPEAT = max(1, int(os.environ.get("ROBOT_STOP_REPEAT", "3")))
 STOP_REPEAT_GAP_SECONDS = float(os.environ.get("ROBOT_STOP_REPEAT_GAP_SECONDS", "0.02"))
 FORWARD_MOTOR_SIGNS = os.environ.get("ROBOT_FORWARD_MOTOR_SIGNS", "1,1,1,1")
+FORWARD_LEFT_TRIM = int(os.environ.get("ROBOT_FORWARD_LEFT_TRIM", "0"))
+FORWARD_RIGHT_TRIM = int(os.environ.get("ROBOT_FORWARD_RIGHT_TRIM", "0"))
+FORWARD_CORRECTION_SPLIT = float(os.environ.get("ROBOT_FORWARD_CORRECTION_SPLIT", "0.5"))
 VENDOR_MOTION_PATHS = (
     Path("/home/pi/project_demo/lib"),
     Path("/home/pi/project_demo/04.Car_motion_control"),
@@ -113,6 +116,9 @@ def _call_motion(name: str, speed: int | None, duration_seconds: float | None) -
             _stop_quietly()
             return
         module = _motion_module()
+        if name == "move_forward" and _forward_trim_active():
+            if _drive_forward_wheels_locked(module, _corrected_forward_wheel_speeds(_speed(speed), 0, "right"), duration_seconds):
+                return
         func = getattr(module, name, None)
         if not callable(func):
             raise RobotHardwareError(f"McLumk_Wheel_Sports is missing {name}()")
@@ -137,6 +143,9 @@ def _start_motion(name: str, speed: int | None) -> None:
             _stop_quietly()
             return
         module = _motion_module()
+        if name == "move_forward" and _forward_trim_active():
+            if _start_forward_wheels_locked(module, _corrected_forward_wheel_speeds(_speed(speed), 0, "right")):
+                return
         func = getattr(module, name, None)
         if not callable(func):
             raise RobotHardwareError(f"McLumk_Wheel_Sports is missing {name}()")
@@ -155,7 +164,10 @@ def _call_forward_corrected(
     base_speed = _speed(speed)
     correction_speed = max(0, min(int(correction), base_speed))
     normalized_direction = str(direction).strip().lower()
-    if correction_speed <= 0 or normalized_direction not in {"left", "right"}:
+    if normalized_direction not in {"left", "right"}:
+        _call_motion("move_forward", base_speed, duration_seconds)
+        return
+    if correction_speed <= 0 and not _forward_trim_active():
         _call_motion("move_forward", base_speed, duration_seconds)
         return
     with _MOTION_LOCK:
@@ -163,36 +175,13 @@ def _call_forward_corrected(
             _stop_quietly()
             return
         module = _motion_module()
-        bot = getattr(module, "bot", None)
-        ctrl_car = getattr(bot, "Ctrl_Car", None)
-        ctrl_muto = getattr(bot, "Ctrl_Muto", None)
-        if not callable(ctrl_car) and not callable(ctrl_muto):
+        if not _drive_forward_wheels_locked(
+            module,
+            _corrected_forward_wheel_speeds(base_speed, correction_speed, normalized_direction),
+            duration_seconds,
+        ):
             _call_motion("move_forward", base_speed, duration_seconds)
-            return
-        left_speed = base_speed
-        right_speed = base_speed
-        if normalized_direction == "right":
-            left_speed = min(100, base_speed + correction_speed)
-            right_speed = max(0, base_speed - correction_speed)
-        else:
-            left_speed = max(0, base_speed - correction_speed)
-            right_speed = min(100, base_speed + correction_speed)
-        wheel_speeds = (left_speed, left_speed, right_speed, right_speed)
-        signs = _forward_motor_signs()
-        for index in range(COMMAND_REPEAT):
-            if _ABORT.is_set():
-                _stop_quietly()
-                return
-            for motor_id, wheel_speed in enumerate(wheel_speeds):
-                if callable(ctrl_car):
-                    ctrl_car(motor_id, 0, _speed(wheel_speed))
-                else:
-                    ctrl_muto(motor_id, _signed_speed(wheel_speed, signs[motor_id]))
-            if index < COMMAND_REPEAT - 1:
-                _interruptible_sleep(max(0.0, COMMAND_REPEAT_GAP_SECONDS))
-        _interruptible_sleep(_duration(duration_seconds))
-        if _ABORT.is_set():
-            _stop_quietly()
+        return
 
 
 def _start_forward_corrected(speed: int | None, correction: int, direction: str) -> None:
@@ -202,7 +191,10 @@ def _start_forward_corrected(speed: int | None, correction: int, direction: str)
     base_speed = _speed(speed)
     correction_speed = max(0, min(int(correction), base_speed))
     normalized_direction = str(direction).strip().lower()
-    if correction_speed <= 0 or normalized_direction not in {"left", "right"}:
+    if normalized_direction not in {"left", "right"}:
+        _start_motion("move_forward", base_speed)
+        return
+    if correction_speed <= 0 and not _forward_trim_active():
         _start_motion("move_forward", base_speed)
         return
     with _MOTION_LOCK:
@@ -210,27 +202,12 @@ def _start_forward_corrected(speed: int | None, correction: int, direction: str)
             _stop_quietly()
             return
         module = _motion_module()
-        bot = getattr(module, "bot", None)
-        ctrl_car = getattr(bot, "Ctrl_Car", None)
-        ctrl_muto = getattr(bot, "Ctrl_Muto", None)
-        if not callable(ctrl_car) and not callable(ctrl_muto):
+        if not _start_forward_wheels_locked(
+            module,
+            _corrected_forward_wheel_speeds(base_speed, correction_speed, normalized_direction),
+        ):
             _start_motion("move_forward", base_speed)
-            return
-        left_speed = base_speed
-        right_speed = base_speed
-        if normalized_direction == "right":
-            left_speed = min(100, base_speed + correction_speed)
-            right_speed = max(0, base_speed - correction_speed)
-        else:
-            left_speed = max(0, base_speed - correction_speed)
-            right_speed = min(100, base_speed + correction_speed)
-        wheel_speeds = (left_speed, left_speed, right_speed, right_speed)
-        signs = _forward_motor_signs()
-        for motor_id, wheel_speed in enumerate(wheel_speeds):
-            if callable(ctrl_car):
-                ctrl_car(motor_id, 0, _speed(wheel_speed))
-            else:
-                ctrl_muto(motor_id, _signed_speed(wheel_speed, signs[motor_id]))
+        return
 
 
 def _speed(speed: int | None) -> int:
@@ -245,6 +222,77 @@ def _signed_speed(speed: int, sign: int) -> int:
     if value == 0:
         return 0
     return value if sign >= 0 else -value
+
+
+def _corrected_forward_wheel_speeds(base_speed: int, correction_speed: int, direction: str) -> tuple[int, int, int, int]:
+    split = max(0.0, min(1.0, float(FORWARD_CORRECTION_SPLIT)))
+    speed_up = int(round(correction_speed * split))
+    slow_down = int(round(correction_speed * (1.0 - split)))
+    left_speed = base_speed
+    right_speed = base_speed
+    if direction == "right":
+        left_speed += speed_up
+        right_speed -= slow_down
+    else:
+        left_speed -= slow_down
+        right_speed += speed_up
+    left_speed = _trimmed_speed(left_speed, FORWARD_LEFT_TRIM)
+    right_speed = _trimmed_speed(right_speed, FORWARD_RIGHT_TRIM)
+    return (left_speed, left_speed, right_speed, right_speed)
+
+
+def _drive_forward_wheels_locked(
+    module: ModuleType,
+    wheel_speeds: tuple[int, int, int, int],
+    duration_seconds: float | None,
+) -> bool:
+    bot = getattr(module, "bot", None)
+    ctrl_car = getattr(bot, "Ctrl_Car", None)
+    ctrl_muto = getattr(bot, "Ctrl_Muto", None)
+    if not callable(ctrl_car) and not callable(ctrl_muto):
+        return False
+    signs = _forward_motor_signs()
+    for index in range(COMMAND_REPEAT):
+        if _ABORT.is_set():
+            _stop_quietly()
+            return True
+        for motor_id, wheel_speed in enumerate(wheel_speeds):
+            if callable(ctrl_car):
+                ctrl_car(motor_id, 0, _speed(wheel_speed))
+            else:
+                ctrl_muto(motor_id, _signed_speed(wheel_speed, signs[motor_id]))
+        if index < COMMAND_REPEAT - 1:
+            _interruptible_sleep(max(0.0, COMMAND_REPEAT_GAP_SECONDS))
+    _interruptible_sleep(_duration(duration_seconds))
+    if _ABORT.is_set():
+        _stop_quietly()
+    return True
+
+
+def _start_forward_wheels_locked(module: ModuleType, wheel_speeds: tuple[int, int, int, int]) -> bool:
+    bot = getattr(module, "bot", None)
+    ctrl_car = getattr(bot, "Ctrl_Car", None)
+    ctrl_muto = getattr(bot, "Ctrl_Muto", None)
+    if not callable(ctrl_car) and not callable(ctrl_muto):
+        return False
+    signs = _forward_motor_signs()
+    for motor_id, wheel_speed in enumerate(wheel_speeds):
+        if callable(ctrl_car):
+            ctrl_car(motor_id, 0, _speed(wheel_speed))
+        else:
+            ctrl_muto(motor_id, _signed_speed(wheel_speed, signs[motor_id]))
+    return True
+
+
+def _trimmed_speed(speed: int, trim: int) -> int:
+    value = int(speed) + int(trim)
+    if speed > 0 and 0 < value < MIN_RUNNING_SPEED:
+        value = MIN_RUNNING_SPEED
+    return max(0, min(100, value))
+
+
+def _forward_trim_active() -> bool:
+    return FORWARD_LEFT_TRIM != 0 or FORWARD_RIGHT_TRIM != 0
 
 
 def _forward_motor_signs() -> tuple[int, int, int, int]:

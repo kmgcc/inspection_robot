@@ -239,8 +239,8 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
 
         runtime.run_patrol(shelf_order=["A1"], max_steps=1)
 
-        self.assertEqual(fake_motion.calls.count(("move_forward", 20, 1.5)), 2)
-        self.assertEqual(fake_motion.calls.count(("move_forward", 20, 1.25)), 1)
+        self.assertEqual(fake_motion.calls.count(("move_forward", 20, 1.25)), 2)
+        self.assertEqual(fake_motion.calls.count(("move_forward", 20, 2.0)), 1)
 
     def test_b3_forbidden_bypass_uses_extended_clearance_distances(self) -> None:
         store = self.make_store()

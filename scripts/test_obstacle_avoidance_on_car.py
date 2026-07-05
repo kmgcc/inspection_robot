@@ -25,8 +25,8 @@ def main() -> int:
     avoidance_speed = int(os.environ.get("AVOIDANCE_SPEED", "14"))
     body_seconds = float(os.environ.get("AVOIDANCE_BODY_SECONDS", "1.00"))
     side_clearance_bodies = float(os.environ.get("AVOIDANCE_SIDE_CLEARANCE_BODIES", "1.0"))
-    parallel_bodies = float(os.environ.get("AVOIDANCE_PARALLEL_BODIES", "2.0"))
-    return_bodies = float(os.environ.get("AVOIDANCE_RETURN_BODIES", "2.0"))
+    parallel_bodies = float(os.environ.get("AVOIDANCE_PARALLEL_BODIES", "1.6"))
+    return_bodies = float(os.environ.get("AVOIDANCE_RETURN_BODIES", "1.0"))
     blocked_count = 0
     print(
         "obstacle avoidance test: "

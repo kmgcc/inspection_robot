@@ -621,6 +621,12 @@ details[open] .collapsible-title::after {
   font-size: 11px;
 }
 
+.btn-xs {
+  min-height: 22px;
+  padding: 1px 9px;
+  font-size: 10px;
+}
+
 .btn-group {
   display: flex;
   flex-wrap: wrap;
@@ -1329,7 +1335,7 @@ details[open] .collapsible-title::after {
 .shelf-item-row {
   min-height: 42px;
   display: grid;
-  grid-template-columns: 10px minmax(0, 1fr);
+  grid-template-columns: 10px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   padding: 7px 8px;
@@ -1359,6 +1365,15 @@ details[open] .collapsible-title::after {
   display: block;
   font-size: 10px;
   color: var(--muted);
+}
+
+.shelf-item-action,
+.event-action {
+  white-space: nowrap;
+}
+
+.event-action {
+  margin-left: 6px;
 }
 
 .shelf-item-row.added {

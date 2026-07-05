@@ -12,8 +12,10 @@ LINE_FOLLOW_ENABLED=0          # 循线逻辑完全关闭
 ```bash
 RUN_MODE=robot                 # 真实硬件模式
 SMOOTH_CRUISE_ENABLED=1        # 平滑巡航入口
-TIMED_STOP_SCAN_ENABLED=1      # 固定节拍前进、停车、扫描
-TIMED_STOP_SCAN_SPEED=15       # 停车扫描巡航速度
+TIMED_STOP_SCAN_ENABLED=0      # 移动中识别标签并加入处理逻辑；不强制停车扫描
+CRUISE_SPEED=22                # 连续巡航速度
+CRUISE_TICK_SECONDS=0.03       # 连续巡航控制周期
+TIMED_STOP_SCAN_SPEED=15       # 仅在 TIMED_STOP_SCAN_ENABLED=1 时使用
 TIMED_STOP_SCAN_DRIVE_SECONDS=0.8
 TIMED_STOP_SCAN_SETTLE_SECONDS=0.2
 ```
@@ -29,7 +31,7 @@ TIMED_STOP_SCAN_SETTLE_SECONDS=0.2
 ### 2. 在网页手动启动巡逻
 1. 打开浏览器访问 `http://192.168.1.11:5000`
 2. 点击顶部的 **"开始巡逻"** 按钮
-3. 小车按固定节拍前进约 0.8 秒、停车稳定、侧向扫描，然后继续下一段
+3. 小车连续低速巡航；侧向摄像头在后台识别 AprilTag，识别到货架/物品标签后直接加入巡检处理逻辑，不需要先停车等画面稳定
 
 ### 3. 手动停止
 - 点击顶部的 **"立即停止"** 红色按钮（优先级最高）
@@ -95,7 +97,7 @@ curl http://192.168.1.11:5000/api/status | jq '.events[] | select(.type == "moti
 ## 测试重点
 
 ### ✅ 应该测试的内容
-1. 固定节拍停车扫描直线性（多段 0.8 秒前进后偏离可控）
+1. 连续巡航时移动识别可触发货架/物品事件，且不打断电机前进
 2. 航向纠偏收敛（偏离后 2-3 秒恢复）
 3. 边界转向精度（90° ± 10°）
 4. 手动接管响应（转向命令完整执行）
@@ -116,8 +118,8 @@ curl http://192.168.1.11:5000/api/status | jq '.events[] | select(.type == "moti
 # 方案 1：关闭匀速巡航，回退到经典短步巡逻
 SMOOTH_CRUISE_ENABLED=0 ./scripts/run_on_car.sh
 
-# 方案 1b：保留 smooth cruise，但关闭定时停车扫描，回退到纯连续巡航
-TIMED_STOP_SCAN_ENABLED=0 ./scripts/run_on_car.sh
+# 方案 1b：如果现场画面抖动太大，可临时打开定时停车扫描
+TIMED_STOP_SCAN_ENABLED=1 ./scripts/run_on_car.sh
 
 # 方案 2：完全停止巡逻
 curl -X POST http://192.168.1.11:5000/api/stop
@@ -128,7 +130,7 @@ curl -X POST http://192.168.1.11:5000/api/stop
 - 启动脚本: `scripts/run_on_car.sh`
 - 应用入口: `app.py`
 - 运行时配置: `src/inspection_robot/runtime.py`
-- 车上默认值: `TIMED_STOP_SCAN_SPEED=15`, `TIMED_STOP_SCAN_DRIVE_SECONDS=0.8`, `BOUNDARY_MIN_BLACK_SENSORS=1`, `MOTION_GUARD_POLL_SECONDS=0.005`, `LINE_FOLLOW_ENABLED=0`
+- 车上默认值: `TIMED_STOP_SCAN_ENABLED=0`, `CRUISE_SPEED=22`, `TIMED_STOP_SCAN_SPEED=15`, `TIMED_STOP_SCAN_DRIVE_SECONDS=0.8`, `BOUNDARY_MIN_BLACK_SENSORS=1`, `MOTION_GUARD_POLL_SECONDS=0.005`, `LINE_FOLLOW_ENABLED=0`
 
 ## 联系信息
 

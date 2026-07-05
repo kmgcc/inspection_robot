@@ -56,7 +56,7 @@ class Turn90Config:
     target_degrees: float = 90.0
     tolerance_degrees: float = 2.0
     sample_seconds: float = 0.01
-    bias_samples: int = 20
+    bias_samples: int = 30
     max_correction_attempts: int = 7
     min_pulse_seconds: float = 0.025
     max_pulse_seconds: float = 0.25
@@ -235,14 +235,12 @@ class MPU6050Gyro:
 
     def calibrate_gyro_bias(self, *, samples: int, sample_seconds: float) -> dict[str, float]:
         count = max(1, int(samples))
-        total = {"x": 0.0, "y": 0.0, "z": 0.0}
+        readings: list[dict[str, float]] = []
         for _ in range(count):
-            gyro = self.read_gyro_dps()
-            for axis in total:
-                total[axis] += gyro[axis]
+            readings.append(self.read_gyro_dps())
             if sample_seconds > 0:
                 time.sleep(sample_seconds)
-        return {axis: total[axis] / count for axis in total}
+        return _robust_gyro_bias_average(readings)
 
     def _read_signed_register_pair(self, high_register: int) -> int:
         high = self.bus.read_byte_data(self.address, high_register)
@@ -285,7 +283,7 @@ def turn_90_with_result(
         target_degrees=float(os.environ.get("MPU6050_TURN_TARGET_DEGREES", "90.0")),
         tolerance_degrees=float(os.environ.get("MPU6050_TURN_TOLERANCE_DEGREES", "2.0")),
         sample_seconds=float(os.environ.get("MPU6050_TURN_SAMPLE_SECONDS", "0.01")),
-        bias_samples=int(os.environ.get("MPU6050_TURN_BIAS_SAMPLES", "20")),
+        bias_samples=int(os.environ.get("MPU6050_TURN_BIAS_SAMPLES", "30")),
         max_correction_attempts=int(os.environ.get("MPU6050_TURN_MAX_CORRECTIONS", "9")),
         min_pulse_seconds=float(os.environ.get("MPU6050_TURN_MIN_PULSE_SECONDS", "0.025")),
         max_pulse_seconds=float(os.environ.get("MPU6050_TURN_MAX_PULSE_SECONDS", "0.35")),
@@ -576,6 +574,20 @@ def _correction_speed(config: Turn90Config) -> int:
     return max(1, min(100, int(config.correction_speed)))
 
 
+def _robust_gyro_bias_average(readings: list[dict[str, float]]) -> dict[str, float]:
+    if not readings:
+        return {"x": 0.0, "y": 0.0, "z": 0.0}
+    sample_count = len(readings)
+    trim_each_side = 1 if sample_count >= 8 else 0
+    average: dict[str, float] = {}
+    for axis in ("x", "y", "z"):
+        values = sorted(float(reading.get(axis, 0.0)) for reading in readings)
+        if trim_each_side:
+            values = values[trim_each_side:-trim_each_side]
+        average[axis] = sum(values) / max(1, len(values))
+    return average
+
+
 def _turn_result(
     ok: bool,
     direction: str,
@@ -733,7 +745,7 @@ def _stable_gyro_bias_candidate(
         if sample_seconds > 0:
             time.sleep(sample_seconds)
     axes = ("x", "y", "z")
-    average = {axis: sum(reading[axis] for reading in readings) / count for axis in axes}
+    average = _robust_gyro_bias_average(readings)
     max_span = max(max(reading[axis] for reading in readings) - min(reading[axis] for reading in readings) for axis in axes)
     max_abs_average = max(abs(value) for value in average.values())
     if max_span > _status_bias_max_span_dps() or max_abs_average > _status_bias_max_abs_dps():
