@@ -1329,7 +1329,7 @@ class RobotRuntime:
         shelf_id = str(missing[0].get("shelf_id") or self.store.snapshot().get("current_shelf") or "当前货架")
         if len(missing) > 3:
             names.append(f"等 {len(missing)} 项")
-        spoken = f"检测到 {shelf_id} 缺少 {'、'.join(names)}。"
+        spoken = f"检测到 {_spoken_shelf_id(shelf_id)} 缺少 {'、'.join(names)}。"
         payload, status = start_spoken_message(self.store.root, spoken)
         error = None if status == 200 else str(payload.get("error", "speech alert failed"))
         self.store.record_audio_cue("missing_item", spoken if error is None else f"缺货语音报警失败: {error}", error)
@@ -2503,6 +2503,28 @@ def _optional_text(value: object) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+_DIGIT_SPOKEN = {
+    "0": "零",
+    "1": "一",
+    "2": "二",
+    "3": "三",
+    "4": "四",
+    "5": "五",
+    "6": "六",
+    "7": "七",
+    "8": "八",
+    "9": "九",
+}
+
+
+def _spoken_shelf_id(shelf_id: str) -> str:
+    text = shelf_id.strip()
+    if len(text) >= 2 and text[0].isalpha() and text[1:].isdigit():
+        number = "".join(_DIGIT_SPOKEN.get(char, char) for char in text[1:])
+        return f"{text[0].upper()}区{number}号货架"
+    return text or "当前货架"
 
 
 def _cells_from_step(step: RouteStep) -> list[Cell]:

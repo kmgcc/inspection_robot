@@ -907,7 +907,7 @@ class RuntimeTest(unittest.TestCase):
         self.assertNotIn("high_priority_alarm", fake_alarm.calls)
         self.assertNotIn("warning", fake_alarm.calls)
         speak.assert_called_once()
-        self.assertIn("检测到 A1 缺少", speak.call_args.args[1])
+        self.assertIn("检测到 A区一号货架 缺少", speak.call_args.args[1])
         self.assertEqual(store.snapshot()["audio"]["last_cue"], "missing_item")
 
     def test_camera_failure_requests_manual_cycle_fallback_confirmation(self) -> None:
