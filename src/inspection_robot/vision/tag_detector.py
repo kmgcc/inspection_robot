@@ -361,8 +361,79 @@ def _detect_object_presence_regions(
                 regions.append(ObjectPresenceResult(candidate_bbox, (x0 + box_w / 2.0, y0 + box_h / 2.0), confidence))
                 if len(regions) >= max(1, max_results):
                     break
+        if len(regions) < max(1, max_results):
+            for color_region in _color_anchor_presence_regions(
+                crop,
+                cv2,
+                offset_x=offset_x,
+                offset_y=offset_y,
+                exclude_bboxes=(exclude_bboxes or []) + [item.bbox for item in regions],
+                max_results=max(1, max_results) - len(regions),
+            ):
+                regions.append(color_region)
     except Exception:
         return []
+    return regions
+
+
+def _color_anchor_presence_regions(
+    frame: Any,
+    cv2: Any,
+    *,
+    offset_x: int = 0,
+    offset_y: int = 0,
+    exclude_bboxes: list[tuple[int, int, int, int]] | None = None,
+    max_results: int = 3,
+) -> list[ObjectPresenceResult]:
+    try:
+        height, width = frame.shape[:2]
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        mask = cv2.inRange(hsv, (0, 80, 50), (179, 255, 255))
+        contours = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[-2]
+    except Exception:
+        return []
+    regions: list[ObjectPresenceResult] = []
+    min_y = int(height * 0.30)
+    for contour in sorted(contours, key=cv2.contourArea, reverse=True):
+        area = float(cv2.contourArea(contour))
+        if area < 220.0:
+            continue
+        x, y, box_w, box_h = cv2.boundingRect(contour)
+        if y < min_y or box_w < 6 or box_h < 12:
+            continue
+        if box_w > width * 0.45 or box_h > height * 0.65:
+            continue
+        if box_h >= box_w * 1.35:
+            card_x = x - 24
+            card_y = y - 18
+            card_w = max(150, min(230, box_w * 7))
+            card_h = max(110, int(box_h * 1.35))
+        else:
+            card_w = 150
+            card_h = 120
+            card_x = x + box_w // 2 - card_w // 2
+            card_y = y + box_h // 2 - card_h // 2
+        x0 = max(0, min(card_x, width - 1))
+        y0 = max(0, min(card_y, height - 1))
+        x1 = max(0, min(card_x + card_w, width))
+        y1 = max(0, min(card_y + card_h, height))
+        if x1 <= x0 or y1 <= y0:
+            continue
+        candidate_bbox = (x0 + offset_x, y0 + offset_y, x1 - x0, y1 - y0)
+        if _bbox_overlaps_any(candidate_bbox, exclude_bboxes or [], min_iou=0.18):
+            continue
+        if _bbox_overlaps_any(candidate_bbox, [item.bbox for item in regions], min_iou=0.35):
+            continue
+        confidence = round(min(0.88, max(0.42, area / 2400.0)), 3)
+        regions.append(
+            ObjectPresenceResult(
+                candidate_bbox,
+                (candidate_bbox[0] + candidate_bbox[2] / 2.0, candidate_bbox[1] + candidate_bbox[3] / 2.0),
+                confidence,
+            )
+        )
+        if len(regions) >= max(1, max_results):
+            break
     return regions
 
 

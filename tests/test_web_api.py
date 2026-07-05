@@ -251,6 +251,12 @@ class FakeRuntime:
     def stop(self) -> None:
         self.calls.append("stop")
 
+    def request_manual_override(self) -> None:
+        self.calls.append("request_manual_override")
+
+    def release_manual_override(self) -> None:
+        self.calls.append("release_manual_override")
+
     def _settle(self) -> None:
         self.calls.append("settle")
 

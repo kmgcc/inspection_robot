@@ -322,6 +322,46 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
 
         self.assertIn("normal", fake_alarm.calls)
 
+    def test_request_manual_override_clears_stop_event_for_manual_turn(self) -> None:
+        """R1 fix: request_manual_override clears _stop_event so the IMU
+        closed-loop 90° turn's should_abort callback returns False. Without
+        this, manual turn_left_90 / turn_right_90 abort before motion."""
+
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        fake_imu = FakeImuTurnAbortTracker()
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=self.make_config(),
+            motion_adapter=fake_motion,
+            sensor_adapter=FakeSensors(distances=[], tapes=[]),
+            alarm_adapter=FakeAlarm(),
+            gimbal_adapter=FakeGimbal(),
+            detection_provider=fake_detection_provider,
+            imu_adapter=fake_imu,
+        )
+        # Simulate the old broken state: stop() set _stop_event.
+        runtime._stop_event.set()
+
+        runtime.request_manual_override()
+        try:
+            self.assertFalse(runtime._stop_event.is_set())
+            runtime.turn_90_closed_loop("left")
+        finally:
+            runtime.release_manual_override()
+
+        # The IMU turn's should_abort callback must have been polled and every
+        # poll must be False — that is the R1 invariant.
+        self.assertTrue(len(fake_imu.abort_traces) >= 1)
+        for trace in fake_imu.abort_traces:
+            self.assertTrue(trace, "should_abort was never polled")
+            self.assertTrue(
+                all(v is False for v in trace),
+                f"should_abort returned True during manual turn: {trace}",
+            )
+
 
 class FakeMotion:
     def __init__(self) -> None:
@@ -429,6 +469,40 @@ class FakeMotionSensorImu:
 
     def read_motion_sample(self) -> dict[str, object]:
         return dict(self.sample)
+
+
+class FakeImuTurnAbortTracker:
+    """Records the should_abort callback's value at every poll so tests can
+    assert the manual turn did not self-abort (R1 regression check)."""
+
+    def __init__(self) -> None:
+        self.abort_traces: list[list[bool]] = []
+
+    def turn_90_with_result(
+        self,
+        direction: str,
+        motion_adapter: FakeMotion,
+        speed: int,
+        fallback_seconds: float,
+        *,
+        should_abort=None,
+    ) -> dict[str, object]:
+        trace: list[bool] = []
+        if callable(should_abort):
+            for _ in range(3):
+                trace.append(bool(should_abort()))
+        self.abort_traces.append(trace)
+        motion_adapter.stop()
+        return {
+            "ok": True,
+            "source": "fake_imu",
+            "direction": direction,
+            "target_degrees": 90.0,
+            "final_degrees": 90.0,
+            "error_degrees": 0.0,
+            "attempts": 1,
+            "message": "converged",
+        }
 
 
 def fake_detection_provider(**_: object) -> Iterator[dict[str, object]]:

@@ -288,9 +288,16 @@ def create_app(root: Path | None = None) -> Flask:
         duration = _float_payload(payload, "duration_seconds", float(default_dur))
         try:
             _stop_test_session()
-            runtime.stop()
-            _clear_motion_stop(runtime)
-            _run_manual_command(command, speed=speed, duration_seconds=duration, runtime=runtime)
+            # R1 fix: request_manual_override halts the patrol loop AND clears
+            # _stop_event afterwards, so the IMU closed-loop 90° turn (whose
+            # should_abort reads _stop_event) does not self-abort on its first
+            # check. The old runtime.stop() + _clear_motion_stop() path left
+            # _stop_event set, so turn_left_90/turn_right_90 never even pulsed.
+            runtime.request_manual_override()
+            try:
+                _run_manual_command(command, speed=speed, duration_seconds=duration, runtime=runtime)
+            finally:
+                runtime.release_manual_override()
         except (RobotHardwareError, ValueError) as exc:
             store.record_run_mode("robot", False)
             store.record_robot_status("ERROR", str(exc))
@@ -320,17 +327,22 @@ def create_app(root: Path | None = None) -> Flask:
         if direction not in {"left", "right", "cw", "ccw"}:
             return jsonify({"ok": False, "error": f"unknown turn direction: {direction}"}), 400
         try:
-            runtime.stop()
-            active_motion = getattr(runtime, "motion", motion)
-            _clear_motion_stop(runtime)
-            if direction in {"left", "ccw"}:
-                active_motion.rotate_left_slow(speed=speed, duration_seconds=duration)
-            else:
-                active_motion.rotate_right_slow(speed=speed, duration_seconds=duration)
-            active_motion.stop()
-            settler = getattr(runtime, "_settle", None)
-            if callable(settler):
-                settler()
+            # R1 fix: same manual-override handshake as /api/control, so the
+            # chassis is parked cleanly and the patrol loop can't race the
+            # calibration turn.
+            runtime.request_manual_override()
+            try:
+                active_motion = getattr(runtime, "motion", motion)
+                if direction in {"left", "ccw"}:
+                    active_motion.rotate_left_slow(speed=speed, duration_seconds=duration)
+                else:
+                    active_motion.rotate_right_slow(speed=speed, duration_seconds=duration)
+                active_motion.stop()
+                settler = getattr(runtime, "_settle", None)
+                if callable(settler):
+                    settler()
+            finally:
+                runtime.release_manual_override()
         except RobotHardwareError as exc:
             store.record_run_mode("robot", False)
             store.record_robot_status("ERROR", str(exc))
@@ -547,14 +559,6 @@ def create_app(root: Path | None = None) -> Flask:
                 active_motion.stop()
         else:
             raise ValueError(f"unknown manual command: {command}")
-
-    def _clear_motion_stop(runtime: object | None = None) -> None:
-        active_motion = getattr(runtime, "motion", motion) if runtime is not None else motion
-        clearer = getattr(active_motion, "clear_stop", None)
-        if callable(clearer):
-            clearer()
-            return
-        motion.clear_stop()
 
     def _stop_test_session() -> None:
         session = app.config.get("TEST_SESSION")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from typing import Iterator
@@ -86,20 +87,57 @@ class FakeGuard:
         self.deviation = deviation
         self.last_rate_dps = rate
         self.reset_count = 0
+        self.update_count = 0
+        self.last_sample_at: float | None = None
 
     def update(self) -> float:
+        self.update_count += 1
+        # Mirror the real StraightHeadingGuard: every successful update stamps
+        # last_sample_at so the freshness gate in _apply_heading_hold can tell
+        # whether a new I2C sample is available.
+        self.last_sample_at = time.monotonic()
         return self.deviation
 
     def reset(self) -> None:
         self.reset_count += 1
+        self.last_sample_at = None
 
 
 class FakeImu:
     def __init__(self, guard: FakeGuard | None) -> None:
         self.guard = guard
+        self.turn_calls: list[tuple[str, int, float, list[bool]]] = []
 
     def open_straight_heading_guard(self) -> FakeGuard | None:
         return self.guard
+
+    def turn_90_with_result(
+        self,
+        direction: str,
+        motion_adapter: FakeMotion,
+        speed: int,
+        fallback_seconds: float,
+        *,
+        should_abort=None,
+    ) -> dict[str, object]:
+        # Record the should_abort callback's value at every poll so tests can
+        # assert the manual turn did not self-abort (R1 regression check).
+        abort_trace: list[bool] = []
+        if callable(should_abort):
+            for _ in range(3):
+                abort_trace.append(bool(should_abort()))
+        self.turn_calls.append((direction, speed, fallback_seconds, abort_trace))
+        motion_adapter.stop()
+        return {
+            "ok": True,
+            "source": "fake_imu",
+            "direction": direction,
+            "target_degrees": 90.0,
+            "final_degrees": 90.0,
+            "error_degrees": 0.0,
+            "attempts": 1,
+            "message": "converged",
+        }
 
 
 def no_detection_provider(**_: object) -> Iterator[dict[str, object]]:
@@ -312,6 +350,289 @@ class CruiseRuntimeTest(unittest.TestCase):
         self.assertIn((None, "item_07"), keys)
         self.assertEqual(len(pending), 2)
         self.assertEqual(scanner.poll_new(), [])  # drained
+
+    # --- R1/R3/R4/R5 regression tests ------------------------------------ #
+
+    def test_cruise_deadband_pure_forward(self) -> None:
+        """Inside the heading-hold deadband the cruise tick must issue only
+        move_forward — never rotate_* and never an unexpected stop. R3 root
+        cause was that heading hold fired on every tick and its rotate_*
+        blended with the still-energised forward axis into an arc."""
+
+        guard = FakeGuard(deviation=0.0)
+        runtime, motion, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                smooth_cruise_enabled=True,
+                heading_hold_enabled=True,
+                heading_hold_tolerance_deg=3.0,
+                cruise_tick_seconds=0,
+                cruise_log_interval_seconds=0,
+                action_settle_seconds=0,
+            ),
+            imu=FakeImu(guard),
+        )
+
+        for _ in range(5):
+            runtime._drive_cruise_step((1, 1, 1, 1))
+
+        self.assertTrue(motion.calls.count("move_forward") >= 5)
+        self.assertNotIn("rotate_left", motion.calls)
+        self.assertNotIn("rotate_right", motion.calls)
+        # keep_running=True ⇒ no trailing stop between ticks.
+        self.assertNotIn("stop", motion.calls)
+
+    def test_cruise_no_new_imu_sample_no_repeat_correction(self) -> None:
+        """If the guard's last_sample_at is too recent (no new I2C sample),
+        _apply_heading_hold must skip entirely — R4 freshness gate."""
+
+        guard = FakeGuard(deviation=6.0, rate=0.0)
+        runtime, motion, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                heading_hold_enabled=True,
+                heading_hold_tolerance_deg=3.0,
+                heading_hold_min_sample_interval_seconds=0.5,
+                heading_hold_min_interval_seconds=0.0,
+                action_settle_seconds=0,
+            ),
+            imu=FakeImu(guard),
+        )
+        # Simulate: the guard just produced a sample, so it's too fresh.
+        guard.last_sample_at = time.monotonic()
+
+        runtime._apply_heading_hold()
+
+        self.assertNotIn("rotate_left", motion.calls)
+        self.assertNotIn("rotate_right", motion.calls)
+        self.assertEqual(guard.update_count, 0)
+
+    def test_cruise_correction_then_straight_resets(self) -> None:
+        """After one heading-hold correction the integrator is reset (R2), so
+        once deviation drops back into the deadband the very next tick is pure
+        move_forward with no rotate_* residue (R3)."""
+
+        guard = FakeGuard(deviation=6.0, rate=0.0)
+        runtime, motion, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                smooth_cruise_enabled=True,
+                heading_hold_enabled=True,
+                heading_hold_tolerance_deg=3.0,
+                heading_hold_min_interval_seconds=0.0,
+                heading_hold_max_consecutive=5,
+                cruise_tick_seconds=0,
+                cruise_log_interval_seconds=0,
+                action_settle_seconds=0,
+            ),
+            imu=FakeImu(guard),
+        )
+
+        runtime._drive_cruise_step((1, 1, 1, 1))
+        self.assertIn("rotate_right", motion.calls)
+        self.assertGreaterEqual(guard.reset_count, 1)
+
+        motion.calls.clear()
+        guard.deviation = 0.0  # back inside the deadband
+        runtime._drive_cruise_step((1, 1, 1, 1))
+
+        self.assertIn("move_forward", motion.calls)
+        self.assertNotIn("rotate_left", motion.calls)
+        self.assertNotIn("rotate_right", motion.calls)
+
+    def test_cruise_correction_sign_convention(self) -> None:
+        """Positive deviation ⇒ rotate_right; with invert ⇒ rotate_left.
+        Positive rate (worsening) with strong damping reduces effective but
+        keeps the same sign, so the correction still fires."""
+
+        # Positive deviation, no rate → rotate_right.
+        guard = FakeGuard(deviation=6.0, rate=0.0)
+        runtime, motion, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                heading_hold_enabled=True,
+                heading_hold_tolerance_deg=3.0,
+                heading_hold_rate_damping=0.0,
+                heading_hold_min_interval_seconds=0.0,
+                heading_hold_max_consecutive=5,
+                action_settle_seconds=0,
+            ),
+            imu=FakeImu(guard),
+        )
+        runtime._apply_heading_hold()
+        self.assertIn("rotate_right", motion.calls)
+        self.assertNotIn("rotate_left", motion.calls)
+
+        # Invert flips the direction.
+        guard2 = FakeGuard(deviation=6.0, rate=0.0)
+        runtime2, motion2, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                heading_hold_enabled=True,
+                heading_hold_tolerance_deg=3.0,
+                heading_hold_rate_damping=0.0,
+                heading_hold_invert=True,
+                heading_hold_min_interval_seconds=0.0,
+                heading_hold_max_consecutive=5,
+                action_settle_seconds=0,
+            ),
+            imu=FakeImu(guard2),
+        )
+        runtime2._apply_heading_hold()
+        self.assertIn("rotate_left", motion2.calls)
+        self.assertNotIn("rotate_right", motion2.calls)
+
+        # Negative deviation → rotate_left (no invert).
+        guard3 = FakeGuard(deviation=-6.0, rate=0.0)
+        runtime3, motion3, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                heading_hold_enabled=True,
+                heading_hold_tolerance_deg=3.0,
+                heading_hold_rate_damping=0.0,
+                heading_hold_min_interval_seconds=0.0,
+                heading_hold_max_consecutive=5,
+                action_settle_seconds=0,
+            ),
+            imu=FakeImu(guard3),
+        )
+        runtime3._apply_heading_hold()
+        self.assertIn("rotate_left", motion3.calls)
+        self.assertNotIn("rotate_right", motion3.calls)
+
+    def test_cruise_keep_running_rewrites_four_wheels(self) -> None:
+        """keep_running=True skips the trailing stop but every chunk still
+        calls move_forward so the vendor library rewrites all four wheels.
+        This is the invariant that prevents the 'some wheels stop, others
+        keep going' failure mode."""
+
+        runtime, motion, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                smooth_cruise_enabled=True,
+                cruise_tick_seconds=0.1,
+                motion_guard_poll_seconds=0.03,
+                action_settle_seconds=0,
+            ),
+            imu=FakeImu(None),  # no heading guard → pure forward
+        )
+
+        runtime._run_timed_motion(
+            motion.move_forward_slow,
+            speed=runtime.config.cruise_speed,
+            duration_seconds=runtime.config.cruise_tick_seconds,
+            watch_boundary=True,  # required so the chunk loop runs
+            heading_hold=False,
+            keep_running=True,
+        )
+
+        # 0.1s / 0.03s ≈ 4 chunks → ≥3 move_forward calls.
+        self.assertGreaterEqual(motion.calls.count("move_forward"), 3)
+        self.assertNotIn("stop", motion.calls)
+
+    # --- R1 manual override regression ---------------------------------- #
+
+    def test_manual_override_takes_over_immediately(self) -> None:
+        """request_manual_override clears _stop_event so the IMU closed-loop
+        turn's should_abort callback returns False — R1 regression. Also the
+        heading-hold consecutive counter is reset so a stale correction can't
+        bleed into the manual command."""
+
+        guard = FakeGuard(deviation=0.0)
+        runtime, motion, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                smooth_cruise_enabled=True,
+                heading_hold_enabled=True,
+                heading_hold_tolerance_deg=3.0,
+                cruise_tick_seconds=0,
+                action_settle_seconds=0,
+            ),
+            imu=FakeImu(guard),
+        )
+        # Simulate the old broken path: stop() set _stop_event and it was
+        # never cleared.
+        runtime._stop_event.set()
+
+        runtime.request_manual_override()
+
+        self.assertFalse(runtime._stop_event.is_set())
+        # _manual_override stays armed during the manual command so the patrol
+        # loop (if it were still alive) would skip cruise ticks; release clears it.
+        self.assertTrue(runtime._manual_override.is_set())
+        # The motion module's stop was called to park the chassis.
+        self.assertIn("stop", motion.calls)
+
+        motion.calls.clear()
+        # Now the manual turn must not self-abort.
+        result = runtime.turn_90_closed_loop("left")
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result["ok"])  # type: ignore[index]
+        imu = runtime.imu  # type: ignore[attr-defined]
+        for _direction, _speed, _dur, abort_trace in imu.turn_calls:
+            self.assertTrue(all(v is False for v in abort_trace),
+                            f"should_abort returned True during manual turn: {abort_trace}")
+        # And release clears the override flag.
+        runtime.release_manual_override()
+        self.assertFalse(runtime._manual_override.is_set())
+
+    def test_cruise_resume_after_boundary_turn_clean(self) -> None:
+        """After a boundary 90° turn the heading guard is reset (R2) and the
+        first cruise tick afterwards is pure move_forward — no rotate_*
+        residue from the turn."""
+
+        guard = FakeGuard(deviation=0.0)
+        runtime, motion, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                smooth_cruise_enabled=True,
+                heading_hold_enabled=True,
+                heading_hold_tolerance_deg=3.0,
+                cruise_tick_seconds=0,
+                cruise_log_interval_seconds=0,
+                action_settle_seconds=0,
+                boundary_cooldown_seconds=0,
+            ),
+            imu=FakeImu(guard),
+        )
+
+        # Simulate the boundary turn: _reset_heading_guard + _zupt_recalibrate.
+        runtime._reset_heading_guard()
+        runtime._drive_cruise_step((1, 1, 1, 1))
+
+        self.assertIn("move_forward", motion.calls)
+        self.assertNotIn("rotate_left", motion.calls)
+        self.assertNotIn("rotate_right", motion.calls)
+
+    def test_manual_turn_left_right_regression(self) -> None:
+        """Regression for ba52c92: manual turn_left_90 / turn_right_90 must
+        actually pulse the IMU turn — should_abort must be False throughout.
+        This is the test that R1 broke: the old runtime.stop() left
+        _stop_event set, so imu_turn aborted before motion."""
+
+        guard = FakeGuard(deviation=0.0)
+        runtime, _, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                heading_hold_enabled=True,
+                heading_hold_tolerance_deg=3.0,
+                turn_speed=22,
+                turn_90_seconds=0.85,
+                action_settle_seconds=0,
+            ),
+            imu=FakeImu(guard),
+        )
+
+        for direction in ("left", "right"):
+            runtime.request_manual_override()
+            try:
+                result = runtime.turn_90_closed_loop(direction)
+            finally:
+                runtime.release_manual_override()
+
+            self.assertIsNotNone(result)
+            self.assertTrue(result["ok"])  # type: ignore[index]
+            self.assertEqual(result["direction"], direction)  # type: ignore[index]
+
+        imu = runtime.imu  # type: ignore[attr-defined]
+        self.assertEqual(len(imu.turn_calls), 2)
+        for direction, _speed, _dur, abort_trace in imu.turn_calls:
+            self.assertTrue(abort_trace, "should_abort was never polled")
+            self.assertTrue(
+                all(v is False for v in abort_trace),
+                f"should_abort returned True during {direction} turn: {abort_trace}",
+            )
 
 
 if __name__ == "__main__":
