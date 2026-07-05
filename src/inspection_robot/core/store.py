@@ -295,7 +295,7 @@ class InspectionStore:
 
     def record_scan_result(self, shelf_id: str, detected_items: list[str], frame_id: str | None = None) -> list[EventRecord]:
         with self.lock:
-            unique_items = self._unique_item_ids(detected_items)
+            unique_items = self._unique_item_ids(rules.normalize_detected_item_ids(detected_items, self.tag_map))
             self.state.scan = {"active": False, "shelf_id": shelf_id, "detected_items": unique_items, "frame_id": frame_id, "detections": []}
             self.state.current_shelf = shelf_id
             previous_items = self._shelf_item_ids_locked(shelf_id)
@@ -616,16 +616,24 @@ class InspectionStore:
     def _item_ids_from_detections(self, detections: list[Mapping[str, JsonValue]]) -> list[str]:
         item_ids: list[str] = []
         for detection in detections:
-            item_id = detection.get("item_id")
-            if item_id is not None:
-                item_ids.append(str(item_id))
-                continue
             tag_id = detection.get("tag_id")
-            if tag_id is None:
+            if tag_id is not None:
+                info = self.tag_map.get(str(tag_id))
+                if info is not None:
+                    if str(info.get("kind", "item")) == "item" and info.get("item_id") is not None:
+                        item_ids.append(str(info["item_id"]))
+                    continue
+                try:
+                    numeric_id = int(str(tag_id))
+                except ValueError:
+                    pass
+                else:
+                    if 101 <= numeric_id <= 120:
+                        continue
+            item_id = detection.get("item_id")
+            if item_id is None:
                 continue
-            info = self.tag_map.get(str(tag_id))
-            if info is not None and str(info.get("kind", "item")) == "item" and info.get("item_id") is not None:
-                item_ids.append(str(info["item_id"]))
+            item_ids.extend(rules.normalize_detected_item_ids([str(item_id)], self.tag_map))
         return self._unique_item_ids(item_ids)
 
     def _unique_item_ids(self, item_ids: list[str]) -> list[str]:
@@ -656,9 +664,6 @@ class InspectionStore:
         return unique
 
     def _detection_identity(self, detection: Mapping[str, JsonValue]) -> tuple[str, str] | None:
-        item_id = detection.get("item_id")
-        if item_id is not None:
-            return ("item", str(item_id))
         tag_id = detection.get("tag_id")
         if tag_id is not None:
             info = self.tag_map.get(str(tag_id))
@@ -667,7 +672,20 @@ class InspectionStore:
                     return ("item", str(info["item_id"]))
                 if str(info.get("kind")) == "shelf" and info.get("shelf_id") is not None:
                     return ("shelf", str(info["shelf_id"]))
+            try:
+                numeric_id = int(str(tag_id))
+            except ValueError:
+                pass
+            else:
+                if 101 <= numeric_id <= 120:
+                    return ("shelf_tag", str(tag_id))
             return ("tag", str(tag_id))
+        item_id = detection.get("item_id")
+        if item_id is not None:
+            normalized = rules.normalize_detected_item_ids([str(item_id)], self.tag_map)
+            if normalized:
+                return ("item", normalized[0])
+            return None
         ocr_text = detection.get("ocr_text")
         if ocr_text is not None and str(ocr_text).strip():
             return ("ocr", str(ocr_text).strip().casefold())
@@ -705,11 +723,11 @@ class InspectionStore:
                     shelf_id=shelf_id,
                     expected_shelf=shelf_id,
                     priority=max(int(info.get("priority", 1)) if info is not None else 1, 1),
-                    status="warning",
+                    status="info",
                     message=f"{shelf_id} 货架新增 {item_name}。",
                     source="inventory_diff",
                     frame_id=frame_id,
-                    evidence={"change": "added", "item_id": item_id},
+                    evidence={"identity_kind": "item", "change": "added", "item_id": item_id},
                 )
             )
         for item_id in sorted(previous - current):
@@ -727,7 +745,7 @@ class InspectionStore:
                     message=f"{shelf_id} 货架缺失 {item_name}。",
                     source="inventory_diff",
                     frame_id=frame_id,
-                    evidence={"change": "missing", "item_id": item_id},
+                    evidence={"identity_kind": "item", "change": "missing", "item_id": item_id},
                 )
             )
         return events

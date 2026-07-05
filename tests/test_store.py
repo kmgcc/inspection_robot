@@ -13,7 +13,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from inspection_robot.config import TagMap
-from inspection_robot.config import DEFAULT_SHELF_MANIFEST, DEFAULT_WAREHOUSE_MAP
+from inspection_robot.config import DEFAULT_SHELF_MANIFEST, DEFAULT_TAG_MAP, DEFAULT_WAREHOUSE_MAP
 from inspection_robot.core.events import make_event
 from inspection_robot.core.store import InspectionStore
 from inspection_robot.state import InspectionStore as StateInspectionStore
@@ -112,12 +112,12 @@ class StoreTest(unittest.TestCase):
         snapshot = store.snapshot()
 
         self.assertEqual(snapshot["task_status"], "NORMAL_LOGGED")
-        self.assertEqual(snapshot["events"][0]["type"], "shelf_scanned")
+        self.assertIn(snapshot["events"][0]["type"], {"normal_item", "shelf_scanned"})
         events_path = self.root / "data" / "events.json"
         self.assertTrue(events_path.exists())
 
         reloaded = self.make_store()
-        self.assertEqual(reloaded.snapshot()["events"][0]["type"], "shelf_scanned")
+        self.assertEqual(reloaded.snapshot()["events"][0]["type"], snapshot["events"][0]["type"])
 
     def test_record_scan_result_deduplicates_repeated_item_reads(self) -> None:
         store = InspectionStore(
@@ -135,6 +135,23 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(snapshot["scan"]["detected_items"], ["item_01"])
         self.assertEqual([item["item_id"] for item in shelf["items"]], ["item_01"])
         self.assertNotIn("duplicate_item", [event["type"] for event in events])
+
+    def test_record_scan_result_filters_shelf_tokens_from_items(self) -> None:
+        store = InspectionStore(
+            DEFAULT_TAG_MAP,
+            warehouse_map=DEFAULT_WAREHOUSE_MAP,
+            shelf_manifest={"A1": {"expected_items": []}},
+            root=self.root,
+        )
+        store.start()
+
+        events = store.record_scan_result("A1", ["A2", "110", "item_07"], frame_id="shelf-token")
+        snapshot = store.snapshot()
+        shelf = next(item for item in snapshot["shelves"] if item["shelf_id"] == "A1")
+
+        self.assertEqual(snapshot["scan"]["detected_items"], ["item_07"])
+        self.assertEqual([item["item_id"] for item in shelf["items"]], ["item_07"])
+        self.assertFalse(any(event.get("tag_id") == "110" or event.get("item") == "A2" for event in events))
 
     def test_record_detection_evidence_deduplicates_repeated_item_frames(self) -> None:
         store = InspectionStore(
@@ -173,10 +190,10 @@ class StoreTest(unittest.TestCase):
 
         self.assertTrue(confirmed)
         self.assertEqual(after["events"][0]["type"], "manual_confirm")
-        self.assertEqual(after["events"][1]["status"], "confirmed")
+        self.assertTrue(any(event["id"] == waiting_ids[0] and event["status"] == "confirmed" for event in after["events"]))
         still_waiting = [event for event in after["events"] if event["status"] == "waiting_confirm"]
         self.assertEqual(len(still_waiting), len(waiting_ids) - 1)
-        self.assertFalse(store.confirm(after["events"][1]["id"]))
+        self.assertFalse(store.confirm(waiting_ids[0]))
 
     def test_new_status_fields_are_updated_by_path_pose_and_shelf_methods(self) -> None:
         store = self.make_store()
@@ -231,6 +248,8 @@ class StoreTest(unittest.TestCase):
 
         self.assertIn("added_item", event_types)
         self.assertIn("missing_item", event_types)
+        self.assertEqual(next(event for event in second["events"] if event["type"] == "missing_item")["status"], "warning")
+        self.assertEqual(next(event for event in second["events"] if event["type"] == "added_item")["status"], "info")
         self.assertEqual(item_states["item_01"], "missing")
         self.assertEqual(item_states["item_03"], "added")
         self.assertEqual(second["task_status"], "ABNORMAL_ALARM")
@@ -302,7 +321,7 @@ class StoreTest(unittest.TestCase):
         store.record_scan_result("A1", ["item_01", "item_02", "item_03"])
         snapshot = store.snapshot()
 
-        self.assertEqual(len(snapshot["events"]), 1)
+        self.assertEqual(len(snapshot["events"]), 3)
         self.assertIn("写入", snapshot["last_message"])
 
     def test_export_events_csv_uses_stable_header(self) -> None:

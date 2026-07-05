@@ -60,6 +60,7 @@ let latestVideoFrameId = null;
 let statusSeenOnce = false;
 const notifiedEventIds = new Set();
 const INVENTORY_CHANGE_TYPES = new Set(["added_item", "missing_item", "wrong_shelf", "duplicate_item"]);
+const SHELF_ITEM_EVENT_TYPES = new Set(["normal_item", "added_item", "missing_item", "unknown_item", "wrong_shelf", "duplicate_item"]);
 
 // ============================================================
 // 工具函数
@@ -813,7 +814,7 @@ function renderShelves(data, events) {
   const shelves = normalizeShelves(data, events);
   const SHELF_STATUS_LABELS = {
     pending: "未巡检", aligning: "对准中", scanning: "扫描中",
-    normal: "正常", abnormal: "变化", waiting_confirm: "异常",
+    normal: "正常", abnormal: "缺失报警", waiting_confirm: "待确认",
   };
   renderShelfSummary(shelves);
   for (const shelf of shelves) {
@@ -896,7 +897,8 @@ function shelfKpi(label, value) {
 
 function shelfStatusHint(shelf, labels) {
   if (shelf.status === "waiting_confirm") return `${shelf.anomaly_count || 1} 项异常待确认`;
-  if (shelf.status === "abnormal") return "库存变化需复核";
+  if (shelf.status === "abnormal") return "缺失物品已报警，巡逻继续";
+  if (shelf.changed) return "库存新增提示，巡逻继续";
   if (shelf.status === "normal") return "本轮扫描通过";
   if (shelf.status === "scanning") return "正在侧向扫描";
   if (shelf.status === "aligning") return "小车正在对准";
@@ -917,7 +919,7 @@ function normalizeShelves(data, events) {
     const id = normalizeShelfId(event.shelf_id || event.expected_shelf || event.zone);
     if (!id) continue;
     const shelf = shelves.get(id) || { shelf_id: id, status: "pending", anomaly_count: 0, items: [] };
-    if (event.item && event.item !== "-") mergeShelfEventItem(shelf, event);
+    if (event.item && event.item !== "-" && isShelfItemEvent(event)) mergeShelfEventItem(shelf, event);
     if (event.tag_id && event.type === "shelf_arrived") shelf.tag_id = event.tag_id;
     if (event.ocr_text) shelf.ocr_text = event.ocr_text;
     if (INVENTORY_CHANGE_TYPES.has(event.type)) shelf.changed = true;
@@ -933,6 +935,14 @@ function normalizeShelves(data, events) {
     shelves.set(id, shelf);
   }
   return Array.from(shelves.values()).sort((a, b) => a.shelf_id.localeCompare(b.shelf_id));
+}
+
+function isShelfItemEvent(event) {
+  if (!event) return false;
+  const evidence = event.evidence && typeof event.evidence === "object" ? event.evidence : {};
+  if (evidence.identity_kind === "shelf") return false;
+  if (event.type === "evidence_mismatch") return evidence.identity_kind === "item";
+  return SHELF_ITEM_EVENT_TYPES.has(event.type);
 }
 
 function mergeShelfEventItem(shelf, event) {

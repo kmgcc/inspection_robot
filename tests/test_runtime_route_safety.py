@@ -535,7 +535,7 @@ class FakeImuTurnAbortTracker:
 
 
 def fake_detection_provider(**_: object) -> Iterator[dict[str, object]]:
-    yield {"tag_id": "101", "kind": "shelf", "shelf_id": "A1", "marker_family": "TAG36H11", "ocr_text": "A1"}
+    yield {"tag_id": "118", "kind": "shelf", "shelf_id": "A1", "marker_family": "TAG36H11", "ocr_text": "A1"}
 
 
 if __name__ == "__main__":

@@ -298,7 +298,7 @@ class CruiseRuntimeTest(unittest.TestCase):
             enrich=runtime._enrich_detection,
             stop_event=runtime._stop_event,
         )
-        scanner._pending = [{"tag_id": "101", "kind": "shelf", "shelf_id": "A1"}]
+        scanner._pending = [{"tag_id": "118", "kind": "shelf", "shelf_id": "A1"}]
         runtime._cruise_scanner = scanner
 
         with mock.patch.object(runtime, "_perform_scan") as scan:
@@ -416,9 +416,9 @@ class CruiseRuntimeTest(unittest.TestCase):
             ),
         )
 
-        runtime._handle_moving_recognition({"shelf_id": "A1", "tag_id": "101"})
+        runtime._handle_moving_recognition({"shelf_id": "A1", "tag_id": "118"})
         # Same target still in frame on the next tick -> cooldown suppresses it.
-        runtime._handle_moving_recognition({"shelf_id": "A1", "tag_id": "101"})
+        runtime._handle_moving_recognition({"shelf_id": "A1", "tag_id": "118"})
 
         snapshot = runtime.store.snapshot()
         self.assertEqual(alarm.calls.count("recognition"), 1)
@@ -466,6 +466,28 @@ class CruiseRuntimeTest(unittest.TestCase):
         self.assertEqual(item_ids, {"item_07", "item_08"})
         self.assertFalse(any(event["shelf_id"] == "A2" and event["item"] in {"书本", "衣服"} for event in snapshot["events"]))
 
+    def test_moving_shelf_tag_identity_overrides_stale_item_payload(self) -> None:
+        runtime, _, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                smooth_cruise_enabled=True,
+                cruise_recognition_cooldown_seconds=0,
+                action_settle_seconds=0,
+            ),
+        )
+
+        runtime._handle_moving_recognition({"tag_id": "118"})
+        runtime._handle_moving_recognition({"item_id": "item_07", "tag_id": "7"})
+        runtime._handle_moving_recognition({"tag_id": "110", "item_id": "item_07"})
+
+        snapshot = runtime.store.snapshot()
+        shelf_a1 = next(item for item in snapshot["shelves"] if item["shelf_id"] == "A1")
+        shelf_a2 = next(item for item in snapshot["shelves"] if item["shelf_id"] == "A2")
+
+        self.assertEqual(snapshot["scan"]["shelf_id"], "A1")
+        self.assertEqual([item["item_id"] for item in shelf_a1["items"]], ["item_07"])
+        self.assertEqual(shelf_a2["items"], [])
+        self.assertEqual(snapshot["current_shelf"], "A2")
+
     def test_indicator_light_holds_orange_during_flash_window(self) -> None:
         runtime, _, alarm = self.make_runtime(
             config=RobotRuntimeConfig(
@@ -488,7 +510,7 @@ class CruiseRuntimeTest(unittest.TestCase):
 
     def test_cruise_vision_scanner_queues_resolved_recognitions(self) -> None:
         detections = [
-            {"tag_id": "101", "kind": "shelf", "shelf_id": "A1"},
+            {"tag_id": "118", "kind": "shelf", "shelf_id": "A1"},
             {"tag_id": "999"},  # unresolved -> ignored
             {"tag_id": "7", "kind": "item", "item_id": "item_07"},
         ]

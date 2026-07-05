@@ -17,6 +17,7 @@ def evaluate_shelf_scan(
     frame_id: str | None = None,
     skip_missing: bool = False,
 ) -> list[EventRecord]:
+    detected_items = normalize_detected_item_ids(detected_items, tag_map)
     expected = set(manifest.get(shelf_id, {"expected_items": []})["expected_items"])
     counts = Counter(detected_items)
     item_lookup = _items_by_item_id(tag_map)
@@ -36,6 +37,15 @@ def evaluate_shelf_scan(
                 frame_id=frame_id,
             )
         ]
+
+    if skip_missing:
+        for item_id in counts:
+            tag_entry = item_lookup.get(item_id)
+            if tag_entry is None:
+                continue
+            tag_id, info = tag_entry
+            events.append(_normal_item(tag_id, info, shelf_id, source, frame_id))
+        return events or [_first_pass_observed(shelf_id, source, frame_id)]
 
     for item_id in counts:
         tag_entry = item_lookup.get(item_id)
@@ -93,10 +103,11 @@ def evaluate_shelf_scan(
                     shelf_id=shelf_id,
                     expected_shelf=shelf_id,
                     priority=max(int(info.get("priority", 1)), 2),
-                    status="waiting_confirm",
+                    status="warning",
                     message=f"{shelf_id} 货架缺少 {info['name']}。",
                     source=source,
                     frame_id=frame_id,
+                    evidence={"identity_kind": "item", "change": "missing", "item_id": str(info.get("item_id", item_id))},
                 )
             )
 
@@ -117,6 +128,25 @@ def evaluate_shelf_scan(
             )
         ]
     return [_shelf_scanned(shelf_id, source, frame_id)]
+
+
+def normalize_detected_item_ids(detected_items: list[str], tag_map: TagMap) -> list[str]:
+    item_ids = {
+        str(info["item_id"])
+        for info in tag_map.values()
+        if str(info.get("kind", "item")) == "item" and "item_id" in info
+    }
+    shelf_ids = {
+        str(info["shelf_id"]).strip().upper()
+        for info in tag_map.values()
+        if str(info.get("kind")) == "shelf" and info.get("shelf_id") is not None
+    }
+    normalized: list[str] = []
+    for raw_item in detected_items:
+        item_id = _item_id_from_detected_token(str(raw_item).strip(), tag_map, item_ids, shelf_ids)
+        if item_id is not None:
+            normalized.append(item_id)
+    return normalized
 
 
 def evaluate_detection_evidence(
@@ -170,7 +200,7 @@ def evaluate_detection_evidence(
                     ocr_text=_text(detection, "ocr_text"),
                     color=_text(detection, "color"),
                     image_class=_text(detection, "image_class"),
-                    evidence={"mismatch": mismatch},
+                    evidence={"mismatch": mismatch, "identity_kind": "item", "item_id": str(info.get("item_id", ""))},
                 )
             )
     if shelf_evidence_seen and not detected_items and not events and skip_missing:
@@ -226,6 +256,38 @@ def wrong_zone(tag_id: str, info: TagInfo, *, current_shelf: str | None = None, 
     )
 
 
+def _item_id_from_detected_token(
+    token: str,
+    tag_map: TagMap,
+    item_ids: set[str],
+    shelf_ids: set[str],
+) -> str | None:
+    if not token:
+        return None
+    info = tag_map.get(token)
+    if info is not None:
+        kind = str(info.get("kind", "item"))
+        if kind == "item" and info.get("item_id") is not None:
+            return str(info["item_id"])
+        return None
+    if token in item_ids:
+        return token
+    if token.strip().upper() in shelf_ids or _looks_like_shelf_id(token):
+        return None
+    try:
+        numeric_id = int(token)
+    except ValueError:
+        return token
+    if 101 <= numeric_id <= 120:
+        return None
+    return token
+
+
+def _looks_like_shelf_id(token: str) -> bool:
+    normalized = token.strip().upper()
+    return len(normalized) >= 2 and normalized[0].isalpha() and normalized[1:].isdigit()
+
+
 def _items_by_item_id(tag_map: TagMap) -> dict[str, tuple[str, TagInfo]]:
     return {
         info["item_id"]: (tag_id, info)
@@ -245,6 +307,7 @@ def _unknown_item(tag_id: str, shelf_id: str, source: str, frame_id: str | None)
         message=f"{shelf_id} 货架识别到未知标签 {tag_id}。",
         source=source,
         frame_id=frame_id,
+        evidence={"identity_kind": "item"},
     )
 
 
@@ -263,6 +326,22 @@ def _normal_item(tag_id: str, info: TagInfo, shelf_id: str, source: str, frame_i
         message=f"{shelf_id} 货架识别到物品 {info['name']}。来源：{source}。",
         source=source,
         frame_id=frame_id,
+        evidence={"identity_kind": "item", "item_id": str(info.get("item_id", ""))},
+    )
+
+
+def _first_pass_observed(shelf_id: str, source: str, frame_id: str | None) -> EventRecord:
+    return make_event(
+        "first_pass_observed",
+        item="-",
+        shelf_id=shelf_id,
+        expected_shelf=shelf_id,
+        priority=1,
+        status="info",
+        message=f"first pass observed {shelf_id}; shortage checks are skipped.",
+        source=source,
+        frame_id=frame_id,
+        evidence={"identity_kind": "shelf"},
     )
 
 
@@ -277,6 +356,7 @@ def _shelf_scanned(shelf_id: str, source: str, frame_id: str | None) -> EventRec
         message=f"{shelf_id} 货架扫描完成，未发现异常。",
         source=source,
         frame_id=frame_id,
+        evidence={"identity_kind": "shelf"},
     )
 
 

@@ -110,7 +110,14 @@ class RulesTest(unittest.TestCase):
         self.assertIn("duplicate_item", event_types)
         self.assertIn("wrong_shelf", event_types)
         self.assertIn("unknown_item", event_types)
-        self.assertTrue(all(event["status"] == "waiting_confirm" for event in events))
+        self.assertEqual(next(event for event in events if event["type"] == "missing_item")["status"], "warning")
+        self.assertTrue(all(event["status"] == "waiting_confirm" for event in events if event["type"] != "missing_item"))
+
+    def test_shelf_scan_filters_shelf_tokens_from_items(self) -> None:
+        events = rules.evaluate_shelf_scan("A1", ["101", "A1", "item_99"], {"A1": {"expected_items": []}}, TAG_MAP)
+
+        self.assertEqual([event["type"] for event in events], ["unknown_item"])
+        self.assertEqual(events[0]["tag_id"], "item_99")
 
     def test_empty_shelf_scan_reports_scan_failed_when_missing_detection_is_enabled(self) -> None:
         events = rules.evaluate_shelf_scan("A1", [], MANIFEST, TAG_MAP, frame_id="empty-1")

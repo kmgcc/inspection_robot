@@ -1194,7 +1194,8 @@ class RobotRuntime:
 
     def _shelf_id_from_detections(self, detections: list[dict[str, object]]) -> str | None:
         for detection in detections:
-            shelf_id = detection.get("shelf_id")
+            enriched = self._enrich_detection(detection)
+            shelf_id = enriched.get("shelf_id")
             if shelf_id is not None:
                 normalized = str(shelf_id).strip().upper()
                 if normalized:
@@ -1208,14 +1209,23 @@ class RobotRuntime:
             return enriched
         info = self.store.tag_map.get(str(tag_id))
         if info is None:
+            try:
+                numeric_id = int(str(tag_id))
+            except ValueError:
+                return enriched
+            if 101 <= numeric_id <= 120:
+                enriched["kind"] = "shelf"
+                enriched.pop("item_id", None)
             return enriched
         kind = str(info.get("kind", "item"))
-        enriched.setdefault("kind", kind)
-        enriched.setdefault("name", info.get("name"))
+        enriched["kind"] = kind
+        enriched["name"] = info.get("name")
         if kind == "shelf" and info.get("shelf_id") is not None:
-            enriched.setdefault("shelf_id", str(info["shelf_id"]).strip().upper())
+            enriched["shelf_id"] = str(info["shelf_id"]).strip().upper()
+            enriched.pop("item_id", None)
         if kind == "item" and info.get("item_id") is not None:
-            enriched.setdefault("item_id", str(info["item_id"]))
+            enriched["item_id"] = str(info["item_id"])
+            enriched.pop("shelf_id", None)
         return enriched
 
     def _record_observed_shelf(self, shelf_id: str) -> None:
@@ -1309,12 +1319,17 @@ class RobotRuntime:
 
     def _signal_scan_events(self, events: list[EventRecord]) -> None:
         waiting = [event for event in events if event.get("status") == "waiting_confirm"]
-        if not waiting:
+        missing_alerts = [
+            event
+            for event in events
+            if event.get("type") == "missing_item" and event.get("status") in {"warning", "waiting_confirm"}
+        ]
+        if not waiting and not missing_alerts:
             return
         self._trigger_orange_flash()
         self.store.record_light_cue("orange", "扫描到货架/物品异常，橙色指示灯已触发。")
-        if any(event.get("type") == "missing_item" for event in waiting):
-            self._play_missing_alert(waiting)
+        if missing_alerts:
+            self._play_missing_alert(missing_alerts)
 
     def _play_missing_alert(self, events: list[EventRecord]) -> None:
         missing = [event for event in events if event.get("type") == "missing_item"]
@@ -2173,6 +2188,7 @@ class RobotRuntime:
         return False
 
     def _stop_for_cruise_recognition(self, recognition: Mapping[str, object]) -> None:
+        recognition = self._enrich_detection(recognition)
         shelf_id = _optional_text(recognition.get("shelf_id"))
         if shelf_id is not None:
             shelf_id = shelf_id.strip().upper()
@@ -2210,6 +2226,7 @@ class RobotRuntime:
         shelf tag appears.
         """
 
+        recognition = self._enrich_detection(recognition)
         if self._cruise_vision_suppressed_until_boundary:
             self.store.record_motion_debug(
                 "cruise_recognition_suppressed",
