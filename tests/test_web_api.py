@@ -219,6 +219,19 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(manual_turn.status_code, 200)
         self.assertEqual(runtime.turns[-1], ("right", 22, 0.85))
 
+    def test_manual_forward_uses_runtime_heading_held_forward(self) -> None:
+        runtime = FakeRuntime()
+        self.app.config["RUN_MODE"] = "robot"
+        self.app.config["ROBOT_RUNTIME"] = runtime
+
+        response = self.client.post("/api/control/forward", json={"speed": 20, "duration_seconds": 0.2})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(("zupt", "manual_forward_start"), runtime.calls)
+        self.assertIn("reset_heading", runtime.calls)
+        self.assertIn(("forward_step", 20, 0.2), runtime.calls)
+        self.assertNotIn(("move_forward", 20, 0.2), runtime.motion.calls)
+
     def test_cycle_confirm_delegates_to_runtime_fallback_confirmation(self) -> None:
         runtime = FakeRuntime()
         self.app.config["RUN_MODE"] = "robot"
@@ -245,11 +258,20 @@ class FakeRuntime:
                 "action_settle_seconds": 0,
             },
         )()
-        self.calls: list[str] = []
+        self.calls: list[object] = []
         self.turns: list[tuple[str, int | None, float | None]] = []
 
     def stop(self) -> None:
         self.calls.append("stop")
+
+    def _forward_step(self, *, speed: int, duration_seconds: float, settle_seconds: float | None = None) -> None:
+        self.calls.append(("forward_step", speed, duration_seconds))
+
+    def _zupt_recalibrate(self, reason: str) -> None:
+        self.calls.append(("zupt", reason))
+
+    def _reset_heading_guard(self) -> None:
+        self.calls.append("reset_heading")
 
     def _settle(self) -> None:
         self.calls.append("settle")

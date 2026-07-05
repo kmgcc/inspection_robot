@@ -16,6 +16,7 @@ from .core.planner import PlanningError, RouteStep, plan_patrol_route
 from .core.events import EventRecord
 from .core.store import InspectionStore
 from .robot import alarm, gimbal, motion, mpu6050, sensors
+from .robot.heading_hold import HeadingHoldSettings, apply_heading_hold
 from .robot.line_following import decide_line_follow_motion
 from .robot.sensors import RobotHardwareError
 from .vision import tag_detector
@@ -1432,61 +1433,40 @@ class RobotRuntime:
         guard = self._heading_guard_instance()
         if guard is None or self._stop_event.is_set():
             return
-        updater = getattr(guard, "update", None)
-        if not callable(updater):
-            return
         try:
-            deviation = float(updater())
+            pulse = apply_heading_hold(
+                guard,
+                self.motion,
+                HeadingHoldSettings(
+                    enabled=self.config.heading_hold_enabled,
+                    tolerance_degrees=self.config.heading_hold_tolerance_deg,
+                    gain=self.config.heading_hold_gain,
+                    min_pulse_seconds=self.config.heading_hold_min_pulse_seconds,
+                    max_pulse_seconds=self.config.heading_hold_max_pulse_seconds,
+                    correction_speed=self.config.heading_hold_correction_speed,
+                    fallback_speed=self.config.turn_speed,
+                    invert=self.config.heading_hold_invert,
+                    rate_damping=self.config.heading_hold_rate_damping,
+                ),
+                stop_requested=self._stop_event.is_set,
+            )
         except (RobotHardwareError, OSError, AttributeError, TypeError, ValueError):
             self._heading_guard = None
             return
-        tolerance = max(0.0, float(self.config.heading_hold_tolerance_deg))
-        if abs(deviation) <= tolerance:
+        if pulse is None:
             return
-        # PD control: the derivative (current yaw rate) damps the pulse so we don't
-        # keep steering once the car is already swinging back toward straight. This
-        # is what stops the correction from over-shooting and curving the other way
-        # (越纠越弯). `rate` is the same sign convention as `deviation`.
-        rate = self._heading_guard_rate(guard)
-        damping = max(0.0, float(self.config.heading_hold_rate_damping))
-        effective = deviation + damping * rate
-        # If damping has already flipped the sign, the car is recovering fast enough
-        # on its own — issuing a pulse now would push it past straight, so skip it.
-        if effective == 0.0 or (effective > 0.0) != (deviation > 0.0):
-            return
-        pulse_seconds = min(
-            max(abs(effective) * max(0.0, float(self.config.heading_hold_gain)), float(self.config.heading_hold_min_pulse_seconds)),
-            float(self.config.heading_hold_max_pulse_seconds),
-        )
-        if pulse_seconds <= 0:
-            return
-        turn_right = effective > 0.0
-        if self.config.heading_hold_invert:
-            turn_right = not turn_right
-        speed = self.config.heading_hold_correction_speed or max(1, int(self.config.turn_speed))
-        mover = self.motion.rotate_right_slow if turn_right else self.motion.rotate_left_slow
-        mover(speed=speed, duration_seconds=pulse_seconds)
-        self.motion.stop()
         self.store.record_motion_debug(
             "heading_hold_correction",
             "heading hold correction pulse applied.",
             evidence={
-                "deviation_degrees": round(deviation, 3),
-                "rate_dps": round(rate, 3),
-                "effective_degrees": round(effective, 3),
-                "direction": "right" if turn_right else "left",
-                "pulse_seconds": round(pulse_seconds, 3),
-                "speed": speed,
+                "deviation_degrees": round(pulse.deviation_degrees, 3),
+                "rate_dps": round(pulse.rate_dps, 3),
+                "effective_degrees": round(pulse.effective_degrees, 3),
+                "direction": pulse.direction,
+                "pulse_seconds": round(pulse.pulse_seconds, 3),
+                "speed": pulse.speed,
             },
         )
-
-    @staticmethod
-    def _heading_guard_rate(guard: Any) -> float:
-        rate = getattr(guard, "last_rate_dps", 0.0)
-        try:
-            return float(rate)
-        except (TypeError, ValueError):
-            return 0.0
 
     def _zupt_recalibrate(self, reason: str) -> None:
         """Re-estimate gyro bias while the car is stopped (zero-velocity update).

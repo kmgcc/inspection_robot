@@ -48,6 +48,22 @@ class TestModeSafetyTest(unittest.TestCase):
         self.assertNotIn("rotate_left", motion.calls)
         self.assertNotIn("rotate_right", motion.calls)
 
+    def test_straight_test_applies_heading_hold_correction(self) -> None:
+        motion = FakeMotion()
+        guard = FakeHeadingGuard(deviation=8.0, rate=0.0)
+        manager = TestSessionManager(
+            motion_adapter=motion,
+            sensor_adapter=FakeSensors([]),
+            imu_adapter=FakeImu(guard),
+        )
+
+        manager._straight_worker("forward", 6, 0.0)
+
+        self.assertEqual(guard.recalibrate_calls, 1)
+        self.assertEqual(guard.reset_count, 1)
+        self.assertIn("rotate_right", motion.calls)
+        self.assertIn("move_forward", motion.calls)
+
 
 class FakeMotion:
     def __init__(self) -> None:
@@ -62,8 +78,40 @@ class FakeMotion:
     def strafe_right_slow(self, *, speed: int, duration_seconds: float) -> None:
         self.calls.append("strafe_right")
 
+    def rotate_left_slow(self, *, speed: int, duration_seconds: float) -> None:
+        self.calls.append("rotate_left")
+
+    def rotate_right_slow(self, *, speed: int, duration_seconds: float) -> None:
+        self.calls.append("rotate_right")
+
     def stop(self) -> None:
         self.calls.append("stop")
+
+
+class FakeHeadingGuard:
+    def __init__(self, *, deviation: float, rate: float = 0.0) -> None:
+        self.deviation = deviation
+        self.last_rate_dps = rate
+        self.recalibrate_calls = 0
+        self.reset_count = 0
+
+    def update(self) -> float:
+        return self.deviation
+
+    def recalibrate_bias(self, *, samples: int, sample_seconds: float) -> bool:
+        self.recalibrate_calls += 1
+        return True
+
+    def reset(self) -> None:
+        self.reset_count += 1
+
+
+class FakeImu:
+    def __init__(self, guard: FakeHeadingGuard | None) -> None:
+        self.guard = guard
+
+    def open_straight_heading_guard(self) -> FakeHeadingGuard | None:
+        return self.guard
 
 
 class FakeSensors:

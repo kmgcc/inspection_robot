@@ -12,17 +12,51 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any
 
-from .robot import motion, sensors
+from .robot import motion, mpu6050, sensors
+from .robot.heading_hold import HeadingHoldSettings, apply_heading_hold
 from .robot.line_following import decide_line_follow_motion, describe_tape
 from .robot.sensors import RobotHardwareError
 
 logger = logging.getLogger(__name__)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_optional_int(name: str) -> int | None:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
 
 # --------------------------------------------------------------------------- #
 # 标定参数
@@ -158,14 +192,16 @@ class TestSessionManager:
     - stop() 可从任意线程安全调用
     """
 
-    def __init__(self, motion_adapter: Any = motion, sensor_adapter: Any = sensors) -> None:
+    def __init__(self, motion_adapter: Any = motion, sensor_adapter: Any = sensors, imu_adapter: Any = mpu6050) -> None:
         self._motion = motion_adapter
         self._sensors = sensor_adapter
+        self._imu = imu_adapter
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._status = TestStatus()
         self._sensor_status = SensorStatus()
+        self._heading_guard: Any | None = None
 
     # ------------------------------------------------------------------ #
     # 公开 API
@@ -331,9 +367,9 @@ class TestSessionManager:
     def _straight_worker(self, direction: str, speed: int, duration_seconds: float) -> None:
         try:
             if direction == "forward":
-                self._motion.move_forward_slow(speed=speed, duration_seconds=duration_seconds)
+                self._run_heading_held_straight(self._motion.move_forward_slow, speed, duration_seconds)
             else:
-                self._motion.move_backward_slow(speed=speed, duration_seconds=duration_seconds)
+                self._run_heading_held_straight(self._motion.move_backward_slow, speed, duration_seconds)
             self._motion.stop()
             stop_reason = "manual" if self._stop_event.is_set() else "completed"
             self._finish_session(stop_reason)
@@ -345,6 +381,80 @@ class TestSessionManager:
                 self._motion.stop()
             except RobotHardwareError:
                 pass
+
+    def _run_heading_held_straight(self, mover: Any, speed: int, duration_seconds: float) -> None:
+        self._prepare_heading_guard_for_straight()
+        duration = max(0.0, float(duration_seconds))
+        slice_seconds = max(0.0, _env_float("MOTION_GUARD_POLL_SECONDS", 0.02))
+        if duration <= 0.0 or slice_seconds <= 0.0 or duration <= slice_seconds:
+            self._apply_heading_hold(speed)
+            mover(speed=speed, duration_seconds=duration)
+            return
+
+        remaining = duration
+        while remaining > 0 and not self._stop_event.is_set():
+            chunk = min(remaining, slice_seconds)
+            self._apply_heading_hold(speed)
+            if self._stop_event.is_set():
+                break
+            mover(speed=speed, duration_seconds=chunk)
+            remaining -= chunk
+
+    def _prepare_heading_guard_for_straight(self) -> None:
+        guard = self._heading_guard_instance()
+        if guard is None:
+            return
+        recalibrate = getattr(guard, "recalibrate_bias", None)
+        if callable(recalibrate) and _env_bool("HEADING_ZUPT_ENABLED", True):
+            try:
+                recalibrate(
+                    samples=_env_int("HEADING_ZUPT_SAMPLES", 15),
+                    sample_seconds=_env_float("HEADING_ZUPT_SAMPLE_SECONDS", 0.005),
+                )
+            except (RobotHardwareError, OSError, AttributeError, TypeError, ValueError):
+                self._heading_guard = None
+                return
+        resetter = getattr(guard, "reset", None)
+        if callable(resetter):
+            resetter()
+
+    def _heading_guard_instance(self) -> Any | None:
+        if not _env_bool("HEADING_HOLD_ENABLED", True):
+            return None
+        if self._heading_guard is not None:
+            return self._heading_guard
+        opener = getattr(self._imu, "open_straight_heading_guard", None)
+        if not callable(opener):
+            return None
+        try:
+            self._heading_guard = opener()
+        except (RobotHardwareError, OSError, AttributeError, TypeError, ValueError):
+            self._heading_guard = None
+        return self._heading_guard
+
+    def _apply_heading_hold(self, speed: int) -> None:
+        guard = self._heading_guard_instance()
+        if guard is None:
+            return
+        try:
+            apply_heading_hold(
+                guard,
+                self._motion,
+                HeadingHoldSettings(
+                    enabled=_env_bool("HEADING_HOLD_ENABLED", True),
+                    tolerance_degrees=_env_float("HEADING_HOLD_TOLERANCE_DEG", 3.0),
+                    gain=_env_float("HEADING_HOLD_GAIN", 0.02),
+                    min_pulse_seconds=_env_float("HEADING_HOLD_MIN_PULSE_SECONDS", 0.03),
+                    max_pulse_seconds=_env_float("HEADING_HOLD_MAX_PULSE_SECONDS", 0.12),
+                    correction_speed=_env_optional_int("HEADING_HOLD_CORRECTION_SPEED"),
+                    fallback_speed=speed,
+                    invert=_env_bool("HEADING_HOLD_INVERT", False),
+                    rate_damping=_env_float("HEADING_HOLD_KD", _env_float("HEADING_HOLD_RATE_DAMPING", 0.02)),
+                ),
+                stop_requested=self._stop_event.is_set,
+            )
+        except (RobotHardwareError, OSError, AttributeError, TypeError, ValueError):
+            self._heading_guard = None
 
     def _turn_worker(self, direction: str, speed: int, duration_seconds: float) -> None:
         try:

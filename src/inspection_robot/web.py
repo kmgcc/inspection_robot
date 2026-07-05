@@ -526,8 +526,7 @@ def create_app(root: Path | None = None) -> Flask:
         if command == "stop":
             active_motion.stop()
         elif command == "forward":
-            active_motion.move_forward_slow(speed=speed, duration_seconds=duration_seconds)
-            active_motion.stop()
+            _run_heading_held_forward(runtime, active_motion, speed=speed, duration_seconds=duration_seconds)
         elif command == "backward":
             active_motion.move_backward_slow(speed=speed, duration_seconds=duration_seconds)
             active_motion.stop()
@@ -547,6 +546,20 @@ def create_app(root: Path | None = None) -> Flask:
                 active_motion.stop()
         else:
             raise ValueError(f"unknown manual command: {command}")
+
+    def _run_heading_held_forward(runtime: object, active_motion: object, *, speed: int, duration_seconds: float) -> None:
+        forwarder = getattr(runtime, "_forward_step", None)
+        if not callable(forwarder):
+            active_motion.move_forward_slow(speed=speed, duration_seconds=duration_seconds)
+            active_motion.stop()
+            return
+        recalibrate = getattr(runtime, "_zupt_recalibrate", None)
+        if callable(recalibrate):
+            recalibrate("manual_forward_start")
+        resetter = getattr(runtime, "_reset_heading_guard", None)
+        if callable(resetter):
+            resetter()
+        forwarder(speed=speed, duration_seconds=duration_seconds, settle_seconds=0.0)
 
     def _clear_motion_stop(runtime: object | None = None) -> None:
         active_motion = getattr(runtime, "motion", motion) if runtime is not None else motion
