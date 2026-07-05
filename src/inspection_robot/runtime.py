@@ -113,15 +113,16 @@ class RobotRuntimeConfig:
     object_slow_speed: int = field(default_factory=lambda: _env_int(12, "OBJECT_SLOW_SPEED"))
     object_settle_seconds: float = field(default_factory=lambda: _env_float(0.2, "OBJECT_SETTLE_SECONDS"))
     heading_hold_enabled: bool = field(default_factory=lambda: _env_bool("HEADING_HOLD_ENABLED", True))
-    heading_hold_tolerance_deg: float = field(default_factory=lambda: _env_float(2.5, "HEADING_HOLD_TOLERANCE_DEG"))
+    heading_hold_tolerance_deg: float = field(default_factory=lambda: _env_float(1.2, "HEADING_HOLD_TOLERANCE_DEG"))
     heading_hold_gain: float = field(default_factory=lambda: _env_float(0.012, "HEADING_HOLD_GAIN"))
     heading_hold_min_pulse_seconds: float = field(default_factory=lambda: _env_float(0.025, "HEADING_HOLD_MIN_PULSE_SECONDS"))
     heading_hold_max_pulse_seconds: float = field(default_factory=lambda: _env_float(0.10, "HEADING_HOLD_MAX_PULSE_SECONDS"))
     heading_hold_correction_speed: int = field(default_factory=lambda: _env_int(16, "HEADING_HOLD_CORRECTION_SPEED"))
     heading_hold_invert: bool = field(default_factory=lambda: _env_bool("HEADING_HOLD_INVERT", False))
     heading_hold_rate_damping: float = field(default_factory=lambda: _env_float(0.18, "HEADING_HOLD_KD", "HEADING_HOLD_RATE_DAMPING"))
-    heading_hold_speed_gain: float = field(default_factory=lambda: _env_float(1.8, "HEADING_HOLD_SPEED_GAIN"))
-    heading_hold_min_correction_speed: int = field(default_factory=lambda: _env_int(4, "HEADING_HOLD_MIN_CORRECTION_SPEED"))
+    heading_hold_speed_gain: float = field(default_factory=lambda: _env_float(3.0, "HEADING_HOLD_SPEED_GAIN"))
+    heading_hold_min_correction_speed: int = field(default_factory=lambda: _env_int(6, "HEADING_HOLD_MIN_CORRECTION_SPEED"))
+    heading_hold_max_speed_fraction: float = field(default_factory=lambda: _env_float(0.8, "HEADING_HOLD_MAX_SPEED_FRACTION"))
     heading_hold_min_sample_interval_seconds: float = field(default_factory=lambda: _env_float(0.0, "HEADING_HOLD_MIN_SAMPLE_INTERVAL_SECONDS"))
     heading_hold_min_interval_seconds: float = field(default_factory=lambda: _env_float(0.05, "HEADING_HOLD_MIN_INTERVAL_SECONDS"))
     heading_hold_max_consecutive: int = field(default_factory=lambda: _env_int(5, "HEADING_HOLD_MAX_CONSECUTIVE"))
@@ -138,6 +139,14 @@ class RobotRuntimeConfig:
     cruise_recognition_flash_seconds: float = field(default_factory=lambda: _env_float(0.12, "CRUISE_RECOGNITION_FLASH_SECONDS"))
     cruise_recognition_cooldown_seconds: float = field(default_factory=lambda: _env_float(1.5, "CRUISE_RECOGNITION_COOLDOWN_SECONDS"))
     cruise_vision_reopen_seconds: float = field(default_factory=lambda: _env_float(0.3, "CRUISE_VISION_REOPEN_SECONDS"))
+    timed_stop_scan_enabled: bool = field(default_factory=lambda: _env_bool("TIMED_STOP_SCAN_ENABLED", _env_bool("STOP_SCAN_CRUISE_ENABLED", True)))
+    timed_stop_scan_speed: int = field(default_factory=lambda: _env_int(15, "TIMED_STOP_SCAN_SPEED", "STOP_SCAN_CRUISE_SPEED"))
+    timed_stop_scan_drive_seconds: float = field(
+        default_factory=lambda: _env_float(0.8, "TIMED_STOP_SCAN_DRIVE_SECONDS", "STOP_SCAN_CRUISE_DRIVE_SECONDS")
+    )
+    timed_stop_scan_settle_seconds: float = field(
+        default_factory=lambda: _env_float(0.2, "TIMED_STOP_SCAN_SETTLE_SECONDS", "STOP_SCAN_CRUISE_SETTLE_SECONDS")
+    )
     line_follow_enabled: bool = field(default_factory=lambda: _env_bool("LINE_FOLLOW_ENABLED", False))
     line_follow_auto_enter: bool = field(default_factory=lambda: _env_bool("LINE_FOLLOW_AUTO_ENTER", False))
     line_follow_speed: int = field(default_factory=lambda: _env_int(16, "LINE_FOLLOW_SPEED", "ROBOT_PATROL_SPEED", "ROBOT_SLOW_SPEED"))
@@ -341,17 +350,35 @@ class RobotRuntime:
         self.store.start()
         self.store.record_cycle(1, self._skip_shortage_for_cycle(1))
         cruise = self.config.smooth_cruise_enabled
+        timed_stop_scan = cruise and self.config.scan_enabled and self.config.timed_stop_scan_enabled
         self.store.record_motion_debug(
             "runtime_started",
             (
-                "巡航启动：低速匀速前进、连续陀螺仪纠偏、OpenCV 发现物体即停车识别、列端转向、禁区绕行。"
+                (
+                    "巡航启动：按固定节拍前进、停车稳定、侧向扫描；陀螺仪持续纠偏，列端/禁区保持传感器优先。"
+                    if timed_stop_scan
+                    else "巡航启动：低速匀速前进、连续陀螺仪纠偏、移动识别仅作轻量记录、列端转向、禁区绕行。"
+                )
                 if cruise
                 else "巡逻启动：短步前进、列端转向、寻线过渡、禁区绕行；检测到目标后停车识别。"
             ),
             evidence={
                 "smooth_cruise_enabled": cruise,
-                "patrol_speed": self.config.cruise_speed if cruise else self.config.patrol_speed,
-                "step_seconds": self.config.cruise_tick_seconds if cruise else self.config.step_seconds,
+                "timed_stop_scan_enabled": timed_stop_scan,
+                "patrol_speed": (
+                    self.config.timed_stop_scan_speed
+                    if timed_stop_scan
+                    else self.config.cruise_speed
+                    if cruise
+                    else self.config.patrol_speed
+                ),
+                "step_seconds": (
+                    self.config.timed_stop_scan_drive_seconds
+                    if timed_stop_scan
+                    else self.config.cruise_tick_seconds
+                    if cruise
+                    else self.config.step_seconds
+                ),
                 "boundary_min_black_sensors": self.config.boundary_min_black_sensors,
                 "boundary_confirm_samples": self.config.boundary_confirm_samples,
                 "boundary_window_seconds": self.config.boundary_window_seconds,
@@ -746,6 +773,9 @@ class RobotRuntime:
                 )
                 self._drive_line_follow_step(tape_state)
                 return
+        if self.config.smooth_cruise_enabled and self.config.scan_enabled and self.config.timed_stop_scan_enabled:
+            self._drive_timed_stop_scan_step(tape_state)
+            return
         if self.config.smooth_cruise_enabled:
             self._drive_cruise_step(tape_state)
             return
@@ -817,6 +847,75 @@ class RobotRuntime:
             "move_forward",
             speed=self.config.cruise_speed,
             duration_seconds=self.config.cruise_tick_seconds,
+        )
+
+    def _drive_timed_stop_scan_step(self, tape_state: tuple[int, int, int, int] | None) -> None:
+        if self._manual_override.is_set():
+            return
+        if self._stop_event.is_set() or self._manual_override.is_set():
+            self.motion.stop()
+            return
+        self._motion_step_index += 1
+        speed = self.config.timed_stop_scan_speed
+        drive_seconds = self.config.timed_stop_scan_drive_seconds
+        settle_seconds = self.config.timed_stop_scan_settle_seconds
+        self.store.record_motion_debug(
+            "timed_stop_scan_drive",
+            (
+                f"{self._patrol_phase_label()}：定时停车扫描 #{self._motion_step_index}，"
+                f"speed={speed}, drive={drive_seconds:.2f}s, settle={settle_seconds:.2f}s, "
+                f"tape={_format_tape_state(tape_state)}。"
+            ),
+            evidence={
+                "phase": self._patrol_phase_label(),
+                "speed": speed,
+                "drive_seconds": drive_seconds,
+                "settle_seconds": settle_seconds,
+                "tape_state": _json_tape_state(tape_state),
+            },
+        )
+        self._log_motion_command(
+            "timed_stop_scan",
+            "move_forward",
+            speed=speed,
+            duration_seconds=drive_seconds,
+        )
+        self._run_timed_motion(
+            self.motion.move_forward_slow,
+            speed=speed,
+            duration_seconds=drive_seconds,
+            watch_boundary=True,
+            heading_hold=True,
+        )
+        if self._stop_event.is_set() or self._manual_override.is_set() or self._pending_boundary_state is not None:
+            return
+        self.motion.stop()
+        self._stop_cruise_scanner()
+        self.store.record_motion_debug(
+            "timed_stop_scan_stop",
+            "定时前进完成：已强制停车并等待车身/画面稳定，然后执行侧向扫描。",
+            status="SCANNING_SHELF",
+            evidence={
+                "phase": self._patrol_phase_label(),
+                "settle_seconds": settle_seconds,
+            },
+        )
+        if not self._interruptible_sleep(settle_seconds):
+            return
+        if self._stop_event.is_set() or self._manual_override.is_set():
+            self.motion.stop()
+            return
+        self._scan_visible_shelf()
+        self.motion.stop()
+        self._zupt_recalibrate("timed_stop_scan")
+        self._last_object_presence_at = time.monotonic()
+        self.store.record_motion_debug(
+            "timed_stop_scan_resume",
+            "停车扫描完成：保留原始直行航向，下一段继续按固定节拍前进。",
+            evidence={
+                "phase": self._patrol_phase_label(),
+                "heading_target_reset": False,
+            },
         )
 
     def _drive_line_follow_step(self, tape_state: tuple[int, int, int, int] | None) -> None:
@@ -1142,7 +1241,9 @@ class RobotRuntime:
     def _maybe_scan_for_object_presence(self) -> bool:
         if not self.config.scan_enabled or not self.config.object_trigger_enabled or self._stop_event.is_set():
             return False
-        if self.config.smooth_cruise_enabled and self.config.cruise_vision_enabled:
+        if self.config.smooth_cruise_enabled and (
+            self.config.cruise_vision_enabled or self.config.timed_stop_scan_enabled
+        ):
             self._object_presence_hits = 0
             return False
         now = time.monotonic()
@@ -1896,6 +1997,7 @@ class RobotRuntime:
             rate_damping=self.config.heading_hold_rate_damping,
             speed_gain=self.config.heading_hold_speed_gain,
             min_correction_speed=self.config.heading_hold_min_correction_speed,
+            max_speed_fraction=self.config.heading_hold_max_speed_fraction,
         )
 
     def _heading_hold_correction(self, fallback_speed: int | None = None) -> HeadingHoldCorrection | None:
@@ -2681,6 +2783,7 @@ def _clamp_config_speeds(config: RobotRuntimeConfig) -> None:
         "heading_hold_correction_speed",
         "boundary_retreat_speed",
         "cruise_speed",
+        "timed_stop_scan_speed",
         "line_follow_speed",
         "line_follow_turn_speed",
     ):

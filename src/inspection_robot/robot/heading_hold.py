@@ -17,6 +17,7 @@ class HeadingHoldSettings:
     rate_damping: float = 0.18
     speed_gain: float = 1.8
     min_correction_speed: int = 4
+    max_speed_fraction: float = 0.8
 
 
 @dataclass(slots=True)
@@ -112,9 +113,11 @@ def compute_heading_hold_correction(
     turn_right = effective > 0.0
     if settings.invert:
         turn_right = not turn_right
+    fallback_speed = max(1, int(settings.fallback_speed))
+    max_speed_fraction = max(0.0, float(settings.max_speed_fraction))
     max_speed = min(
-        settings.correction_speed or max(1, int(settings.fallback_speed)),
-        max(1, int(round(max(1, int(settings.fallback_speed)) * 0.60))),
+        settings.correction_speed or fallback_speed,
+        max(1, int(round(fallback_speed * max_speed_fraction))),
     )
     correction_speed = min(
         max_speed,

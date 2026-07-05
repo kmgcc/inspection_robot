@@ -467,8 +467,9 @@ class TestSessionManager:
                     fallback_speed=speed,
                     invert=_env_bool("HEADING_HOLD_INVERT", False),
                     rate_damping=_env_float("HEADING_HOLD_KD", _env_float("HEADING_HOLD_RATE_DAMPING", 0.18)),
-                    speed_gain=_env_float("HEADING_HOLD_SPEED_GAIN", 2.4),
-                    min_correction_speed=_env_int("HEADING_HOLD_MIN_CORRECTION_SPEED", 4),
+                    speed_gain=_env_float("HEADING_HOLD_SPEED_GAIN", 3.0),
+                    min_correction_speed=_env_int("HEADING_HOLD_MIN_CORRECTION_SPEED", 6),
+                    max_speed_fraction=_env_float("HEADING_HOLD_MAX_SPEED_FRACTION", 0.8),
                 ),
                 stop_requested=self._stop_event.is_set,
             )

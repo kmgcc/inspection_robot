@@ -204,10 +204,11 @@ class CruiseRuntimeTest(unittest.TestCase):
         # The whole point of cruise: no stop between ticks (that is the jerk).
         self.assertNotIn("stop", motion.calls)
 
-    def test_continuous_patrol_runs_cruise_without_parked_scan(self) -> None:
+    def test_continuous_patrol_runs_pure_cruise_when_timed_scan_disabled(self) -> None:
         runtime, motion, _ = self.make_runtime(
             config=RobotRuntimeConfig(
                 smooth_cruise_enabled=True,
+                timed_stop_scan_enabled=False,
                 cruise_vision_enabled=False,  # keep the scanner thread out of the test
                 object_trigger_enabled=False,
                 cruise_tick_seconds=0,
@@ -228,13 +229,42 @@ class CruiseRuntimeTest(unittest.TestCase):
 
         self.assertGreaterEqual(motion.calls.count("move_forward"), 2)
         self.assertIn("cruise_step", stages)
-        # Cruise never parks to scan, so the parked-scan pipeline must not run.
         self.assertNotIn("vision_scan_start", stages)
+
+    def test_continuous_patrol_runs_timed_stop_scan_by_default(self) -> None:
+        runtime, motion, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                smooth_cruise_enabled=True,
+                cruise_vision_enabled=False,
+                object_trigger_enabled=False,
+                timed_stop_scan_drive_seconds=0,
+                timed_stop_scan_settle_seconds=0,
+                scan_timeout_seconds=0,
+                action_settle_seconds=0,
+                boundary_cooldown_seconds=0,
+            ),
+            imu=FakeImu(None),
+        )
+
+        runtime.run_continuous_patrol(max_iterations=1)
+        stages = [
+            event.get("evidence", {}).get("stage")
+            for event in runtime.store.snapshot()["events"]
+            if event["type"] == "motion_debug" and isinstance(event.get("evidence"), dict)
+        ]
+
+        self.assertIn("move_forward", motion.calls)
+        self.assertIn("stop", motion.calls)
+        self.assertIn("timed_stop_scan_drive", stages)
+        self.assertIn("timed_stop_scan_stop", stages)
+        self.assertIn("vision_scan_start", stages)
+        self.assertIn("timed_stop_scan_resume", stages)
 
     def test_cruise_stops_for_opencv_object_presence_scan(self) -> None:
         runtime, motion, _ = self.make_runtime(
             config=RobotRuntimeConfig(
                 smooth_cruise_enabled=True,
+                timed_stop_scan_enabled=False,
                 cruise_vision_enabled=False,
                 object_trigger_enabled=True,
                 cruise_tick_seconds=0,
@@ -262,6 +292,7 @@ class CruiseRuntimeTest(unittest.TestCase):
         runtime, _, _ = self.make_runtime(
             config=RobotRuntimeConfig(
                 smooth_cruise_enabled=True,
+                timed_stop_scan_enabled=False,
                 cruise_vision_enabled=False,
                 object_trigger_enabled=True,
                 object_presence_cooldown_seconds=1.5,
@@ -339,6 +370,27 @@ class CruiseRuntimeTest(unittest.TestCase):
         detector.assert_not_called()
         self.assertNotIn("stop", motion.calls)
 
+    def test_timed_stop_scan_skips_object_presence_trigger(self) -> None:
+        runtime, motion, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                smooth_cruise_enabled=True,
+                cruise_vision_enabled=False,
+                timed_stop_scan_enabled=True,
+                object_trigger_enabled=True,
+                action_settle_seconds=0,
+            ),
+            imu=FakeImu(None),
+        )
+
+        with mock.patch(
+            "inspection_robot.runtime.tag_detector.detect_object_presence_from_camera",
+            return_value=True,
+        ) as detector:
+            self.assertFalse(runtime._maybe_scan_for_object_presence())
+
+        detector.assert_not_called()
+        self.assertNotIn("stop", motion.calls)
+
     # --- anti-oscillation PD heading hold -------------------------------- #
 
     def test_heading_hold_skips_pulse_when_already_recovering(self) -> None:
@@ -381,7 +433,7 @@ class CruiseRuntimeTest(unittest.TestCase):
         self.assertNotIn("rotate_left", motion.calls)
         self.assertNotIn("rotate_right", motion.calls)
 
-    def test_heading_hold_caps_correction_to_forward_speed_fraction(self) -> None:
+    def test_heading_hold_caps_correction_to_stronger_forward_speed_fraction(self) -> None:
         guard = FakeGuard(deviation=50.0, rate=0.0)
         runtime, motion, _ = self.make_runtime(
             config=RobotRuntimeConfig(
@@ -405,7 +457,7 @@ class CruiseRuntimeTest(unittest.TestCase):
             for event in runtime.store.snapshot()["events"]
             if event["type"] == "motion_debug" and event.get("evidence", {}).get("stage") == "heading_hold_correction"
         ]
-        self.assertEqual(correction_events[-1]["evidence"]["correction_speed"], 12)
+        self.assertEqual(correction_events[-1]["evidence"]["correction_speed"], 16)
 
     def test_heading_hold_throttles_back_to_back_corrections(self) -> None:
         guard = FakeGuard(deviation=8.0, rate=0.0)

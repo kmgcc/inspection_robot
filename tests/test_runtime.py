@@ -98,6 +98,7 @@ class RuntimeTest(unittest.TestCase):
             "HEADING_HOLD_KD",
             "HEADING_HOLD_SPEED_GAIN",
             "HEADING_HOLD_MIN_CORRECTION_SPEED",
+            "HEADING_HOLD_MAX_SPEED_FRACTION",
             "HEADING_HOLD_MIN_SAMPLE_INTERVAL_SECONDS",
             "HEADING_HOLD_MIN_INTERVAL_SECONDS",
             "HEADING_HOLD_MAX_CONSECUTIVE",
@@ -111,6 +112,14 @@ class RuntimeTest(unittest.TestCase):
             "CRUISE_TICK_SECONDS",
             "SMOOTH_CRUISE_SPEED",
             "CRUISE_VISION_ENABLED",
+            "TIMED_STOP_SCAN_ENABLED",
+            "STOP_SCAN_CRUISE_ENABLED",
+            "TIMED_STOP_SCAN_SPEED",
+            "STOP_SCAN_CRUISE_SPEED",
+            "TIMED_STOP_SCAN_DRIVE_SECONDS",
+            "STOP_SCAN_CRUISE_DRIVE_SECONDS",
+            "TIMED_STOP_SCAN_SETTLE_SECONDS",
+            "STOP_SCAN_CRUISE_SETTLE_SECONDS",
         ):
             config = RobotRuntimeConfig()
 
@@ -147,15 +156,16 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(config.object_presence_confirm_frames, 1)
         self.assertEqual(config.object_presence_cooldown_seconds, 1.5)
         self.assertTrue(config.heading_hold_enabled)
-        self.assertEqual(config.heading_hold_tolerance_deg, 2.5)
+        self.assertEqual(config.heading_hold_tolerance_deg, 1.2)
         self.assertEqual(config.heading_hold_gain, 0.012)
         self.assertEqual(config.heading_hold_min_pulse_seconds, 0.025)
         self.assertEqual(config.heading_hold_max_pulse_seconds, 0.10)
         self.assertEqual(config.heading_hold_correction_speed, 16)
         self.assertFalse(config.heading_hold_invert)
         self.assertEqual(config.heading_hold_rate_damping, 0.18)
-        self.assertEqual(config.heading_hold_speed_gain, 1.8)
-        self.assertEqual(config.heading_hold_min_correction_speed, 4)
+        self.assertEqual(config.heading_hold_speed_gain, 3.0)
+        self.assertEqual(config.heading_hold_min_correction_speed, 6)
+        self.assertEqual(config.heading_hold_max_speed_fraction, 0.8)
         self.assertEqual(config.heading_hold_min_sample_interval_seconds, 0.0)
         self.assertEqual(config.heading_hold_min_interval_seconds, 0.05)
         self.assertEqual(config.heading_hold_max_consecutive, 5)
@@ -164,6 +174,10 @@ class RuntimeTest(unittest.TestCase):
         self.assertTrue(config.cruise_vision_enabled)
         self.assertEqual(config.cruise_speed, 24)
         self.assertEqual(config.cruise_tick_seconds, 0.03)
+        self.assertTrue(config.timed_stop_scan_enabled)
+        self.assertEqual(config.timed_stop_scan_speed, 15)
+        self.assertEqual(config.timed_stop_scan_drive_seconds, 0.8)
+        self.assertEqual(config.timed_stop_scan_settle_seconds, 0.2)
         self.assertFalse(config.line_follow_enabled)
         self.assertFalse(config.line_follow_auto_enter)
         self.assertEqual(config.line_follow_speed, 16)
