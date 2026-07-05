@@ -134,27 +134,27 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(config.forbidden_avoidance_parallel_bodies, 1.2)
         self.assertEqual(config.forbidden_avoidance_return_bodies, 1.5)
         self.assertEqual(config.boundary_min_black_sensors, 2)
-        self.assertEqual(config.boundary_confirm_samples, 2)
+        self.assertEqual(config.boundary_confirm_samples, 1)
         self.assertEqual(config.boundary_confirm_gap_seconds, 0.02)
         self.assertEqual(config.boundary_window_seconds, 0.12)
         self.assertEqual(config.boundary_cooldown_seconds, 0.0)
         self.assertEqual(config.boundary_retreat_speed, 12)
-        self.assertEqual(config.boundary_retreat_seconds, 0.08)
-        self.assertEqual(config.boundary_retreat_command, "forward")
+        self.assertEqual(config.boundary_retreat_seconds, 0.14)
+        self.assertEqual(config.boundary_retreat_command, "backward")
         self.assertEqual(config.motion_guard_poll_seconds, 0.01)
         self.assertEqual(config.object_detector, "opencv")
         self.assertEqual(config.object_presence_min_area_ratio, 0.008)
         self.assertEqual(config.object_presence_confirm_frames, 1)
         self.assertEqual(config.object_presence_cooldown_seconds, 1.5)
         self.assertTrue(config.heading_hold_enabled)
-        self.assertEqual(config.heading_hold_tolerance_deg, 0.4)
+        self.assertEqual(config.heading_hold_tolerance_deg, 2.5)
         self.assertEqual(config.heading_hold_gain, 0.012)
         self.assertEqual(config.heading_hold_min_pulse_seconds, 0.025)
         self.assertEqual(config.heading_hold_max_pulse_seconds, 0.10)
         self.assertEqual(config.heading_hold_correction_speed, 16)
         self.assertFalse(config.heading_hold_invert)
         self.assertEqual(config.heading_hold_rate_damping, 0.18)
-        self.assertEqual(config.heading_hold_speed_gain, 2.4)
+        self.assertEqual(config.heading_hold_speed_gain, 1.8)
         self.assertEqual(config.heading_hold_min_correction_speed, 4)
         self.assertEqual(config.heading_hold_min_sample_interval_seconds, 0.0)
         self.assertEqual(config.heading_hold_min_interval_seconds, 0.05)
@@ -162,7 +162,7 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(config.heading_hold_confirm_samples, 1)
         self.assertEqual(config.heading_hold_trace_interval_seconds, 0.5)
         self.assertTrue(config.cruise_vision_enabled)
-        self.assertEqual(config.cruise_speed, 14)
+        self.assertEqual(config.cruise_speed, 24)
         self.assertEqual(config.cruise_tick_seconds, 0.03)
         self.assertFalse(config.line_follow_enabled)
         self.assertFalse(config.line_follow_auto_enter)
@@ -346,8 +346,8 @@ class RuntimeTest(unittest.TestCase):
 
         self.assertTrue(any(event["type"] == "forbidden_zone_detected" for event in snapshot["events"]))
         self.assertIn("rotate_right", fake_motion.calls)
-        self.assertGreaterEqual(fake_motion.calls.count("move_forward"), 1)
-        self.assertNotIn("move_backward", fake_motion.calls)
+        # Boundary retreat now backs off the line before turning (anti out-of-bounds).
+        self.assertGreaterEqual(fake_motion.calls.count("move_backward"), 1)
         self.assertEqual(snapshot["pose"]["heading"], "S")
 
     def test_continuous_patrol_treats_center_tape_as_line_follow_forward(self) -> None:
@@ -501,11 +501,13 @@ class RuntimeTest(unittest.TestCase):
         )
 
         self.assertIn("stop", fake_motion.calls)
+        # No retreat during the motion guard itself; retreat happens on boundary handling.
         self.assertNotIn("move_backward", fake_motion.calls)
-        forward_count = fake_motion.calls.count("move_forward")
+        backward_count = fake_motion.calls.count("move_backward")
         fake_sensors.tapes.append((0, 1, 1, 1))
         runtime._handle_tape_boundary((0, 1, 1, 1))
-        self.assertGreater(fake_motion.calls.count("move_forward"), forward_count)
+        # Boundary retreat now backs off the line (move_backward) before turning.
+        self.assertGreater(fake_motion.calls.count("move_backward"), backward_count)
         self.assertTrue(
             any(
                 event["type"] == "motion_debug"
@@ -802,7 +804,10 @@ class RuntimeTest(unittest.TestCase):
             detection_provider=tag_without_ocr_detection_provider,
         )
 
-        detections = runtime._collect_detections()
+        # The missing-OCR warning is only emitted when OCR is enabled; force it on
+        # here since it is disabled by default (ENABLE_OCR=0 → AprilTag only).
+        with mock.patch("inspection_robot.vision.tag_detector.ocr_enabled", return_value=True):
+            detections = runtime._collect_detections()
         stages = [
             event["evidence"].get("stage")
             for event in store.snapshot()["events"]

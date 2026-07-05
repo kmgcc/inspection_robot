@@ -7,7 +7,7 @@ from typing import Any, Callable
 @dataclass(slots=True)
 class HeadingHoldSettings:
     enabled: bool = True
-    tolerance_degrees: float = 0.4
+    tolerance_degrees: float = 2.5
     gain: float = 0.012
     min_pulse_seconds: float = 0.03
     max_pulse_seconds: float = 0.12
@@ -15,7 +15,7 @@ class HeadingHoldSettings:
     fallback_speed: int = 22
     invert: bool = False
     rate_damping: float = 0.18
-    speed_gain: float = 2.4
+    speed_gain: float = 1.8
     min_correction_speed: int = 4
 
 

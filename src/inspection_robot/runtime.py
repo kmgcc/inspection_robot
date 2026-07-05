@@ -93,13 +93,13 @@ class RobotRuntimeConfig:
     forbidden_avoidance_return_bodies: float = field(default_factory=lambda: _env_float(1.5, "FORBIDDEN_AVOIDANCE_RETURN_BODIES"))
     avoidance_turn_direction: str = field(default_factory=lambda: _env_text("right", "AVOIDANCE_TURN_DIRECTION"))
     boundary_min_black_sensors: int = field(default_factory=lambda: _env_int(2, "BOUNDARY_MIN_BLACK_SENSORS"))
-    boundary_confirm_samples: int = field(default_factory=lambda: _env_int(2, "BOUNDARY_CONFIRM_SAMPLES"))
+    boundary_confirm_samples: int = field(default_factory=lambda: _env_int(1, "BOUNDARY_CONFIRM_SAMPLES"))
     boundary_confirm_gap_seconds: float = field(default_factory=lambda: _env_float(0.02, "BOUNDARY_CONFIRM_GAP_SECONDS"))
     boundary_window_seconds: float = field(default_factory=lambda: _env_float(0.12, "BOUNDARY_WINDOW_SECONDS"))
     boundary_cooldown_seconds: float = field(default_factory=lambda: _env_float(0.0, "BOUNDARY_COOLDOWN_SECONDS"))
     boundary_retreat_speed: int = field(default_factory=lambda: _env_int(12, "BOUNDARY_RETREAT_SPEED"))
-    boundary_retreat_seconds: float = field(default_factory=lambda: _env_float(0.08, "BOUNDARY_RETREAT_SECONDS"))
-    boundary_retreat_command: str = field(default_factory=lambda: _env_text("forward", "BOUNDARY_RETREAT_COMMAND"))
+    boundary_retreat_seconds: float = field(default_factory=lambda: _env_float(0.14, "BOUNDARY_RETREAT_SECONDS"))
+    boundary_retreat_command: str = field(default_factory=lambda: _env_text("backward", "BOUNDARY_RETREAT_COMMAND"))
     motion_guard_poll_seconds: float = field(default_factory=lambda: _env_float(0.01, "MOTION_GUARD_POLL_SECONDS"))
     motion_slice_seconds: float = field(default_factory=lambda: _env_float(0.03, "ROBOT_MOTION_SLICE_SECONDS"))
     object_trigger_enabled: bool = field(default_factory=lambda: _env_bool("OBJECT_TRIGGER_ENABLED", True))
@@ -113,14 +113,14 @@ class RobotRuntimeConfig:
     object_slow_speed: int = field(default_factory=lambda: _env_int(12, "OBJECT_SLOW_SPEED"))
     object_settle_seconds: float = field(default_factory=lambda: _env_float(0.2, "OBJECT_SETTLE_SECONDS"))
     heading_hold_enabled: bool = field(default_factory=lambda: _env_bool("HEADING_HOLD_ENABLED", True))
-    heading_hold_tolerance_deg: float = field(default_factory=lambda: _env_float(0.4, "HEADING_HOLD_TOLERANCE_DEG"))
+    heading_hold_tolerance_deg: float = field(default_factory=lambda: _env_float(2.5, "HEADING_HOLD_TOLERANCE_DEG"))
     heading_hold_gain: float = field(default_factory=lambda: _env_float(0.012, "HEADING_HOLD_GAIN"))
     heading_hold_min_pulse_seconds: float = field(default_factory=lambda: _env_float(0.025, "HEADING_HOLD_MIN_PULSE_SECONDS"))
     heading_hold_max_pulse_seconds: float = field(default_factory=lambda: _env_float(0.10, "HEADING_HOLD_MAX_PULSE_SECONDS"))
     heading_hold_correction_speed: int = field(default_factory=lambda: _env_int(16, "HEADING_HOLD_CORRECTION_SPEED"))
     heading_hold_invert: bool = field(default_factory=lambda: _env_bool("HEADING_HOLD_INVERT", False))
     heading_hold_rate_damping: float = field(default_factory=lambda: _env_float(0.18, "HEADING_HOLD_KD", "HEADING_HOLD_RATE_DAMPING"))
-    heading_hold_speed_gain: float = field(default_factory=lambda: _env_float(2.4, "HEADING_HOLD_SPEED_GAIN"))
+    heading_hold_speed_gain: float = field(default_factory=lambda: _env_float(1.8, "HEADING_HOLD_SPEED_GAIN"))
     heading_hold_min_correction_speed: int = field(default_factory=lambda: _env_int(4, "HEADING_HOLD_MIN_CORRECTION_SPEED"))
     heading_hold_min_sample_interval_seconds: float = field(default_factory=lambda: _env_float(0.0, "HEADING_HOLD_MIN_SAMPLE_INTERVAL_SECONDS"))
     heading_hold_min_interval_seconds: float = field(default_factory=lambda: _env_float(0.05, "HEADING_HOLD_MIN_INTERVAL_SECONDS"))
@@ -131,7 +131,7 @@ class RobotRuntimeConfig:
     heading_zupt_samples: int = field(default_factory=lambda: _env_int(15, "HEADING_ZUPT_SAMPLES"))
     heading_zupt_sample_seconds: float = field(default_factory=lambda: _env_float(0.005, "HEADING_ZUPT_SAMPLE_SECONDS"))
     smooth_cruise_enabled: bool = field(default_factory=lambda: _env_bool("SMOOTH_CRUISE_ENABLED", False))
-    cruise_speed: int = field(default_factory=lambda: _env_int(14, "CRUISE_SPEED", "SMOOTH_CRUISE_SPEED"))
+    cruise_speed: int = field(default_factory=lambda: _env_int(24, "CRUISE_SPEED", "SMOOTH_CRUISE_SPEED"))
     cruise_tick_seconds: float = field(default_factory=lambda: _env_float(0.03, "CRUISE_TICK_SECONDS"))
     cruise_log_interval_seconds: float = field(default_factory=lambda: _env_float(1.0, "CRUISE_LOG_INTERVAL_SECONDS"))
     cruise_vision_enabled: bool = field(default_factory=lambda: _env_bool("CRUISE_VISION_ENABLED", True))
@@ -1754,6 +1754,109 @@ class RobotRuntime:
             self._heading_guard = None
         return self._heading_guard
 
+    def _integrate_guard_yaw(
+        self,
+        action: Callable[[float], None],
+        *,
+        seconds: float,
+        slice_seconds: float = 0.05,
+    ) -> float | None:
+        """Drive ``action`` in short slices while integrating signed yaw.
+
+        Uses the real ``StraightHeadingGuard`` (so ``yaw_sign``/deadband are
+        applied exactly as the controller sees them) and returns the total
+        integrated heading in degrees, or ``None`` if no IMU guard is available.
+        """
+
+        guard = self._heading_guard_instance()
+        if guard is None:
+            return None
+        reset = getattr(guard, "reset", None)
+        updater = getattr(guard, "update", None)
+        if not callable(updater):
+            return None
+        if callable(reset):
+            reset()
+        updater()  # seed last_sample_at so the first slice integrates a real dt
+        slice_seconds = max(0.01, float(slice_seconds))
+        deadline = time.monotonic() + max(0.0, float(seconds))
+        while time.monotonic() < deadline and not self._stop_event.is_set():
+            action(slice_seconds)
+            updater()
+        self.motion.stop()
+        return float(getattr(guard, "heading_degrees", 0.0))
+
+    def run_heading_polarity_selfcheck(
+        self,
+        *,
+        turn_speed: int | None = None,
+        forward_speed: int | None = None,
+        seconds: float = 0.6,
+    ) -> dict[str, object]:
+        """On-car self-check that locks in the heading-hold correction polarity.
+
+        Rotates left briefly (gyro-sign check) then differential-steers right
+        briefly (actuation-sign check), measuring integrated yaw through the
+        real guard, and reports whether the correction is corrective plus the
+        recommended ``MPU6050_YAW_SIGN`` / ``HEADING_HOLD_INVERT``. Needs robot
+        mode with a live MPU6050, and a bit of clear floor ahead.
+        """
+
+        if not self.config.heading_hold_enabled:
+            return {"ok": False, "error": "heading hold disabled (HEADING_HOLD_ENABLED=0)"}
+        if self._heading_guard_instance() is None:
+            return {"ok": False, "error": "no IMU heading guard (need MPU6050 in robot mode)"}
+        turn_spd = int(self.config.turn_speed if turn_speed is None else turn_speed)
+        fwd_spd = int(self.config.cruise_speed if forward_speed is None else forward_speed)
+        correction = max(
+            int(self.config.heading_hold_min_correction_speed),
+            int(round(fwd_spd * 0.4)),
+        )
+        self.request_manual_override()
+        try:
+            left_yaw = self._integrate_guard_yaw(
+                lambda s: self.motion.rotate_left_slow(speed=turn_spd, duration_seconds=s),
+                seconds=seconds,
+            )
+            self._settle()
+            forward_right_yaw = self._integrate_guard_yaw(
+                lambda s: self.motion.move_forward_corrected_slow(
+                    speed=fwd_spd, correction=correction, direction="right", duration_seconds=s
+                ),
+                seconds=seconds,
+            )
+            self._settle()
+        finally:
+            self.motion.stop()
+            self.release_manual_override()
+        if left_yaw is None or forward_right_yaw is None:
+            return {"ok": False, "error": "IMU integration unavailable during self-check"}
+        yaw_sign_reader = getattr(mpu6050, "_yaw_sign", None)
+        current_yaw_sign = float(yaw_sign_reader()) if callable(yaw_sign_reader) else 1.0
+        check = mpu6050.evaluate_heading_polarity(
+            left_yaw,
+            forward_right_yaw,
+            current_yaw_sign=current_yaw_sign,
+            current_invert=self.config.heading_hold_invert,
+        )
+        result: dict[str, object] = {
+            "ok": check.ok,
+            "left_turn_yaw_deg": round(check.left_turn_yaw_deg, 2),
+            "forward_right_yaw_deg": round(check.forward_right_yaw_deg, 2),
+            "gyro_sign_ok": check.gyro_sign_ok,
+            "differential_sign_ok": check.differential_sign_ok,
+            "recommended_yaw_sign": check.recommended_yaw_sign,
+            "recommended_invert": check.recommended_invert,
+            "message": check.message,
+        }
+        self.store.record_motion_debug(
+            "heading_polarity_selfcheck",
+            check.message,
+            status="MANUAL_CONTROL",
+            evidence=result,
+        )
+        return result
+
     def _heading_hold_settings(self, fallback_speed: int | None = None) -> HeadingHoldSettings:
         hold_fallback_speed = self.config.cruise_speed if fallback_speed is None else int(fallback_speed)
         return HeadingHoldSettings(
@@ -2290,14 +2393,15 @@ class RobotRuntime:
             status="SCANNING_SHELF",
             evidence={"count": len(detections), "detections": summary},
         )
-        for item in summary:
-            if item.get("tag_id") and not item.get("ocr_text"):
-                self.store.record_motion_debug(
-                    "vision_text_missing",
-                    f"QR/AprilTag {item['tag_id']} was detected, but OCR text is empty.",
-                    status="SCANNING_SHELF",
-                    evidence=item,
-                )
+        if tag_detector.ocr_enabled():
+            for item in summary:
+                if item.get("tag_id") and not item.get("ocr_text"):
+                    self.store.record_motion_debug(
+                        "vision_text_missing",
+                        f"QR/AprilTag {item['tag_id']} was detected, but OCR text is empty.",
+                        status="SCANNING_SHELF",
+                        evidence=item,
+                    )
         return detections
 
     def _detection_log_summary(self, detection: Mapping[str, object]) -> dict[str, object]:

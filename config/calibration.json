@@ -13,5 +13,7 @@
   "cw_compensation": 1.0,
   "ccw_compensation": 1.0,
   "line_follow_speed": 16,
-  "line_follow_step_seconds": 0.1
+  "line_follow_step_seconds": 0.1,
+  "heading_yaw_sign": 1,
+  "heading_invert": false
 }
