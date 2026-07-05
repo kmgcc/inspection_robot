@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -105,6 +106,31 @@ class WebApiTest(unittest.TestCase):
 
         self.assertFalse(plain.data.startswith(b"\xef\xbb\xbf"))
         self.assertTrue(with_bom.data.startswith(b"\xef\xbb\xbf"))
+
+    def test_robot_status_refreshes_motion_sensor_before_patrol_starts(self) -> None:
+        class FakeRuntime:
+            def __init__(self, store, *_args, **_kwargs) -> None:
+                self.store = store
+
+            def refresh_motion_sensor(self, *, force: bool = False) -> None:
+                self.store.record_motion_sensor(
+                    {
+                        "ok": True,
+                        "source": "test-imu",
+                        "sample_time": "2026-07-05T02:49:00",
+                        "last_error": None,
+                    }
+                )
+
+        self.app.config["RUN_MODE"] = "robot"
+        self.app.config["INSPECTION_STORE"].record_run_mode("robot", False)
+
+        with patch("inspection_robot.runtime.RobotRuntime", FakeRuntime):
+            payload = self.client.get("/api/status").get_json()
+
+        self.assertTrue(payload["motion_sensor"]["ok"])
+        self.assertEqual(payload["motion_sensor"]["source"], "test-imu")
+        self.assertIn("ROBOT_RUNTIME", self.app.config)
 
     def test_dashboard_demo_routes_cover_path_obstacle_forbidden_and_scans(self) -> None:
         path = self.client.post("/api/demo/path")
