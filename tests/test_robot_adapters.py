@@ -161,7 +161,7 @@ class RobotAdapterTest(unittest.TestCase):
     def test_bot_singleton_exposes_initialization_lock(self) -> None:
         self.assertTrue(hasattr(sensors, "_BOT_LOCK"))
 
-    def test_alarm_uses_buzzer_and_rgb_without_import_time_hardware(self) -> None:
+    def test_alarm_uses_rgb_without_beep_for_audio_backed_alerts(self) -> None:
         fake = FakeBot({})
         original = alarm.get_bot
         alarm.get_bot = lambda: fake  # type: ignore[assignment]
@@ -172,7 +172,7 @@ class RobotAdapterTest(unittest.TestCase):
             alarm.get_bot = original  # type: ignore[assignment]
 
         self.assertIn(("rgb", 1, alarm.COLOR_PURPLE), fake.calls)
-        self.assertIn(("beep", 1), fake.calls)
+        self.assertNotIn(("beep", 1), fake.calls)
         self.assertIn(("rgb", 1, alarm.COLOR_GREEN), fake.calls)
 
     def test_iter_tag_ids_delegates_to_detection_iterator(self) -> None:

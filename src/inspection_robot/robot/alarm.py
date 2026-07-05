@@ -39,17 +39,17 @@ def show_normal() -> None:
 
 def show_obstacle_wait() -> None:
     _set_rgb(COLOR_YELLOW)
-    _pulse_beep(1, 0.08)
+    _beep(0)
 
 
 def show_warning() -> None:
     _set_rgb(COLOR_PURPLE)
-    _pulse_beep(2, 0.08)
+    _beep(0)
 
 
 def show_high_priority_alarm() -> None:
     _set_rgb(COLOR_RED)
-    _pulse_beep(3, 0.08)
+    _beep(0)
 
 
 def clear_alarm() -> None:

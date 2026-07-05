@@ -6,7 +6,7 @@ from pathlib import Path
 
 from flask import Flask, Response, jsonify, render_template, request
 
-from .audio import start_audio_cue, start_default_audio
+from .audio import audio_debug_status, start_audio_cue, start_spoken_message
 from .config import load_shelf_manifest, load_tag_map, load_warehouse_map
 from .core.planner import PlanningError, plan_patrol_route
 from .robot import gimbal, motion
@@ -244,7 +244,10 @@ def create_app(root: Path | None = None) -> Flask:
 
     @app.post("/api/audio/play")
     def api_audio_play():
-        payload, status = start_default_audio(project_root)
+        payload_json = request.get_json(silent=True) or {}
+        cue = str(payload_json.get("cue") or "default")
+        payload, status = start_audio_cue(project_root, cue)
+        store.record_audio_cue(cue, f"网页调试播放：{cue}", None if status == 200 else str(payload.get("error")))
         return jsonify(payload), status
 
     @app.post("/api/audio/announce")
@@ -252,9 +255,16 @@ def create_app(root: Path | None = None) -> Flask:
         payload = request.get_json(silent=True) or {}
         cue = str(payload.get("cue") or "default")
         message = str(payload.get("message") or f"音频提示：{cue}")
-        result, status = start_audio_cue(project_root, cue)
+        if cue.strip().lower() == "spoken":
+            result, status = start_spoken_message(project_root, message)
+        else:
+            result, status = start_audio_cue(project_root, cue)
         store.record_audio_cue(cue, message, None if status == 200 else str(result.get("error")))
         return jsonify({**result, "queued": status == 200, "message": message}), status
+
+    @app.get("/api/audio/status")
+    def api_audio_status():
+        return jsonify(audio_debug_status(project_root))
 
     @app.post("/api/gimbal/init")
     def api_gimbal_init():

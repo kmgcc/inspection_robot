@@ -97,6 +97,8 @@ class RobotRuntimeConfig:
     boundary_confirm_gap_seconds: float = field(default_factory=lambda: _env_float(0.0, "BOUNDARY_CONFIRM_GAP_SECONDS"))
     boundary_window_seconds: float = field(default_factory=lambda: _env_float(0.25, "BOUNDARY_WINDOW_SECONDS"))
     boundary_cooldown_seconds: float = field(default_factory=lambda: _env_float(0.0, "BOUNDARY_COOLDOWN_SECONDS"))
+    boundary_retreat_speed: int = field(default_factory=lambda: _env_int(12, "BOUNDARY_RETREAT_SPEED"))
+    boundary_retreat_seconds: float = field(default_factory=lambda: _env_float(0.06, "BOUNDARY_RETREAT_SECONDS"))
     motion_guard_poll_seconds: float = field(default_factory=lambda: _env_float(0.01, "MOTION_GUARD_POLL_SECONDS"))
     motion_slice_seconds: float = field(default_factory=lambda: _env_float(0.03, "ROBOT_MOTION_SLICE_SECONDS"))
     object_trigger_enabled: bool = field(default_factory=lambda: _env_bool("OBJECT_TRIGGER_ENABLED", True))
@@ -110,25 +112,25 @@ class RobotRuntimeConfig:
     object_slow_speed: int = field(default_factory=lambda: _env_int(12, "OBJECT_SLOW_SPEED"))
     object_settle_seconds: float = field(default_factory=lambda: _env_float(0.2, "OBJECT_SETTLE_SECONDS"))
     heading_hold_enabled: bool = field(default_factory=lambda: _env_bool("HEADING_HOLD_ENABLED", True))
-    heading_hold_tolerance_deg: float = field(default_factory=lambda: _env_float(0.25, "HEADING_HOLD_TOLERANCE_DEG"))
+    heading_hold_tolerance_deg: float = field(default_factory=lambda: _env_float(0.5, "HEADING_HOLD_TOLERANCE_DEG"))
     heading_hold_gain: float = field(default_factory=lambda: _env_float(0.012, "HEADING_HOLD_GAIN"))
     heading_hold_min_pulse_seconds: float = field(default_factory=lambda: _env_float(0.025, "HEADING_HOLD_MIN_PULSE_SECONDS"))
     heading_hold_max_pulse_seconds: float = field(default_factory=lambda: _env_float(0.10, "HEADING_HOLD_MAX_PULSE_SECONDS"))
-    heading_hold_correction_speed: int = field(default_factory=lambda: _env_int(35, "HEADING_HOLD_CORRECTION_SPEED"))
+    heading_hold_correction_speed: int = field(default_factory=lambda: _env_int(12, "HEADING_HOLD_CORRECTION_SPEED"))
     heading_hold_invert: bool = field(default_factory=lambda: _env_bool("HEADING_HOLD_INVERT", False))
-    heading_hold_rate_damping: float = field(default_factory=lambda: _env_float(0.08, "HEADING_HOLD_KD", "HEADING_HOLD_RATE_DAMPING"))
-    heading_hold_speed_gain: float = field(default_factory=lambda: _env_float(5.0, "HEADING_HOLD_SPEED_GAIN"))
-    heading_hold_min_correction_speed: int = field(default_factory=lambda: _env_int(6, "HEADING_HOLD_MIN_CORRECTION_SPEED"))
+    heading_hold_rate_damping: float = field(default_factory=lambda: _env_float(0.18, "HEADING_HOLD_KD", "HEADING_HOLD_RATE_DAMPING"))
+    heading_hold_speed_gain: float = field(default_factory=lambda: _env_float(1.6, "HEADING_HOLD_SPEED_GAIN"))
+    heading_hold_min_correction_speed: int = field(default_factory=lambda: _env_int(3, "HEADING_HOLD_MIN_CORRECTION_SPEED"))
     heading_hold_min_sample_interval_seconds: float = field(default_factory=lambda: _env_float(0.0, "HEADING_HOLD_MIN_SAMPLE_INTERVAL_SECONDS"))
-    heading_hold_min_interval_seconds: float = field(default_factory=lambda: _env_float(0.0, "HEADING_HOLD_MIN_INTERVAL_SECONDS"))
-    heading_hold_max_consecutive: int = field(default_factory=lambda: _env_int(999, "HEADING_HOLD_MAX_CONSECUTIVE"))
+    heading_hold_min_interval_seconds: float = field(default_factory=lambda: _env_float(0.08, "HEADING_HOLD_MIN_INTERVAL_SECONDS"))
+    heading_hold_max_consecutive: int = field(default_factory=lambda: _env_int(3, "HEADING_HOLD_MAX_CONSECUTIVE"))
     heading_hold_confirm_samples: int = field(default_factory=lambda: _env_int(1, "HEADING_HOLD_CONFIRM_SAMPLES"))
     heading_hold_trace_interval_seconds: float = field(default_factory=lambda: _env_float(0.5, "HEADING_HOLD_TRACE_INTERVAL_SECONDS"))
     heading_zupt_enabled: bool = field(default_factory=lambda: _env_bool("HEADING_ZUPT_ENABLED", True))
     heading_zupt_samples: int = field(default_factory=lambda: _env_int(15, "HEADING_ZUPT_SAMPLES"))
     heading_zupt_sample_seconds: float = field(default_factory=lambda: _env_float(0.005, "HEADING_ZUPT_SAMPLE_SECONDS"))
     smooth_cruise_enabled: bool = field(default_factory=lambda: _env_bool("SMOOTH_CRUISE_ENABLED", False))
-    cruise_speed: int = field(default_factory=lambda: _env_int(30, "CRUISE_SPEED", "SMOOTH_CRUISE_SPEED"))
+    cruise_speed: int = field(default_factory=lambda: _env_int(24, "CRUISE_SPEED", "SMOOTH_CRUISE_SPEED"))
     cruise_tick_seconds: float = field(default_factory=lambda: _env_float(0.04, "CRUISE_TICK_SECONDS"))
     cruise_log_interval_seconds: float = field(default_factory=lambda: _env_float(1.0, "CRUISE_LOG_INTERVAL_SECONDS"))
     cruise_vision_enabled: bool = field(default_factory=lambda: _env_bool("CRUISE_VISION_ENABLED", True))
@@ -223,6 +225,7 @@ class RobotRuntime:
         self._last_camera_fallback_at = 0.0
         self._last_missing_alert_at = 0.0
         self._black_seen_at = [-1e9, -1e9, -1e9, -1e9]
+        self._boundary_retreat_latched = False
         self._heading_guard: Any | None = None
         self._object_presence_hits = 0
         self._last_object_presence_at = 0.0
@@ -505,6 +508,8 @@ class RobotRuntime:
             self._reset_boundary_window()
             return "none"
         self.motion.stop()
+        if not self._boundary_retreat_latched:
+            self._retreat_from_boundary("boundary_candidate")
         self.store.record_motion_debug(
             "boundary_candidate",
             f"检测到黑胶带候选并立即停车：tape={_format_tape_state(tape_state)}，阈值={self.config.boundary_min_black_sensors} 路黑。",
@@ -549,6 +554,7 @@ class RobotRuntime:
         self.alarm.show_warning()
         self.store.record_boundary(tape_state, True, action)
         self.store.record_forbidden_zone(zone_id, True)
+        self._play_cue("obstacle", "检测到禁区/黑胶带边界，播放障碍提示音。")
         if not _turn_succeeded(self._turn_90("right")):
             return "none"
         self.store.record_boundary_turn("clockwise", 90)
@@ -627,6 +633,7 @@ class RobotRuntime:
     def _reset_boundary_window(self) -> None:
         self._black_seen_at = [-1e9, -1e9, -1e9, -1e9]
         self._pending_boundary_state = None
+        self._boundary_retreat_latched = False
 
     def _feed_boundary_window(self, tape_state: tuple[int, int, int, int] | None) -> bool:
         if tape_state is None:
@@ -657,6 +664,30 @@ class RobotRuntime:
         if first_state is None:
             return None
         return first_state
+
+    def _retreat_from_boundary(self, source: str) -> bool:
+        seconds = max(0.0, float(self.config.boundary_retreat_seconds))
+        if seconds <= 0.0:
+            self._boundary_retreat_latched = True
+            return False
+        speed = max(1, int(self.config.boundary_retreat_speed))
+        try:
+            self.motion.move_backward_slow(speed=speed, duration_seconds=seconds)
+            self.motion.stop()
+        except RobotHardwareError:
+            return False
+        self._boundary_retreat_latched = True
+        self.store.record_motion_debug(
+            "boundary_retreat",
+            f"黑胶带边界已小幅回退：speed={speed}, duration={seconds:.2f}s。",
+            status="TURNING_AT_BOUNDARY",
+            evidence={
+                "source": source,
+                "speed": speed,
+                "duration_seconds": seconds,
+            },
+        )
+        return True
 
     def _drive_patrol_step(self, tape_state: tuple[int, int, int, int] | None) -> None:
         if self._line_follow_active and self.config.line_follow_enabled:
@@ -933,7 +964,7 @@ class RobotRuntime:
         if duration <= 0.0 or guard_interval <= 0.0 or duration <= guard_interval:
             correction = None
             if heading_hold:
-                correction = self._heading_hold_correction()
+                correction = self._heading_hold_correction(speed)
             self._call_mover_with_correction(mover, speed=speed, duration_seconds=duration, correction=correction)
             if correction is not None:
                 self._record_heading_hold_correction(correction, speed=speed)
@@ -949,7 +980,7 @@ class RobotRuntime:
             chunk = min(remaining, guard_interval)
             correction = None
             if heading_hold:
-                correction = self._heading_hold_correction()
+                correction = self._heading_hold_correction(speed)
                 if self._stop_event.is_set() or self._manual_override.is_set():
                     break
             self._call_mover_with_correction(mover, speed=speed, duration_seconds=chunk, correction=correction)
@@ -977,6 +1008,7 @@ class RobotRuntime:
             return False
         self._pending_boundary_state = self._boundary_window_state(tape_state)
         self.motion.stop()
+        self._retreat_from_boundary("motion_guard")
         self.store.record_motion_debug(
             "motion_guard_boundary_latched",
             (
@@ -1252,19 +1284,9 @@ class RobotRuntime:
         waiting = [event for event in events if event.get("status") == "waiting_confirm"]
         if not waiting:
             return
-        high_priority = any(event.get("type") == "missing_item" or _event_priority(event) >= 3 for event in waiting)
-        try:
-            if high_priority:
-                notifier = getattr(self.alarm, "show_high_priority_alarm", None)
-                if callable(notifier):
-                    notifier()
-                else:
-                    self.alarm.show_warning()
-            else:
-                self.alarm.show_warning()
-        except RobotHardwareError:
-            pass
-        if high_priority:
+        self._trigger_orange_flash()
+        self.store.record_light_cue("orange", "扫描到货架/物品异常，橙色指示灯已触发。")
+        if any(event.get("type") == "missing_item" for event in waiting):
             self._play_missing_alert(waiting)
 
     def _play_missing_alert(self, events: list[EventRecord]) -> None:
@@ -1705,7 +1727,8 @@ class RobotRuntime:
             self._heading_guard = None
         return self._heading_guard
 
-    def _heading_hold_settings(self) -> HeadingHoldSettings:
+    def _heading_hold_settings(self, fallback_speed: int | None = None) -> HeadingHoldSettings:
+        hold_fallback_speed = self.config.cruise_speed if fallback_speed is None else int(fallback_speed)
         return HeadingHoldSettings(
             enabled=self.config.heading_hold_enabled,
             tolerance_degrees=self.config.heading_hold_tolerance_deg,
@@ -1713,14 +1736,14 @@ class RobotRuntime:
             min_pulse_seconds=self.config.heading_hold_min_pulse_seconds,
             max_pulse_seconds=self.config.heading_hold_max_pulse_seconds,
             correction_speed=self.config.heading_hold_correction_speed,
-            fallback_speed=self.config.turn_speed,
+            fallback_speed=hold_fallback_speed,
             invert=self.config.heading_hold_invert,
             rate_damping=self.config.heading_hold_rate_damping,
             speed_gain=self.config.heading_hold_speed_gain,
             min_correction_speed=self.config.heading_hold_min_correction_speed,
         )
 
-    def _heading_hold_correction(self) -> HeadingHoldCorrection | None:
+    def _heading_hold_correction(self, fallback_speed: int | None = None) -> HeadingHoldCorrection | None:
         guard = self._heading_guard_instance()
         if self._stop_event.is_set() or self._manual_override.is_set():
             return None
@@ -1759,6 +1782,28 @@ class RobotRuntime:
                 tolerance_degrees=tolerance,
             )
             return None
+        min_interval = max(0.0, float(self.config.heading_hold_min_interval_seconds))
+        if min_interval > 0.0 and now - self._last_heading_correction_at < min_interval:
+            self._record_heading_hold_sample(
+                "correction_throttled",
+                deviation_degrees=deviation,
+                rate_dps=rate,
+                tolerance_degrees=tolerance,
+                min_interval_seconds=min_interval,
+            )
+            return None
+        max_consecutive = max(0, int(self.config.heading_hold_max_consecutive))
+        if max_consecutive > 0 and self._heading_consecutive_count >= max_consecutive:
+            self._heading_consecutive_count = 0
+            self._heading_over_tolerance_count = 0
+            self._record_heading_hold_sample(
+                "consecutive_cooldown",
+                deviation_degrees=deviation,
+                rate_dps=rate,
+                tolerance_degrees=tolerance,
+                max_consecutive=max_consecutive,
+            )
+            return None
         self._heading_over_tolerance_count += 1
         confirm_samples = max(1, int(self.config.heading_hold_confirm_samples))
         if self._heading_over_tolerance_count < confirm_samples:
@@ -1774,7 +1819,7 @@ class RobotRuntime:
         try:
             correction = compute_heading_hold_correction(
                 guard,
-                self._heading_hold_settings(),
+                self._heading_hold_settings(fallback_speed),
                 stop_requested=lambda: self._stop_event.is_set() or self._manual_override.is_set(),
                 deviation_degrees=deviation,
             )
@@ -1844,7 +1889,7 @@ class RobotRuntime:
         mover(speed=speed, duration_seconds=duration_seconds)
 
     def _apply_heading_hold(self) -> None:
-        correction = self._heading_hold_correction()
+        correction = self._heading_hold_correction(self.config.cruise_speed)
         if correction is None:
             return
         self._forward_mover_for_correction(correction)(speed=self.config.cruise_speed, duration_seconds=0.0)
@@ -2423,6 +2468,7 @@ def _clamp_config_speeds(config: RobotRuntimeConfig) -> None:
         "avoidance_speed",
         "object_slow_speed",
         "heading_hold_correction_speed",
+        "boundary_retreat_speed",
         "cruise_speed",
         "line_follow_speed",
         "line_follow_turn_speed",

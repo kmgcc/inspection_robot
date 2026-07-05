@@ -673,7 +673,7 @@ function initManualControls() {
 }
 
 // ============================================================
-// 事件代理：data-post 按钮 / data-confirm / data-audio
+// 事件代理：data-post 按钮 / data-confirm / data-audio-cue
 // ============================================================
 
 document.addEventListener("click", async (e) => {
@@ -703,16 +703,56 @@ document.addEventListener("click", async (e) => {
     return;
   }
 
-  if (e.target.closest("[data-audio]")) {
+  const audioBtn = e.target.closest("[data-audio-cue]");
+  if (audioBtn) {
+    const cue = audioBtn.dataset.audioCue || "default";
     try {
-      const res = await fetch("/api/audio/play", { method: "POST" });
+      const res = await fetch("/api/audio/play", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cue }),
+      });
       const p = await res.json();
       if (!p.ok) window.alert(`音频播放失败：${p.error || "未知错误"}`);
+      await refreshAudioDebugStatus();
     } catch (err) {
       window.alert(`音频播放失败：${err.message}`);
     }
+    return;
   }
 });
+
+async function refreshAudioDebugStatus() {
+  const output = byId("audio-debug-status");
+  if (!output) return;
+  try {
+    const res = await fetch("/api/audio/status", { cache: "no-store" });
+    const payload = await res.json();
+    output.textContent = JSON.stringify(payload, null, 2);
+  } catch (err) {
+    output.textContent = `音频状态读取失败：${err.message}`;
+  }
+}
+
+function initAudioDebugControls() {
+  byId("btn-audio-refresh")?.addEventListener("click", () => refreshAudioDebugStatus());
+  byId("btn-audio-speak")?.addEventListener("click", async () => {
+    const message = byId("audio-speech-text")?.value || "检测到缺失物品。";
+    try {
+      const res = await fetch("/api/audio/announce", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cue: "spoken", message }),
+      });
+      const payload = await res.json();
+      if (!payload.ok) window.alert(`语音播报失败：${payload.error || "未知错误"}`);
+      await refreshAudioDebugStatus();
+    } catch (err) {
+      window.alert(`语音播报失败：${err.message}`);
+    }
+  });
+  refreshAudioDebugStatus();
+}
 
 // ============================================================
 // 地图拓扑渲染
@@ -1113,6 +1153,7 @@ initTabs();
 initEmergencyStop();
 initManualControls();
 initTestControls();
+initAudioDebugControls();
 
 loadStatus();
 loadVideoDetections();

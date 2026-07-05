@@ -7,16 +7,16 @@ from typing import Any, Callable
 @dataclass(slots=True)
 class HeadingHoldSettings:
     enabled: bool = True
-    tolerance_degrees: float = 0.25
-    gain: float = 0.02
+    tolerance_degrees: float = 0.5
+    gain: float = 0.012
     min_pulse_seconds: float = 0.03
     max_pulse_seconds: float = 0.12
-    correction_speed: int | None = 35
+    correction_speed: int | None = 12
     fallback_speed: int = 22
     invert: bool = False
-    rate_damping: float = 0.05
-    speed_gain: float = 5.0
-    min_correction_speed: int = 6
+    rate_damping: float = 0.18
+    speed_gain: float = 1.6
+    min_correction_speed: int = 3
 
 
 @dataclass(slots=True)
@@ -112,7 +112,10 @@ def compute_heading_hold_correction(
     turn_right = effective > 0.0
     if settings.invert:
         turn_right = not turn_right
-    max_speed = settings.correction_speed or max(1, int(settings.fallback_speed))
+    max_speed = min(
+        settings.correction_speed or max(1, int(settings.fallback_speed)),
+        max(1, int(round(max(1, int(settings.fallback_speed)) * 0.45))),
+    )
     correction_speed = min(
         max_speed,
         max(int(settings.min_correction_speed), int(round(abs(effective) * max(0.0, float(settings.speed_gain))))),

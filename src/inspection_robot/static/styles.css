@@ -656,6 +656,43 @@ details[open] .collapsible-title::after {
   background: var(--panel);
 }
 
+.field-text {
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  font-size: 12px;
+  outline: none;
+  background: var(--panel);
+  color: var(--text);
+}
+
+.audio-debug-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-xs);
+  align-items: center;
+  margin-top: 10px;
+}
+
+.audio-debug-row .field-text {
+  flex: 1 1 240px;
+}
+
+.debug-output {
+  margin: 10px 0 0;
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
 /* =========================================================
    Metrics Grid & Mini Telemetry
    ========================================================= */

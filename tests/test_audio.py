@@ -24,6 +24,9 @@ class AudioPlaybackTest(unittest.TestCase):
         audio_dir = self.root / "src" / "inspection_robot" / "static" / "audio"
         audio_dir.mkdir(parents=True)
         (audio_dir / "obstacle.wav").write_bytes(b"RIFF")
+        (audio_dir / "first.wav").write_bytes(b"RIFF")
+        (audio_dir / "following.wav").write_bytes(b"RIFF")
+        (audio_dir / "youdowhatreversed.wav").write_bytes(b"RIFF")
 
         self.original_queue = audio._queue
         self.original_thread = audio._thread
@@ -88,6 +91,19 @@ class AudioPlaybackTest(unittest.TestCase):
         self.assertEqual(commands, [["/usr/bin/paplay", "obstacle.wav"], ["/usr/bin/espeak-ng", "-v", "zh", "测试"]])
         self.assertTrue(all(kwargs["stdin"] is subprocess.DEVNULL for kwargs in kwargs_seen))
         self.assertTrue(all(kwargs["check"] is False for kwargs in kwargs_seen))
+
+    def test_audio_debug_status_reports_cues_and_players(self) -> None:
+        def fake_which(name: str) -> str | None:
+            return f"/usr/bin/{name}" if name in {"paplay", "espeak-ng"} else None
+
+        with mock.patch.object(audio.shutil, "which", side_effect=fake_which):
+            payload = audio.audio_debug_status(self.root)
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["players"]["paplay"], "/usr/bin/paplay")
+        self.assertEqual(payload["tts_players"]["espeak-ng"], "/usr/bin/espeak-ng")
+        self.assertTrue(payload["cues"]["first"]["exists"])
+        self.assertTrue(payload["cues"]["following"]["exists"])
 
 
 if __name__ == "__main__":

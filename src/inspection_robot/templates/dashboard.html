@@ -477,10 +477,18 @@
       <div class="panel card" style="margin-top:14px">
         <h2 class="card-title">音频与云台</h2>
         <div class="btn-group">
-          <button class="btn" type="button" data-post="/api/audio/announce" id="btn-audio-announce">音频提示测试</button>
-          <button class="btn" type="button" data-audio id="btn-audio-play">播放车载音频</button>
+          <button class="btn" type="button" data-audio-cue="first">货架音频</button>
+          <button class="btn" type="button" data-audio-cue="following">物品音频</button>
+          <button class="btn" type="button" data-audio-cue="obstacle">障碍/禁区音频</button>
+          <button class="btn" type="button" data-audio-cue="default">默认音频</button>
           <a class="btn" href="{{ url_for('static', filename='audio/youdowhatreversed.wav') }}">浏览器试听</a>
         </div>
+        <div class="audio-debug-row">
+          <input class="field-text" id="audio-speech-text" type="text" value="检测到 A1 缺少 手机。">
+          <button class="btn" type="button" id="btn-audio-speak">语音播报</button>
+          <button class="btn" type="button" id="btn-audio-refresh">刷新音频状态</button>
+        </div>
+        <pre class="debug-output" id="audio-debug-status">-</pre>
       </div>
 
       <div class="panel card" style="margin-top:14px">

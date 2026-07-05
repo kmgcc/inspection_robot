@@ -299,6 +299,61 @@ class CruiseRuntimeTest(unittest.TestCase):
         self.assertNotIn("rotate_left", motion.calls)
         self.assertNotIn("rotate_right", motion.calls)
 
+    def test_heading_hold_caps_correction_to_forward_speed_fraction(self) -> None:
+        guard = FakeGuard(deviation=50.0, rate=0.0)
+        runtime, motion, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                heading_hold_enabled=True,
+                heading_hold_tolerance_deg=3.0,
+                heading_hold_correction_speed=35,
+                heading_hold_speed_gain=5.0,
+                heading_hold_min_interval_seconds=0.0,
+                heading_hold_confirm_samples=1,
+                cruise_speed=20,
+                action_settle_seconds=0,
+            ),
+            imu=FakeImu(guard),
+        )
+
+        runtime._apply_heading_hold()
+
+        self.assertIn("move_forward_corrected:right", motion.calls)
+        correction_events = [
+            event
+            for event in runtime.store.snapshot()["events"]
+            if event["type"] == "motion_debug" and event.get("evidence", {}).get("stage") == "heading_hold_correction"
+        ]
+        self.assertEqual(correction_events[-1]["evidence"]["correction_speed"], 9)
+
+    def test_heading_hold_throttles_back_to_back_corrections(self) -> None:
+        guard = FakeGuard(deviation=8.0, rate=0.0)
+        runtime, motion, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                heading_hold_enabled=True,
+                heading_hold_tolerance_deg=3.0,
+                heading_hold_min_interval_seconds=1.0,
+                heading_hold_confirm_samples=1,
+                heading_hold_trace_interval_seconds=0,
+                action_settle_seconds=0,
+            ),
+            imu=FakeImu(guard),
+        )
+
+        runtime._apply_heading_hold()
+        motion.calls.clear()
+        guard.last_sample_at = None
+        runtime._apply_heading_hold()
+
+        self.assertNotIn("move_forward_corrected:right", motion.calls)
+        self.assertTrue(
+            any(
+                event["type"] == "motion_debug"
+                and event.get("evidence", {}).get("stage") == "heading_hold_sample"
+                and event.get("evidence", {}).get("reason") == "correction_throttled"
+                for event in runtime.store.snapshot()["events"]
+            )
+        )
+
     # --- moving recognition + orange flash ------------------------------- #
 
     def test_moving_recognition_flashes_orange_records_and_cues(self) -> None:

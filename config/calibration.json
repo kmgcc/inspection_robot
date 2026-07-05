@@ -12,6 +12,6 @@
   "turn_ccw90_seconds": 0.85,
   "cw_compensation": 1.0,
   "ccw_compensation": 1.0,
-  "line_follow_speed": 30,
-  "line_follow_step_seconds": 0.14
+  "line_follow_speed": 24,
+  "line_follow_step_seconds": 0.1
 }

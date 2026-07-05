@@ -71,6 +71,8 @@ class RuntimeTest(unittest.TestCase):
             "FORBIDDEN_AVOIDANCE_RETURN_BODIES",
             "BOUNDARY_MIN_BLACK_SENSORS",
             "BOUNDARY_COOLDOWN_SECONDS",
+            "BOUNDARY_RETREAT_SPEED",
+            "BOUNDARY_RETREAT_SECONDS",
             "MOTION_GUARD_POLL_SECONDS",
             "BOUNDARY_WINDOW_SECONDS",
             "OBJECT_DETECTOR",
@@ -123,25 +125,28 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(config.boundary_min_black_sensors, 1)
         self.assertEqual(config.boundary_window_seconds, 0.25)
         self.assertEqual(config.boundary_cooldown_seconds, 0.0)
+        self.assertEqual(config.boundary_retreat_speed, 12)
+        self.assertEqual(config.boundary_retreat_seconds, 0.06)
         self.assertEqual(config.motion_guard_poll_seconds, 0.01)
         self.assertEqual(config.object_detector, "opencv")
         self.assertEqual(config.object_presence_confirm_frames, 1)
         self.assertTrue(config.heading_hold_enabled)
-        self.assertEqual(config.heading_hold_tolerance_deg, 0.25)
+        self.assertEqual(config.heading_hold_tolerance_deg, 0.5)
         self.assertEqual(config.heading_hold_gain, 0.012)
         self.assertEqual(config.heading_hold_min_pulse_seconds, 0.025)
         self.assertEqual(config.heading_hold_max_pulse_seconds, 0.10)
-        self.assertEqual(config.heading_hold_correction_speed, 35)
+        self.assertEqual(config.heading_hold_correction_speed, 12)
         self.assertFalse(config.heading_hold_invert)
-        self.assertEqual(config.heading_hold_speed_gain, 5.0)
-        self.assertEqual(config.heading_hold_min_correction_speed, 6)
+        self.assertEqual(config.heading_hold_rate_damping, 0.18)
+        self.assertEqual(config.heading_hold_speed_gain, 1.6)
+        self.assertEqual(config.heading_hold_min_correction_speed, 3)
         self.assertEqual(config.heading_hold_min_sample_interval_seconds, 0.0)
-        self.assertEqual(config.heading_hold_min_interval_seconds, 0.0)
-        self.assertEqual(config.heading_hold_max_consecutive, 999)
+        self.assertEqual(config.heading_hold_min_interval_seconds, 0.08)
+        self.assertEqual(config.heading_hold_max_consecutive, 3)
         self.assertEqual(config.heading_hold_confirm_samples, 1)
         self.assertEqual(config.heading_hold_trace_interval_seconds, 0.5)
         self.assertTrue(config.cruise_vision_enabled)
-        self.assertEqual(config.cruise_speed, 30)
+        self.assertEqual(config.cruise_speed, 24)
         self.assertFalse(config.line_follow_enabled)
         self.assertFalse(config.line_follow_auto_enter)
         self.assertEqual(config.line_follow_speed, 30)
@@ -311,7 +316,7 @@ class RuntimeTest(unittest.TestCase):
 
         self.assertTrue(any(event["type"] == "forbidden_zone_detected" for event in snapshot["events"]))
         self.assertIn("rotate_right", fake_motion.calls)
-        self.assertNotIn("move_backward", fake_motion.calls)
+        self.assertIn("move_backward", fake_motion.calls)
         self.assertEqual(snapshot["pose"]["heading"], "S")
 
     def test_continuous_patrol_treats_center_tape_as_line_follow_forward(self) -> None:
@@ -430,6 +435,49 @@ class RuntimeTest(unittest.TestCase):
         runtime._reset_boundary_window()
 
         self.assertFalse(runtime._feed_boundary_window((1, 1, 1, 1)))
+
+    def test_motion_guard_stops_and_retreats_on_boundary_latch(self) -> None:
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        fake_sensors = FakeSensors(
+            distances=[400] * 4,
+            tapes=[(1, 1, 1, 1), (0, 1, 1, 1)],
+        )
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=RobotRuntimeConfig(
+                motion_guard_poll_seconds=0.01,
+                boundary_min_black_sensors=1,
+                boundary_retreat_speed=12,
+                boundary_retreat_seconds=0.06,
+                action_settle_seconds=0,
+            ),
+            motion_adapter=fake_motion,
+            sensor_adapter=fake_sensors,
+            alarm_adapter=FakeAlarm(),
+            detection_provider=fake_detection_provider,
+        )
+
+        runtime._run_timed_motion(
+            fake_motion.move_forward_slow,
+            speed=20,
+            duration_seconds=0.03,
+            watch_boundary=True,
+            heading_hold=False,
+            keep_running=True,
+        )
+
+        self.assertIn("stop", fake_motion.calls)
+        self.assertIn("move_backward", fake_motion.calls)
+        self.assertTrue(
+            any(
+                event["type"] == "motion_debug"
+                and event.get("evidence", {}).get("stage") == "boundary_retreat"
+                for event in store.snapshot()["events"]
+            )
+        )
 
     def test_heading_hold_inserts_forward_speed_correction(self) -> None:
         store = self.make_store()
@@ -783,7 +831,7 @@ class RuntimeTest(unittest.TestCase):
 
         self.assertEqual(store.snapshot()["patrol_cycle"], 1)
 
-    def test_second_cycle_missing_item_triggers_high_priority_alarm(self) -> None:
+    def test_second_cycle_missing_item_triggers_orange_light_and_speech(self) -> None:
         manifest = {"A1": {"expected_items": ["item_09"]}}
         store = InspectionStore(
             DEFAULT_TAG_MAP,
@@ -820,7 +868,9 @@ class RuntimeTest(unittest.TestCase):
                 ],
             )
 
-        self.assertIn("high_priority_alarm", fake_alarm.calls)
+        self.assertIn("recognition", fake_alarm.calls)
+        self.assertNotIn("high_priority_alarm", fake_alarm.calls)
+        self.assertNotIn("warning", fake_alarm.calls)
         speak.assert_called_once()
         self.assertIn("检测到 A1 缺少", speak.call_args.args[1])
         self.assertEqual(store.snapshot()["audio"]["last_cue"], "missing_item")
@@ -922,6 +972,9 @@ class FakeAlarm:
 
     def show_high_priority_alarm(self) -> None:
         self.calls.append("high_priority_alarm")
+
+    def show_recognition(self) -> None:
+        self.calls.append("recognition")
 
     def clear_alarm(self) -> None:
         self.calls.append("clear")

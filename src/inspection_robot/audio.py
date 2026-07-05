@@ -179,6 +179,49 @@ def _build_tts_command(player: str, message: str) -> list[str]:
     return [player, "-v", "zh", message]
 
 
+def audio_debug_status(project_root: Path) -> dict[str, Any]:
+    players = {name: shutil.which(name) for name in PLAYER_CANDIDATES}
+    tts_players = {name: shutil.which(name) for name in TTS_PLAYER_CANDIDATES}
+    cues = {
+        cue: {
+            "path": str(project_root / relative_path),
+            "exists": (project_root / relative_path).exists(),
+        }
+        for cue, relative_path in CUED_AUDIO.items()
+    }
+    playback_env = _playback_env()
+    return {
+        "ok": True,
+        "players": players,
+        "tts_players": tts_players,
+        "cues": cues,
+        "default_sink": _command_output(["pactl", "get-default-sink"]) or _command_output(["wpctl", "status"], limit=600),
+        "playback_env": {
+            "XDG_RUNTIME_DIR": playback_env.get("XDG_RUNTIME_DIR"),
+            "PULSE_SERVER": playback_env.get("PULSE_SERVER"),
+        },
+    }
+
+
+def _command_output(command: list[str], *, limit: int = 200) -> str | None:
+    if shutil.which(command[0]) is None:
+        return None
+    try:
+        completed = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            timeout=2.0,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    output = " ".join(completed.stdout.split())
+    return output[:limit] if output else None
+
+
 def main() -> int:
     project_root = Path.cwd()
     payload, status = start_default_audio(project_root)
