@@ -2,7 +2,7 @@
   "_note": "Calibration values used by runtime and motion test mode.",
   "_uncalibrated": false,
   "straight_min_speed": 12,
-  "straight_speed": 18,
+  "straight_speed": 16,
   "straight_step_seconds": 2.0,
   "patrol_step_seconds": 0.18,
   "patrol_settle_seconds": 0.05,
@@ -12,6 +12,6 @@
   "turn_ccw90_seconds": 0.85,
   "cw_compensation": 1.0,
   "ccw_compensation": 1.0,
-  "line_follow_speed": 20,
+  "line_follow_speed": 16,
   "line_follow_step_seconds": 0.1
 }

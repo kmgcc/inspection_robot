@@ -211,6 +211,8 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
             tapes=[(1, 1, 1, 1)] * 4,
         )
         config = self.make_config()
+        config.blocked_distance_mm = 160
+        config.clear_distance_mm = 240
         config.blocked_samples = 1
         config.avoidance_body_seconds = 1.25
         runtime = RobotRuntime(

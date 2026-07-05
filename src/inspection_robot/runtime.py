@@ -68,10 +68,10 @@ def _env_text(default: str, *names: str) -> str:
 
 @dataclass(slots=True)
 class RobotRuntimeConfig:
-    blocked_distance_mm: int = field(default_factory=lambda: _env_int(160, "BLOCKED_DISTANCE_MM"))
-    clear_distance_mm: int = field(default_factory=lambda: _env_int(240, "CLEAR_DISTANCE_MM"))
-    blocked_samples: int = field(default_factory=lambda: _env_int(2, "BLOCKED_SAMPLES"))
-    patrol_speed: int = field(default_factory=lambda: _env_int(18, "ROBOT_PATROL_SPEED", "ROBOT_SLOW_SPEED"))
+    blocked_distance_mm: int = field(default_factory=lambda: _env_int(100, "BLOCKED_DISTANCE_MM"))
+    clear_distance_mm: int = field(default_factory=lambda: _env_int(160, "CLEAR_DISTANCE_MM"))
+    blocked_samples: int = field(default_factory=lambda: _env_int(3, "BLOCKED_SAMPLES"))
+    patrol_speed: int = field(default_factory=lambda: _env_int(16, "ROBOT_PATROL_SPEED", "ROBOT_SLOW_SPEED"))
     step_seconds: float = field(default_factory=lambda: _env_float(0.18, "ROBOT_PATROL_STEP_SECONDS", "ROBOT_STEP_SECONDS"))
     patrol_settle_seconds: float = field(default_factory=lambda: _env_float(0.05, "ROBOT_PATROL_SETTLE_SECONDS"))
     poll_seconds: float = field(default_factory=lambda: _env_float(0.12, "ROBOT_POLL_SECONDS"))
@@ -98,14 +98,15 @@ class RobotRuntimeConfig:
     boundary_window_seconds: float = field(default_factory=lambda: _env_float(0.12, "BOUNDARY_WINDOW_SECONDS"))
     boundary_cooldown_seconds: float = field(default_factory=lambda: _env_float(0.0, "BOUNDARY_COOLDOWN_SECONDS"))
     boundary_retreat_speed: int = field(default_factory=lambda: _env_int(12, "BOUNDARY_RETREAT_SPEED"))
-    boundary_retreat_seconds: float = field(default_factory=lambda: _env_float(0.06, "BOUNDARY_RETREAT_SECONDS"))
+    boundary_retreat_seconds: float = field(default_factory=lambda: _env_float(0.08, "BOUNDARY_RETREAT_SECONDS"))
+    boundary_retreat_command: str = field(default_factory=lambda: _env_text("forward", "BOUNDARY_RETREAT_COMMAND"))
     motion_guard_poll_seconds: float = field(default_factory=lambda: _env_float(0.01, "MOTION_GUARD_POLL_SECONDS"))
     motion_slice_seconds: float = field(default_factory=lambda: _env_float(0.03, "ROBOT_MOTION_SLICE_SECONDS"))
     object_trigger_enabled: bool = field(default_factory=lambda: _env_bool("OBJECT_TRIGGER_ENABLED", True))
     object_detector: str = field(default_factory=lambda: _env_text("opencv", "OBJECT_DETECTOR"))
     object_detector_model: str = field(default_factory=lambda: _env_text("", "OBJECT_DETECTOR_MODEL"))
     object_roi: str = field(default_factory=lambda: _env_text("", "OBJECT_ROI"))
-    object_presence_min_area_ratio: float = field(default_factory=lambda: _env_float(0.015, "OBJECT_PRESENCE_MIN_AREA_RATIO"))
+    object_presence_min_area_ratio: float = field(default_factory=lambda: _env_float(0.008, "OBJECT_PRESENCE_MIN_AREA_RATIO"))
     object_presence_confirm_frames: int = field(default_factory=lambda: _env_int(1, "OBJECT_PRESENCE_CONFIRM_FRAMES"))
     object_presence_cooldown_seconds: float = field(default_factory=lambda: _env_float(1.5, "OBJECT_PRESENCE_COOLDOWN_SECONDS"))
     object_yolo_min_interval_seconds: float = field(default_factory=lambda: _env_float(0.5, "OBJECT_YOLO_MIN_INTERVAL_SECONDS"))
@@ -130,8 +131,8 @@ class RobotRuntimeConfig:
     heading_zupt_samples: int = field(default_factory=lambda: _env_int(15, "HEADING_ZUPT_SAMPLES"))
     heading_zupt_sample_seconds: float = field(default_factory=lambda: _env_float(0.005, "HEADING_ZUPT_SAMPLE_SECONDS"))
     smooth_cruise_enabled: bool = field(default_factory=lambda: _env_bool("SMOOTH_CRUISE_ENABLED", False))
-    cruise_speed: int = field(default_factory=lambda: _env_int(18, "CRUISE_SPEED", "SMOOTH_CRUISE_SPEED"))
-    cruise_tick_seconds: float = field(default_factory=lambda: _env_float(0.04, "CRUISE_TICK_SECONDS"))
+    cruise_speed: int = field(default_factory=lambda: _env_int(14, "CRUISE_SPEED", "SMOOTH_CRUISE_SPEED"))
+    cruise_tick_seconds: float = field(default_factory=lambda: _env_float(0.03, "CRUISE_TICK_SECONDS"))
     cruise_log_interval_seconds: float = field(default_factory=lambda: _env_float(1.0, "CRUISE_LOG_INTERVAL_SECONDS"))
     cruise_vision_enabled: bool = field(default_factory=lambda: _env_bool("CRUISE_VISION_ENABLED", True))
     cruise_recognition_flash_seconds: float = field(default_factory=lambda: _env_float(0.12, "CRUISE_RECOGNITION_FLASH_SECONDS"))
@@ -139,11 +140,11 @@ class RobotRuntimeConfig:
     cruise_vision_reopen_seconds: float = field(default_factory=lambda: _env_float(0.3, "CRUISE_VISION_REOPEN_SECONDS"))
     line_follow_enabled: bool = field(default_factory=lambda: _env_bool("LINE_FOLLOW_ENABLED", False))
     line_follow_auto_enter: bool = field(default_factory=lambda: _env_bool("LINE_FOLLOW_AUTO_ENTER", False))
-    line_follow_speed: int = field(default_factory=lambda: _env_int(20, "LINE_FOLLOW_SPEED", "ROBOT_PATROL_SPEED", "ROBOT_SLOW_SPEED"))
+    line_follow_speed: int = field(default_factory=lambda: _env_int(16, "LINE_FOLLOW_SPEED", "ROBOT_PATROL_SPEED", "ROBOT_SLOW_SPEED"))
     line_follow_step_seconds: float = field(default_factory=lambda: _env_float(0.14, "LINE_FOLLOW_STEP_SECONDS", "ROBOT_STEP_SECONDS"))
     line_follow_turn_speed: int = field(
         default_factory=lambda: _env_int(
-            20,
+            16,
             "LINE_FOLLOW_TURN_SPEED",
             "LINE_FOLLOW_SPEED",
             "ROBOT_PATROL_SPEED",
@@ -425,7 +426,9 @@ class RobotRuntime:
                 now = time.monotonic()
                 if cruise:
                     self._sync_cruise_scanner_for_phase()
-                    self._handle_cruise_recognitions()
+                    if self._handle_cruise_recognitions():
+                        current_cycle = self._current_cycle()
+                        self.store.record_cycle(current_cycle, self._skip_shortage_for_cycle(current_cycle))
                     continue
                 if self._maybe_scan_for_object_presence():
                     last_scan_at = time.monotonic()
@@ -691,8 +694,11 @@ class RobotRuntime:
             self._boundary_retreat_latched = True
             return False
         speed = max(1, int(self.config.boundary_retreat_speed))
+        command = str(self.config.boundary_retreat_command or "forward").strip().lower()
+        command_name = "move_backward" if command in {"backward", "back", "reverse"} else "move_forward"
+        mover = self.motion.move_backward_slow if command_name == "move_backward" else self.motion.move_forward_slow
         try:
-            self.motion.move_backward_slow(speed=speed, duration_seconds=seconds)
+            mover(speed=speed, duration_seconds=seconds)
             self.motion.stop()
         except RobotHardwareError:
             return False
@@ -703,6 +709,7 @@ class RobotRuntime:
             status="TURNING_AT_BOUNDARY",
             evidence={
                 "source": source,
+                "command": command_name,
                 "speed": speed,
                 "duration_seconds": seconds,
             },
@@ -2025,8 +2032,6 @@ class RobotRuntime:
     def _cruise_scanner_allowed_for_phase(self) -> bool:
         if not self.config.cruise_vision_enabled:
             return False
-        if self.config.object_trigger_enabled:
-            return False
         return not self._cruise_vision_suppressed_until_boundary
 
     def _sync_cruise_scanner_for_phase(self) -> None:
@@ -2043,10 +2048,10 @@ class RobotRuntime:
         self._cruise_scanner = None
         scanner.stop()
 
-    def _handle_cruise_recognitions(self) -> None:
+    def _handle_cruise_recognitions(self) -> bool:
         scanner = self._cruise_scanner
         if scanner is None:
-            return
+            return False
         if self._cruise_vision_suppressed_until_boundary:
             suppressed = len(scanner.poll_new())
             if suppressed:
@@ -2058,9 +2063,39 @@ class RobotRuntime:
                         "phase": self._patrol_phase_label(),
                     },
                 )
-            return
+            return False
         for recognition in scanner.poll_new():
-            self._handle_moving_recognition(recognition)
+            self._stop_for_cruise_recognition(recognition)
+            return True
+        return False
+
+    def _stop_for_cruise_recognition(self, recognition: Mapping[str, object]) -> None:
+        shelf_id = _optional_text(recognition.get("shelf_id"))
+        if shelf_id is not None:
+            shelf_id = shelf_id.strip().upper()
+        if not shelf_id:
+            shelf_id = str(self.store.snapshot().get("current_shelf") or "UNKNOWN").strip().upper() or "UNKNOWN"
+        self.motion.stop()
+        self._stop_cruise_scanner()
+        self.store.record_motion_debug(
+            "cruise_recognition_stop",
+            "移动中识别到货架/物品标记：已立即停车，执行完整停车扫描。",
+            status="SCANNING_SHELF",
+            evidence={
+                "shelf_id": shelf_id,
+                "item_id": _optional_text(recognition.get("item_id")),
+                "tag_id": _optional_text(recognition.get("tag_id")),
+                "phase": self._patrol_phase_label(),
+            },
+        )
+        self._interruptible_sleep(max(0.0, float(self.config.object_settle_seconds)))
+        if self._stop_event.is_set():
+            return
+        self._perform_scan(shelf_id, f"{shelf_id}_SCAN")
+        self.motion.stop()
+        self._reset_heading_guard()
+        self._zupt_recalibrate("post_cruise_recognition_scan")
+        self._last_object_presence_at = time.monotonic()
 
     def _handle_moving_recognition(self, recognition: Mapping[str, object]) -> None:
         """React to a shelf/item recognised while cruising, without stopping.

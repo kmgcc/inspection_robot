@@ -61,6 +61,9 @@ class RuntimeTest(unittest.TestCase):
             "ROBOT_SCAN_MAX_DETECTIONS",
             "SCAN_MAX_DETECTIONS",
             "ROBOT_MIN_SPEED",
+            "BLOCKED_DISTANCE_MM",
+            "CLEAR_DISTANCE_MM",
+            "BLOCKED_SAMPLES",
             "AVOIDANCE_SPEED",
             "AVOIDANCE_BODY_SECONDS",
             "AVOIDANCE_SIDE_CLEARANCE_BODIES",
@@ -75,12 +78,14 @@ class RuntimeTest(unittest.TestCase):
             "BOUNDARY_COOLDOWN_SECONDS",
             "BOUNDARY_RETREAT_SPEED",
             "BOUNDARY_RETREAT_SECONDS",
+            "BOUNDARY_RETREAT_COMMAND",
             "MOTION_GUARD_POLL_SECONDS",
             "BOUNDARY_WINDOW_SECONDS",
             "OBJECT_DETECTOR",
             "OBJECT_TRIGGER_ENABLED",
             "OBJECT_PRESENCE_CONFIRM_FRAMES",
             "OBJECT_PRESENCE_COOLDOWN_SECONDS",
+            "OBJECT_PRESENCE_MIN_AREA_RATIO",
             "OBJECT_SETTLE_SECONDS",
             "HEADING_HOLD_ENABLED",
             "HEADING_HOLD_TOLERANCE_DEG",
@@ -103,12 +108,16 @@ class RuntimeTest(unittest.TestCase):
             "LINE_FOLLOW_SPEED",
             "LINE_FOLLOW_TURN_SPEED",
             "CRUISE_SPEED",
+            "CRUISE_TICK_SECONDS",
             "SMOOTH_CRUISE_SPEED",
             "CRUISE_VISION_ENABLED",
         ):
             config = RobotRuntimeConfig()
 
-        self.assertEqual(config.patrol_speed, 18)
+        self.assertEqual(config.blocked_distance_mm, 100)
+        self.assertEqual(config.clear_distance_mm, 160)
+        self.assertEqual(config.blocked_samples, 3)
+        self.assertEqual(config.patrol_speed, 16)
         self.assertEqual(config.step_seconds, 0.18)
         self.assertEqual(config.patrol_settle_seconds, 0.05)
         self.assertEqual(config.scan_timeout_seconds, 2.0)
@@ -130,9 +139,11 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(config.boundary_window_seconds, 0.12)
         self.assertEqual(config.boundary_cooldown_seconds, 0.0)
         self.assertEqual(config.boundary_retreat_speed, 12)
-        self.assertEqual(config.boundary_retreat_seconds, 0.06)
+        self.assertEqual(config.boundary_retreat_seconds, 0.08)
+        self.assertEqual(config.boundary_retreat_command, "forward")
         self.assertEqual(config.motion_guard_poll_seconds, 0.01)
         self.assertEqual(config.object_detector, "opencv")
+        self.assertEqual(config.object_presence_min_area_ratio, 0.008)
         self.assertEqual(config.object_presence_confirm_frames, 1)
         self.assertEqual(config.object_presence_cooldown_seconds, 1.5)
         self.assertTrue(config.heading_hold_enabled)
@@ -151,11 +162,12 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(config.heading_hold_confirm_samples, 1)
         self.assertEqual(config.heading_hold_trace_interval_seconds, 0.5)
         self.assertTrue(config.cruise_vision_enabled)
-        self.assertEqual(config.cruise_speed, 18)
+        self.assertEqual(config.cruise_speed, 14)
+        self.assertEqual(config.cruise_tick_seconds, 0.03)
         self.assertFalse(config.line_follow_enabled)
         self.assertFalse(config.line_follow_auto_enter)
-        self.assertEqual(config.line_follow_speed, 20)
-        self.assertEqual(config.line_follow_turn_speed, 20)
+        self.assertEqual(config.line_follow_speed, 16)
+        self.assertEqual(config.line_follow_turn_speed, 16)
 
     def test_runtime_config_reads_environment_for_each_new_instance(self) -> None:
         with temporary_env({"ROBOT_PATROL_SPEED": "33", "ROBOT_PATROL_STEP_SECONDS": "0.31"}):
@@ -227,7 +239,12 @@ class RuntimeTest(unittest.TestCase):
             store,
             DEFAULT_WAREHOUSE_MAP,
             {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
-            config=RobotRuntimeConfig(step_seconds=0, poll_seconds=0, scan_timeout_seconds=0, action_settle_seconds=0),
+            config=RobotRuntimeConfig(
+                step_seconds=0,
+                poll_seconds=0,
+                scan_timeout_seconds=0,
+                action_settle_seconds=0,
+            ),
             motion_adapter=fake_motion,
             sensor_adapter=fake_sensors,
             alarm_adapter=FakeAlarm(),
@@ -287,7 +304,15 @@ class RuntimeTest(unittest.TestCase):
             store,
             DEFAULT_WAREHOUSE_MAP,
             {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
-            config=RobotRuntimeConfig(step_seconds=0, poll_seconds=0, scan_timeout_seconds=0, action_settle_seconds=0),
+            config=RobotRuntimeConfig(
+                blocked_distance_mm=160,
+                clear_distance_mm=240,
+                blocked_samples=2,
+                step_seconds=0,
+                poll_seconds=0,
+                scan_timeout_seconds=0,
+                action_settle_seconds=0,
+            ),
             motion_adapter=fake_motion,
             sensor_adapter=fake_sensors,
             alarm_adapter=fake_alarm,
@@ -321,7 +346,8 @@ class RuntimeTest(unittest.TestCase):
 
         self.assertTrue(any(event["type"] == "forbidden_zone_detected" for event in snapshot["events"]))
         self.assertIn("rotate_right", fake_motion.calls)
-        self.assertIn("move_backward", fake_motion.calls)
+        self.assertGreaterEqual(fake_motion.calls.count("move_forward"), 1)
+        self.assertNotIn("move_backward", fake_motion.calls)
         self.assertEqual(snapshot["pose"]["heading"], "S")
 
     def test_continuous_patrol_treats_center_tape_as_line_follow_forward(self) -> None:
@@ -476,9 +502,10 @@ class RuntimeTest(unittest.TestCase):
 
         self.assertIn("stop", fake_motion.calls)
         self.assertNotIn("move_backward", fake_motion.calls)
+        forward_count = fake_motion.calls.count("move_forward")
         fake_sensors.tapes.append((0, 1, 1, 1))
         runtime._handle_tape_boundary((0, 1, 1, 1))
-        self.assertIn("move_backward", fake_motion.calls)
+        self.assertGreater(fake_motion.calls.count("move_forward"), forward_count)
         self.assertTrue(
             any(
                 event["type"] == "motion_debug"

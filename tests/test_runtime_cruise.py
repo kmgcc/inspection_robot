@@ -281,6 +281,32 @@ class CruiseRuntimeTest(unittest.TestCase):
         self.assertEqual(detector.call_count, 1)
         self.assertEqual(scan.call_count, 1)
 
+    def test_cruise_recognition_stops_for_parked_scan(self) -> None:
+        runtime, motion, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                smooth_cruise_enabled=True,
+                cruise_vision_enabled=True,
+                object_trigger_enabled=True,
+                object_settle_seconds=0,
+                action_settle_seconds=0,
+            ),
+            imu=FakeImu(None),
+        )
+        scanner = _CruiseVisionScanner(
+            provider=lambda **_: iter(()),
+            config=runtime.config,
+            enrich=runtime._enrich_detection,
+            stop_event=runtime._stop_event,
+        )
+        scanner._pending = [{"tag_id": "101", "kind": "shelf", "shelf_id": "A1"}]
+        runtime._cruise_scanner = scanner
+
+        with mock.patch.object(runtime, "_perform_scan") as scan:
+            self.assertTrue(runtime._handle_cruise_recognitions())
+
+        self.assertIn("stop", motion.calls)
+        scan.assert_called_once_with("A1", "A1_SCAN")
+
     # --- anti-oscillation PD heading hold -------------------------------- #
 
     def test_heading_hold_skips_pulse_when_already_recovering(self) -> None:
