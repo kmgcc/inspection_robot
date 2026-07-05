@@ -179,6 +179,25 @@ scripts/stop_on_car.sh
 fuser -k 5000/tcp
 ```
 
+### 不重启小车系统，重启网页服务应用代码变更
+
+如果只是改了本项目代码，不需要重启树莓派系统。先把代码同步到小车，再重启 Flask 网页服务即可：
+
+```bash
+scripts/deploy_to_car.sh
+scripts/run_on_car.sh
+```
+
+`scripts/run_on_car.sh` 内部会先通过 SSH 进入部署目录，释放 5000 端口上的旧服务，再用当前环境重新执行 `app.py`：
+
+```bash
+cd /home/pi/temp/inspection_robot
+fuser -k 5000/tcp >/dev/null 2>&1 || true
+RUN_MODE=robot nohup python3 app.py > app.log 2>&1 &
+```
+
+如果只改了少数文件，也可以先用 `scp` 同步对应文件，再执行 `scripts/run_on_car.sh`。这样只重启我们的网页服务，不会重启 SSH、VNC、Wi-Fi、蓝牙或整台小车。
+
 ## 七、通过蓝牙音箱播放测试音频
 
 项目内置测试音频：
