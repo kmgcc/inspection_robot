@@ -230,6 +230,36 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
         self.assertEqual(fake_motion.calls.count(("move_forward", 20, 1.0)), 2)
         self.assertEqual(fake_motion.calls.count(("move_forward", 20, 1.75)), 1)
 
+    def test_b3_forbidden_bypass_uses_extended_clearance_distances(self) -> None:
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        fake_sensors = FakeSensors(
+            distances=[400] * 24,
+            tapes=[(0, 0, 0, 0), (1, 1, 1, 1)],
+        )
+        config = self.make_config()
+        config.avoidance_body_seconds = 1.0
+        config.forbidden_avoidance_side_clearance_bodies = 1.2
+        config.forbidden_avoidance_parallel_bodies = 2.4
+        config.forbidden_avoidance_return_bodies = 1.2
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=config,
+            motion_adapter=fake_motion,
+            sensor_adapter=fake_sensors,
+            alarm_adapter=FakeAlarm(),
+            gimbal_adapter=FakeGimbal(),
+            detection_provider=fake_detection_provider,
+        )
+        runtime._record_observed_shelf("B3")
+
+        self.assertEqual(runtime._handle_tape_boundary((0, 0, 0, 0)), "bypass")
+
+        self.assertEqual(fake_motion.calls.count(("move_forward", 20, 1.2)), 2)
+        self.assertEqual(fake_motion.calls.count(("move_forward", 20, 2.4)), 1)
+
     def test_planned_boundary_turn_delegates_to_mpu6050_adapter_when_available(self) -> None:
         store = self.make_store()
         fake_motion = FakeMotion()
@@ -250,7 +280,7 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
 
         runtime.run_continuous_patrol(max_iterations=1)
 
-        self.assertEqual(fake_imu.calls, [("right", 22, 0.85)])
+        self.assertEqual(fake_imu.calls, [("right", 30, 0.72)])
         self.assertNotIn("rotate_right", fake_motion.names())
 
     def test_failed_mpu6050_turn_does_not_fall_back_to_open_loop(self) -> None:

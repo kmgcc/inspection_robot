@@ -855,17 +855,17 @@ def _yaw_sign() -> float:
 
 def _yaw_deadband_dps() -> float:
     try:
-        return max(0.0, float(os.environ.get("MPU6050_YAW_DEADBAND_DPS", "0.6")))
+        return max(0.0, float(os.environ.get("MPU6050_YAW_DEADBAND_DPS", "0.45")))
     except ValueError:
-        return 0.6
+        return 0.45
 
 
 def _yaw_leak_per_second() -> float:
     """Leak rate (1/s) for the straight-heading integrator; 0 disables leaking."""
     try:
-        return max(0.0, float(os.environ.get("MPU6050_YAW_LEAK_PER_SECOND", "0.3")))
+        return max(0.0, float(os.environ.get("MPU6050_YAW_LEAK_PER_SECOND", "0.05")))
     except ValueError:
-        return 0.3
+        return 0.05
 
 
 def _zupt_alpha() -> float:

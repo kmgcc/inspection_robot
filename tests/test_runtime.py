@@ -53,6 +53,8 @@ class RuntimeTest(unittest.TestCase):
             "ROBOT_STEP_SECONDS",
             "ROBOT_PATROL_SETTLE_SECONDS",
             "ROBOT_ACTION_SETTLE_SECONDS",
+            "ROBOT_TURN_SPEED",
+            "ROBOT_TURN_90_SECONDS",
             "ROBOT_SCAN_ENABLED",
             "ROBOT_SCAN_TIMEOUT_SECONDS",
             "SCAN_TIMEOUT_SECONDS",
@@ -64,6 +66,9 @@ class RuntimeTest(unittest.TestCase):
             "AVOIDANCE_SIDE_CLEARANCE_BODIES",
             "AVOIDANCE_PARALLEL_BODIES",
             "AVOIDANCE_RETURN_BODIES",
+            "FORBIDDEN_AVOIDANCE_SIDE_CLEARANCE_BODIES",
+            "FORBIDDEN_AVOIDANCE_PARALLEL_BODIES",
+            "FORBIDDEN_AVOIDANCE_RETURN_BODIES",
             "BOUNDARY_MIN_BLACK_SENSORS",
             "BOUNDARY_COOLDOWN_SECONDS",
             "MOTION_GUARD_POLL_SECONDS",
@@ -100,28 +105,33 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(config.patrol_settle_seconds, 0.05)
         self.assertEqual(config.scan_timeout_seconds, 2.0)
         self.assertEqual(config.scan_max_detections, 3)
-        self.assertEqual(config.action_settle_seconds, 0.7)
+        self.assertEqual(config.turn_speed, 30)
+        self.assertEqual(config.turn_90_seconds, 0.72)
+        self.assertEqual(config.action_settle_seconds, 0.12)
         self.assertEqual(config.avoidance_speed, 20)
         self.assertEqual(config.avoidance_body_seconds, 0.35)
         self.assertEqual(config.avoidance_return_bodies, 0.8)
-        self.assertEqual(config.boundary_min_black_sensors, 4)
-        self.assertEqual(config.boundary_window_seconds, 0.15)
-        self.assertEqual(config.boundary_cooldown_seconds, 0.05)
-        self.assertEqual(config.motion_guard_poll_seconds, 0.02)
+        self.assertEqual(config.forbidden_avoidance_side_clearance_bodies, 1.2)
+        self.assertEqual(config.forbidden_avoidance_parallel_bodies, 2.4)
+        self.assertEqual(config.forbidden_avoidance_return_bodies, 1.2)
+        self.assertEqual(config.boundary_min_black_sensors, 1)
+        self.assertEqual(config.boundary_window_seconds, 0.25)
+        self.assertEqual(config.boundary_cooldown_seconds, 0.0)
+        self.assertEqual(config.motion_guard_poll_seconds, 0.01)
         self.assertEqual(config.object_detector, "opencv")
         self.assertEqual(config.object_presence_confirm_frames, 1)
         self.assertTrue(config.heading_hold_enabled)
-        self.assertEqual(config.heading_hold_tolerance_deg, 1.0)
+        self.assertEqual(config.heading_hold_tolerance_deg, 0.6)
         self.assertEqual(config.heading_hold_gain, 0.012)
         self.assertEqual(config.heading_hold_min_pulse_seconds, 0.025)
         self.assertEqual(config.heading_hold_max_pulse_seconds, 0.10)
-        self.assertEqual(config.heading_hold_correction_speed, 20)
+        self.assertEqual(config.heading_hold_correction_speed, 24)
         self.assertFalse(config.heading_hold_invert)
-        self.assertEqual(config.heading_hold_speed_gain, 1.2)
+        self.assertEqual(config.heading_hold_speed_gain, 2.0)
         self.assertEqual(config.heading_hold_min_interval_seconds, 0.25)
         self.assertEqual(config.heading_hold_max_consecutive, 2)
         self.assertEqual(config.heading_hold_confirm_samples, 1)
-        self.assertFalse(config.cruise_vision_enabled)
+        self.assertTrue(config.cruise_vision_enabled)
         self.assertEqual(config.cruise_speed, 30)
         self.assertFalse(config.line_follow_enabled)
         self.assertFalse(config.line_follow_auto_enter)
@@ -442,7 +452,7 @@ class RuntimeTest(unittest.TestCase):
         self.assertNotIn("rotate_left", fake_motion.calls)
         self.assertNotIn("rotate_right", fake_motion.calls)
 
-    def test_continuous_patrol_ignores_three_black_boundary_by_default(self) -> None:
+    def test_continuous_patrol_treats_partial_black_as_boundary_by_default(self) -> None:
         store = self.make_store()
         fake_motion = FakeMotion()
         fake_sensors = FakeSensors(distances=[400] * 6, tapes=[(0, 0, 0, 1)])
@@ -468,8 +478,8 @@ class RuntimeTest(unittest.TestCase):
 
         runtime.run_continuous_patrol(max_iterations=1)
 
-        self.assertIn("move_forward", fake_motion.calls)
-        self.assertNotIn("rotate_right", fake_motion.calls)
+        self.assertIn("rotate_right", fake_motion.calls)
+        self.assertIn("stop", fake_motion.calls)
 
     def test_motion_guard_latches_fast_full_black_boundary_during_line_follow(self) -> None:
         store = self.make_store()

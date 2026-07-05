@@ -4,6 +4,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 from typing import Iterator
 
@@ -229,6 +230,32 @@ class CruiseRuntimeTest(unittest.TestCase):
         self.assertIn("cruise_step", stages)
         # Cruise never parks to scan, so the parked-scan pipeline must not run.
         self.assertNotIn("vision_scan_start", stages)
+
+    def test_cruise_skips_parked_object_presence_trigger(self) -> None:
+        runtime, motion, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                smooth_cruise_enabled=True,
+                cruise_vision_enabled=False,
+                object_trigger_enabled=True,
+                cruise_tick_seconds=0,
+                cruise_log_interval_seconds=0,
+                action_settle_seconds=0,
+            ),
+            imu=FakeImu(None),
+        )
+
+        with mock.patch(
+            "inspection_robot.runtime.tag_detector.detect_object_presence_from_camera",
+            side_effect=AssertionError("smooth cruise must not run parked object trigger"),
+        ):
+            runtime.run_continuous_patrol(max_iterations=2)
+
+        self.assertGreaterEqual(motion.calls.count("move_forward"), 2)
+        self.assertNotIn("vision_scan_start", {
+            event.get("evidence", {}).get("stage")
+            for event in runtime.store.snapshot()["events"]
+            if event["type"] == "motion_debug" and isinstance(event.get("evidence"), dict)
+        })
 
     # --- anti-oscillation PD heading hold -------------------------------- #
 

@@ -79,22 +79,25 @@ class RobotRuntimeConfig:
     scan_timeout_seconds: float = field(default_factory=lambda: _env_float(2.0, "ROBOT_SCAN_TIMEOUT_SECONDS", "SCAN_TIMEOUT_SECONDS"))
     scan_max_detections: int = field(default_factory=lambda: _env_int(3, "ROBOT_SCAN_MAX_DETECTIONS", "SCAN_MAX_DETECTIONS"))
     scan_interval_seconds: float = field(default_factory=lambda: _env_float(0.8, "SCAN_INTERVAL_SECONDS"))
-    turn_90_seconds: float = field(default_factory=lambda: _env_float(0.85, "ROBOT_TURN_90_SECONDS"))
-    turn_speed: int = field(default_factory=lambda: _env_int(22, "ROBOT_TURN_SPEED"))
-    action_settle_seconds: float = field(default_factory=lambda: _env_float(0.7, "ROBOT_ACTION_SETTLE_SECONDS"))
+    turn_90_seconds: float = field(default_factory=lambda: _env_float(0.72, "ROBOT_TURN_90_SECONDS"))
+    turn_speed: int = field(default_factory=lambda: _env_int(30, "ROBOT_TURN_SPEED"))
+    action_settle_seconds: float = field(default_factory=lambda: _env_float(0.12, "ROBOT_ACTION_SETTLE_SECONDS"))
     obstacle_wait_seconds: float = field(default_factory=lambda: _env_float(6.0, "OBSTACLE_WAIT_SECONDS"))
     avoidance_speed: int = field(default_factory=lambda: _env_int(20, "AVOIDANCE_SPEED"))
     avoidance_body_seconds: float = field(default_factory=lambda: _env_float(0.35, "AVOIDANCE_BODY_SECONDS"))
     avoidance_side_clearance_bodies: float = field(default_factory=lambda: _env_float(0.8, "AVOIDANCE_SIDE_CLEARANCE_BODIES"))
     avoidance_parallel_bodies: float = field(default_factory=lambda: _env_float(1.4, "AVOIDANCE_PARALLEL_BODIES"))
     avoidance_return_bodies: float = field(default_factory=lambda: _env_float(0.8, "AVOIDANCE_RETURN_BODIES"))
+    forbidden_avoidance_side_clearance_bodies: float = field(default_factory=lambda: _env_float(1.2, "FORBIDDEN_AVOIDANCE_SIDE_CLEARANCE_BODIES"))
+    forbidden_avoidance_parallel_bodies: float = field(default_factory=lambda: _env_float(2.4, "FORBIDDEN_AVOIDANCE_PARALLEL_BODIES"))
+    forbidden_avoidance_return_bodies: float = field(default_factory=lambda: _env_float(1.2, "FORBIDDEN_AVOIDANCE_RETURN_BODIES"))
     avoidance_turn_direction: str = field(default_factory=lambda: _env_text("right", "AVOIDANCE_TURN_DIRECTION"))
-    boundary_min_black_sensors: int = field(default_factory=lambda: _env_int(4, "BOUNDARY_MIN_BLACK_SENSORS"))
+    boundary_min_black_sensors: int = field(default_factory=lambda: _env_int(1, "BOUNDARY_MIN_BLACK_SENSORS"))
     boundary_confirm_samples: int = field(default_factory=lambda: _env_int(1, "BOUNDARY_CONFIRM_SAMPLES"))
     boundary_confirm_gap_seconds: float = field(default_factory=lambda: _env_float(0.0, "BOUNDARY_CONFIRM_GAP_SECONDS"))
-    boundary_window_seconds: float = field(default_factory=lambda: _env_float(0.15, "BOUNDARY_WINDOW_SECONDS"))
-    boundary_cooldown_seconds: float = field(default_factory=lambda: _env_float(0.05, "BOUNDARY_COOLDOWN_SECONDS"))
-    motion_guard_poll_seconds: float = field(default_factory=lambda: _env_float(0.02, "MOTION_GUARD_POLL_SECONDS"))
+    boundary_window_seconds: float = field(default_factory=lambda: _env_float(0.25, "BOUNDARY_WINDOW_SECONDS"))
+    boundary_cooldown_seconds: float = field(default_factory=lambda: _env_float(0.0, "BOUNDARY_COOLDOWN_SECONDS"))
+    motion_guard_poll_seconds: float = field(default_factory=lambda: _env_float(0.01, "MOTION_GUARD_POLL_SECONDS"))
     motion_slice_seconds: float = field(default_factory=lambda: _env_float(0.03, "ROBOT_MOTION_SLICE_SECONDS"))
     object_trigger_enabled: bool = field(default_factory=lambda: _env_bool("OBJECT_TRIGGER_ENABLED", True))
     object_detector: str = field(default_factory=lambda: _env_text("opencv", "OBJECT_DETECTOR"))
@@ -107,14 +110,14 @@ class RobotRuntimeConfig:
     object_slow_speed: int = field(default_factory=lambda: _env_int(12, "OBJECT_SLOW_SPEED"))
     object_settle_seconds: float = field(default_factory=lambda: _env_float(0.2, "OBJECT_SETTLE_SECONDS"))
     heading_hold_enabled: bool = field(default_factory=lambda: _env_bool("HEADING_HOLD_ENABLED", True))
-    heading_hold_tolerance_deg: float = field(default_factory=lambda: _env_float(1.0, "HEADING_HOLD_TOLERANCE_DEG"))
+    heading_hold_tolerance_deg: float = field(default_factory=lambda: _env_float(0.6, "HEADING_HOLD_TOLERANCE_DEG"))
     heading_hold_gain: float = field(default_factory=lambda: _env_float(0.012, "HEADING_HOLD_GAIN"))
     heading_hold_min_pulse_seconds: float = field(default_factory=lambda: _env_float(0.025, "HEADING_HOLD_MIN_PULSE_SECONDS"))
     heading_hold_max_pulse_seconds: float = field(default_factory=lambda: _env_float(0.10, "HEADING_HOLD_MAX_PULSE_SECONDS"))
-    heading_hold_correction_speed: int = field(default_factory=lambda: _env_int(20, "HEADING_HOLD_CORRECTION_SPEED"))
+    heading_hold_correction_speed: int = field(default_factory=lambda: _env_int(24, "HEADING_HOLD_CORRECTION_SPEED"))
     heading_hold_invert: bool = field(default_factory=lambda: _env_bool("HEADING_HOLD_INVERT", False))
-    heading_hold_rate_damping: float = field(default_factory=lambda: _env_float(0.08, "HEADING_HOLD_KD", "HEADING_HOLD_RATE_DAMPING"))
-    heading_hold_speed_gain: float = field(default_factory=lambda: _env_float(1.2, "HEADING_HOLD_SPEED_GAIN"))
+    heading_hold_rate_damping: float = field(default_factory=lambda: _env_float(0.05, "HEADING_HOLD_KD", "HEADING_HOLD_RATE_DAMPING"))
+    heading_hold_speed_gain: float = field(default_factory=lambda: _env_float(2.0, "HEADING_HOLD_SPEED_GAIN"))
     heading_hold_min_sample_interval_seconds: float = field(default_factory=lambda: _env_float(0.03, "HEADING_HOLD_MIN_SAMPLE_INTERVAL_SECONDS"))
     heading_hold_min_interval_seconds: float = field(default_factory=lambda: _env_float(0.25, "HEADING_HOLD_MIN_INTERVAL_SECONDS"))
     heading_hold_max_consecutive: int = field(default_factory=lambda: _env_int(2, "HEADING_HOLD_MAX_CONSECUTIVE"))
@@ -124,9 +127,9 @@ class RobotRuntimeConfig:
     heading_zupt_sample_seconds: float = field(default_factory=lambda: _env_float(0.005, "HEADING_ZUPT_SAMPLE_SECONDS"))
     smooth_cruise_enabled: bool = field(default_factory=lambda: _env_bool("SMOOTH_CRUISE_ENABLED", False))
     cruise_speed: int = field(default_factory=lambda: _env_int(30, "CRUISE_SPEED", "SMOOTH_CRUISE_SPEED"))
-    cruise_tick_seconds: float = field(default_factory=lambda: _env_float(0.05, "CRUISE_TICK_SECONDS"))
+    cruise_tick_seconds: float = field(default_factory=lambda: _env_float(0.04, "CRUISE_TICK_SECONDS"))
     cruise_log_interval_seconds: float = field(default_factory=lambda: _env_float(1.0, "CRUISE_LOG_INTERVAL_SECONDS"))
-    cruise_vision_enabled: bool = field(default_factory=lambda: _env_bool("CRUISE_VISION_ENABLED", False))
+    cruise_vision_enabled: bool = field(default_factory=lambda: _env_bool("CRUISE_VISION_ENABLED", True))
     cruise_recognition_flash_seconds: float = field(default_factory=lambda: _env_float(0.12, "CRUISE_RECOGNITION_FLASH_SECONDS"))
     cruise_recognition_cooldown_seconds: float = field(default_factory=lambda: _env_float(1.5, "CRUISE_RECOGNITION_COOLDOWN_SECONDS"))
     cruise_vision_reopen_seconds: float = field(default_factory=lambda: _env_float(0.3, "CRUISE_VISION_REOPEN_SECONDS"))
@@ -400,8 +403,6 @@ class RobotRuntime:
 
                 now = time.monotonic()
                 if cruise:
-                    if self._maybe_scan_for_object_presence():
-                        continue
                     self._handle_cruise_recognitions()
                     continue
                 if self._maybe_scan_for_object_presence():
@@ -492,7 +493,7 @@ class RobotRuntime:
         self.motion.stop()
         self.store.record_motion_debug(
             "boundary_candidate",
-            f"检测到黑胶带候选，先停车确认：tape={_format_tape_state(tape_state)}，阈值={self.config.boundary_min_black_sensors} 路黑。",
+            f"检测到黑胶带候选并立即停车：tape={_format_tape_state(tape_state)}，阈值={self.config.boundary_min_black_sensors} 路黑。",
             status="TURNING_AT_BOUNDARY",
             evidence={
                 "tape_state": _json_tape_state(tape_state),
@@ -579,7 +580,12 @@ class RobotRuntime:
         self.store.record_boundary(tape_state, True, "route_forbidden_bypass")
         self.store.record_forbidden_zone(zone_id, True)
         self._play_cue("obstacle", "检测到非寻线禁区，小车按障碍绕行。")
-        if self._avoid_to_safe_side(None):
+        if self._avoid_to_safe_side(
+            None,
+            side_clearance_bodies=self.config.forbidden_avoidance_side_clearance_bodies,
+            parallel_bodies=self.config.forbidden_avoidance_parallel_bodies,
+            return_bodies=self.config.forbidden_avoidance_return_bodies,
+        ):
             self.store.record_forbidden_zone(zone_id, False)
             self._show_normal()
             if anchor is not None:
@@ -959,7 +965,7 @@ class RobotRuntime:
         self.store.record_motion_debug(
             "motion_guard_boundary_latched",
             (
-                "运动过程中捕捉到四路黑胶带候选，已立即停车并锁存读数，"
+                "运动过程中捕捉到黑胶带压线候选，已立即停车并锁存读数，"
                 "下一轮控制循环将执行列端/禁区动作。"
             ),
             status="TURNING_AT_BOUNDARY",
@@ -1266,7 +1272,17 @@ class RobotRuntime:
                 return True
         return self._avoid_to_safe_side(shelf_id)
 
-    def _avoid_to_safe_side(self, shelf_id: str | None) -> bool:
+    def _avoid_to_safe_side(
+        self,
+        shelf_id: str | None,
+        *,
+        side_clearance_bodies: float | None = None,
+        parallel_bodies: float | None = None,
+        return_bodies: float | None = None,
+    ) -> bool:
+        side_clearance = self.config.avoidance_side_clearance_bodies if side_clearance_bodies is None else side_clearance_bodies
+        parallel = self.config.avoidance_parallel_bodies if parallel_bodies is None else parallel_bodies
+        return_to_line = self.config.avoidance_return_bodies if return_bodies is None else return_bodies
         direction = self.config.avoidance_turn_direction.strip().lower()
         if direction not in {"left", "right"}:
             logger.warning("invalid avoidance turn direction %r; using right", direction)
@@ -1287,7 +1303,7 @@ class RobotRuntime:
         if not self._avoidance_path_clear("after_first_turn"):
             return False
 
-        if not self._avoidance_forward("side_clearance_forward", self.config.avoidance_side_clearance_bodies):
+        if not self._avoidance_forward("side_clearance_forward", side_clearance):
             return False
 
         self.store.record_avoidance_step(f"turn_{back_label}_to_original_heading", nested_level=0)
@@ -1296,7 +1312,7 @@ class RobotRuntime:
         if not self._avoidance_path_clear("after_restore_heading"):
             return False
 
-        if not self._avoidance_forward("forward_past_obstacle", self.config.avoidance_parallel_bodies):
+        if not self._avoidance_forward("forward_past_obstacle", parallel):
             return False
 
         self.store.record_avoidance_step(f"turn_{back_label}_return_to_line", nested_level=0)
@@ -1305,7 +1321,7 @@ class RobotRuntime:
         if not self._avoidance_path_clear("after_return_turn"):
             return False
 
-        if not self._avoidance_forward("return_to_patrol_line", self.config.avoidance_return_bodies):
+        if not self._avoidance_forward("return_to_patrol_line", return_to_line):
             return False
 
         self.store.record_avoidance_step(f"turn_{away_label}_restore_heading", nested_level=0)
