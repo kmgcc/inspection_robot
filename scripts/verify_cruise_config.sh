@@ -20,6 +20,13 @@ else
     grep "LINE_FOLLOW_ENABLED" scripts/run_on_car.sh || true
 fi
 
+if grep -q 'TRANSFER_LINE_ENABLED="${TRANSFER_LINE_ENABLED:-0}"' scripts/run_on_car.sh; then
+    echo "  ✅ TRANSFER_LINE_ENABLED 默认值为 0（货架间巡线已禁用）"
+else
+    echo "  ⚠️  TRANSFER_LINE_ENABLED 配置异常"
+    grep "TRANSFER_LINE_ENABLED" scripts/run_on_car.sh || true
+fi
+
 if grep -q 'AUTO_START_RUNTIME' scripts/run_on_car.sh app.py scripts/install_car_autostart.sh; then
     echo "  ⚠️  检测到 AUTO_START_RUNTIME 残留配置"
     grep -n "AUTO_START_RUNTIME" scripts/run_on_car.sh app.py scripts/install_car_autostart.sh || true
@@ -54,7 +61,7 @@ if ssh -o ConnectTimeout=3 "$CAR_HOST" "test -d '$CAR_DIR'" 2>/dev/null; then
     if ssh "$CAR_HOST" "test -f '$CAR_DIR/app.log'" 2>/dev/null; then
         echo ""
         echo "  📋 最近的配置记录 (app.log):"
-        ssh "$CAR_HOST" "cd '$CAR_DIR' && tail -50 app.log | grep -E 'LINE_FOLLOW_ENABLED|SMOOTH_CRUISE_ENABLED|Started on' | tail -5" 2>/dev/null || echo "     未找到配置记录"
+        ssh "$CAR_HOST" "cd '$CAR_DIR' && tail -50 app.log | grep -E 'LINE_FOLLOW_ENABLED|TRANSFER_LINE_ENABLED|SMOOTH_CRUISE_ENABLED|Started on' | tail -5" 2>/dev/null || echo "     未找到配置记录"
     fi
 else
     echo "  ⚠️  无法连接到小车 ($CAR_HOST)"
@@ -93,9 +100,10 @@ echo "=========================================="
 echo ""
 echo "📌 测试前确认清单:"
 echo "   1. LINE_FOLLOW_ENABLED=0 (循线禁用)"
-echo "   2. 开机后只启动网页服务，巡逻不能自动启动"
-echo "   3. SMOOTH_CRUISE_ENABLED=1 (匀速巡航)"
-echo "   4. 网页手动点击'开始巡逻'按钮启动"
+echo "   2. TRANSFER_LINE_ENABLED=0 (货架间巡线禁用)"
+echo "   3. 开机后只启动网页服务，巡逻不能自动启动"
+echo "   4. SMOOTH_CRUISE_ENABLED=1 (匀速巡航)"
+echo "   5. 网页手动点击'开始巡逻'按钮启动"
 echo ""
 echo "📖 详细测试步骤请参考: CRUISE_TEST_CONFIG.md"
 echo ""

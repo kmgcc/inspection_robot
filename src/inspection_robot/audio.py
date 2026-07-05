@@ -27,6 +27,12 @@ TTS_PLAYER_CANDIDATES = ("ekho", "piper", "edge-tts", "espeak-ng", "espeak", "sp
 OFFLINE_CHINESE_TTS_PLAYERS = {"ekho", "piper"}
 ONLINE_TTS_PLAYERS = {"edge-tts"}
 UNRELIABLE_CHINESE_TTS_PLAYERS = {"espeak-ng", "espeak", "spd-say"}
+DEFAULT_PIPER_DIRS = (Path("/home/pi/temp/piper"), Path("/opt/piper"))
+DEFAULT_PIPER_MODELS = (
+    "zh_CN-huayan-x_low.onnx",
+    "zh_CN-huayan-medium.onnx",
+    "model.onnx",
+)
 
 # 单条 cue 播放超时，避免某次播放卡死阻塞后续所有 cue。
 _PLAYBACK_TIMEOUT_SECONDS = 15.0
@@ -76,10 +82,36 @@ def _available_tts_players() -> list[str]:
     for name in TTS_PLAYER_CANDIDATES:
         if name in ONLINE_TTS_PLAYERS and not _allow_online_tts():
             continue
-        path = shutil.which(name)
+        path = _find_tts_executable(name)
         if path:
             players.append(path)
     return players
+
+
+def _find_tts_executable(name: str) -> str | None:
+    path = shutil.which(name)
+    if path:
+        return path
+    if name != "piper":
+        return None
+    for directory in _candidate_piper_dirs():
+        candidate = directory / "piper"
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+def _candidate_piper_dirs() -> list[Path]:
+    raw_dirs = [os.environ.get("ROBOT_PIPER_DIR", "").strip()]
+    raw_dirs.extend(str(path) for path in DEFAULT_PIPER_DIRS)
+    dirs: list[Path] = []
+    for raw in raw_dirs:
+        if not raw:
+            continue
+        path = Path(raw)
+        if path not in dirs:
+            dirs.append(path)
+    return dirs
 
 
 def _find_tts_player() -> str | None:
@@ -371,10 +403,10 @@ def _synthesize_speech_to_file(player: str, message: str) -> tuple[Path | None, 
         voice = os.environ.get("ROBOT_EKHO_VOICE", "Mandarin").strip() or "Mandarin"
         command = [player, "-v", voice, "-t", "wav", "-o", str(speech_path), message]
     elif name == "piper":
-        model = os.environ.get("ROBOT_PIPER_MODEL", "").strip()
+        model = _piper_model_path()
         if not model:
             speech_path.unlink(missing_ok=True)
-            return None, "ROBOT_PIPER_MODEL is not set"
+            return None, "ROBOT_PIPER_MODEL is not set and no default Chinese Piper model was found"
         command = [player, "--model", model, "--output_file", str(speech_path)]
         run_kwargs["input"] = message
     elif name == "edge-tts":
@@ -412,9 +444,21 @@ def _synthesize_speech_to_file(player: str, message: str) -> tuple[Path | None, 
     return speech_path, None
 
 
+def _piper_model_path() -> str | None:
+    configured = os.environ.get("ROBOT_PIPER_MODEL", "").strip()
+    if configured:
+        return configured
+    for directory in _candidate_piper_dirs():
+        for filename in DEFAULT_PIPER_MODELS:
+            candidate = directory / filename
+            if candidate.exists():
+                return str(candidate)
+    return None
+
+
 def audio_debug_status(project_root: Path) -> dict[str, Any]:
     players = {name: shutil.which(name) for name in PLAYER_CANDIDATES}
-    tts_players = {name: shutil.which(name) for name in TTS_PLAYER_CANDIDATES}
+    tts_players = {name: _find_tts_executable(name) for name in TTS_PLAYER_CANDIDATES}
     cues = {
         cue: {
             "path": str(project_root / relative_path),
@@ -431,6 +475,7 @@ def audio_debug_status(project_root: Path) -> dict[str, Any]:
             "offline_chinese": sorted(OFFLINE_CHINESE_TTS_PLAYERS),
             "online_enabled": _allow_online_tts(),
             "unreliable_chinese_enabled": _allow_unreliable_chinese_tts(),
+            "piper_model": _piper_model_path(),
         },
         "cues": cues,
         "default_sink": _command_output(["pactl", "get-default-sink"]) or _command_output(["wpctl", "status"], limit=600),

@@ -170,7 +170,9 @@ class RobotRuntimeConfig:
     line_follow_search_seconds: float = field(default_factory=lambda: _env_float(0.08, "LINE_FOLLOW_SEARCH_SECONDS"))
     line_follow_poll_seconds: float = field(default_factory=lambda: _env_float(0.01, "LINE_FOLLOW_POLL_SECONDS"))
     line_follow_max_lost_ticks: int = field(default_factory=lambda: _env_int(15, "LINE_FOLLOW_MAX_LOST_TICKS"))
-    transfer_line_enabled: bool = field(default_factory=lambda: _env_bool("TRANSFER_LINE_ENABLED", True))
+    # Transfer line-following is parked for now: A4/B1 row transfers use the
+    # normal direct-drive path with heading hold instead of following tape.
+    transfer_line_enabled: bool = field(default_factory=lambda: _env_bool("TRANSFER_LINE_ENABLED", False))
     transfer_line_speed: int = field(default_factory=lambda: _env_int(16, "TRANSFER_LINE_SPEED", "ROBOT_PATROL_SPEED", "ROBOT_SLOW_SPEED"))
     transfer_line_min_speed: int = field(default_factory=lambda: _env_int(10, "TRANSFER_LINE_MIN_SPEED"))
     transfer_line_tick_seconds: float = field(default_factory=lambda: _env_float(0.04, "TRANSFER_LINE_TICK_SECONDS"))
@@ -272,6 +274,7 @@ class RobotRuntime:
         self._last_motion_sensor_at = 0.0
         self._observed_shelf_sequence: list[str] = []
         self._pending_boundary_state: tuple[int, int, int, int] | None = None
+        self._motion_boundary_action_taken = False
         self._empty_vision_scans = 0
         self._last_camera_fallback_at = 0.0
         self._last_missing_alert_at = 0.0
@@ -487,7 +490,14 @@ class RobotRuntime:
                         continue
                     self._sync_cruise_scanner_for_phase()
                 self.refresh_motion_sensor()
+                self._motion_boundary_action_taken = False
                 self._drive_patrol_step(tape_state)
+                if self._motion_boundary_action_taken:
+                    self._motion_boundary_action_taken = False
+                    iterations += 1
+                    current_cycle = self._current_cycle()
+                    self.store.record_cycle(current_cycle, self._skip_shortage_for_cycle(current_cycle))
+                    continue
                 if self._pending_boundary_state is not None:
                     boundary_outcome = self._handle_tape_boundary()
                     if boundary_outcome != "none":
@@ -692,6 +702,8 @@ class RobotRuntime:
         )
 
     def _maybe_start_transfer_line_after_boundary_turn(self) -> bool:
+        # Keep the transfer-line implementation below for future recovery, but
+        # default runtime behavior must not enter line-following between shelves.
         if not self.config.transfer_line_enabled:
             self._transfer_line_context = None
             return False
@@ -1254,7 +1266,7 @@ class RobotRuntime:
                     "tape_state": _json_tape_state(tape_state),
                 },
             )
-        self._run_timed_motion(
+        boundary_latched = self._run_timed_motion(
             self.motion.move_forward_slow,
             speed=self.config.cruise_speed,
             duration_seconds=self.config.cruise_tick_seconds,
@@ -1262,6 +1274,8 @@ class RobotRuntime:
             heading_hold=True,
             keep_running=True,
         )
+        if boundary_latched:
+            return
         self._log_motion_command(
             "cruise",
             "move_forward",
@@ -1300,14 +1314,19 @@ class RobotRuntime:
             speed=speed,
             duration_seconds=drive_seconds,
         )
-        self._run_timed_motion(
+        boundary_latched = self._run_timed_motion(
             self.motion.move_forward_slow,
             speed=speed,
             duration_seconds=drive_seconds,
             watch_boundary=True,
             heading_hold=True,
         )
-        if self._stop_event.is_set() or self._manual_override.is_set() or self._pending_boundary_state is not None:
+        if (
+            boundary_latched
+            or self._stop_event.is_set()
+            or self._manual_override.is_set()
+            or self._pending_boundary_state is not None
+        ):
             return
         self.motion.stop()
         self._stop_cruise_scanner()
@@ -1356,12 +1375,15 @@ class RobotRuntime:
 
         if decision.boundary_candidate:
             self.motion.stop()
+            self._pending_boundary_state = tape_state
             self.store.record_motion_debug(
                 "line_follow_boundary_candidate",
-                f"{phase}：寻线时检测到列端/禁区候选，等待主循环执行转向或绕行。",
+                f"{phase}：寻线时检测到列端/禁区候选，已立即停车并执行边界动作。",
                 status="TURNING_AT_BOUNDARY",
                 evidence=evidence,
             )
+            if self._handle_tape_boundary(tape_state) != "none":
+                self._motion_boundary_action_taken = True
             return
 
         if decision.command in {"wait", "stop"} and not decision.line_seen:
@@ -1395,7 +1417,8 @@ class RobotRuntime:
                     f"{phase}：{decision.description}，按最近纠偏方向 {recovery_command} 短步找线。",
                     evidence=evidence,
                 )
-            self._run_line_follow_command(recovery_command, search=True)
+            if self._run_line_follow_command(recovery_command, search=True):
+                return
             self._interruptible_sleep(max(0.0, self.config.line_follow_poll_seconds))
             return
 
@@ -1416,10 +1439,11 @@ class RobotRuntime:
             ),
             evidence=evidence,
         )
-        self._run_line_follow_command(decision.command)
+        if self._run_line_follow_command(decision.command):
+            return
         self._interruptible_sleep(max(0.0, self.config.line_follow_poll_seconds))
 
-    def _run_line_follow_command(self, command: str, *, search: bool = False) -> None:
+    def _run_line_follow_command(self, command: str, *, search: bool = False) -> bool:
         step_seconds = self.config.line_follow_search_seconds if search else self.config.line_follow_step_seconds
         turn_seconds = self.config.line_follow_search_seconds if search else self.config.line_follow_turn_seconds
         if command == "forward":
@@ -1430,7 +1454,7 @@ class RobotRuntime:
                 duration_seconds=step_seconds,
                 search=search,
             )
-            self._run_timed_motion(
+            return self._run_timed_motion(
                 self.motion.move_forward_slow,
                 speed=self.config.line_follow_speed,
                 duration_seconds=step_seconds,
@@ -1444,7 +1468,7 @@ class RobotRuntime:
                 duration_seconds=step_seconds,
                 search=search,
             )
-            self._run_timed_motion(
+            return self._run_timed_motion(
                 self.motion.strafe_left_slow,
                 speed=self.config.line_follow_speed,
                 duration_seconds=step_seconds,
@@ -1458,7 +1482,7 @@ class RobotRuntime:
                 duration_seconds=step_seconds,
                 search=search,
             )
-            self._run_timed_motion(
+            return self._run_timed_motion(
                 self.motion.strafe_right_slow,
                 speed=self.config.line_follow_speed,
                 duration_seconds=step_seconds,
@@ -1472,7 +1496,7 @@ class RobotRuntime:
                 duration_seconds=turn_seconds,
                 search=search,
             )
-            self._run_timed_motion(
+            return self._run_timed_motion(
                 self.motion.rotate_left_slow,
                 speed=self.config.line_follow_turn_speed,
                 duration_seconds=turn_seconds,
@@ -1486,7 +1510,7 @@ class RobotRuntime:
                 duration_seconds=turn_seconds,
                 search=search,
             )
-            self._run_timed_motion(
+            return self._run_timed_motion(
                 self.motion.rotate_right_slow,
                 speed=self.config.line_follow_turn_speed,
                 duration_seconds=turn_seconds,
@@ -1494,6 +1518,7 @@ class RobotRuntime:
             )
         else:
             self.motion.stop()
+            return False
 
     def _run_timed_motion(
         self,
@@ -1504,7 +1529,7 @@ class RobotRuntime:
         watch_boundary: bool = True,
         heading_hold: bool = False,
         keep_running: bool = False,
-    ) -> None:
+    ) -> bool:
         # keep_running leaves the motor energised at the end (no trailing stop) so
         # a caller can chain motion slices into a continuous, jerk-free cruise
         # instead of the stop-start cadence a per-step stop would produce.
@@ -1515,7 +1540,7 @@ class RobotRuntime:
             else 0.0
         )
         if watch_boundary and guard_interval > 0.0:
-            self._run_guarded_motion_loop(
+            return self._run_guarded_motion_loop(
                 mover,
                 speed=speed,
                 duration_seconds=duration,
@@ -1523,7 +1548,6 @@ class RobotRuntime:
                 keep_running=keep_running,
                 guard_interval=guard_interval,
             )
-            return
         if duration <= 0.0 or guard_interval <= 0.0 or duration <= guard_interval:
             correction = None
             if heading_hold:
@@ -1534,7 +1558,9 @@ class RobotRuntime:
             latched = self._poll_boundary_during_motion(duration) if watch_boundary else False
             if not keep_running or latched:
                 self.motion.stop()
-            return
+            if latched:
+                self._handle_pending_motion_boundary()
+            return latched
 
         remaining = duration
         elapsed = 0.0
@@ -1558,9 +1584,12 @@ class RobotRuntime:
             # Manual control needs a clean slate: drop any energised axis so the
             # next manual motion command starts from a stopped chassis.
             self.motion.stop()
-            return
+            return False
         if not keep_running or latched or self._stop_event.is_set():
             self.motion.stop()
+        if latched:
+            self._handle_pending_motion_boundary()
+        return latched
 
     def _run_guarded_motion_loop(
         self,
@@ -1571,7 +1600,7 @@ class RobotRuntime:
         heading_hold: bool,
         keep_running: bool,
         guard_interval: float,
-    ) -> None:
+    ) -> bool:
         duration = max(0.0, float(duration_seconds))
         poll_seconds = max(0.001, float(guard_interval))
         deadline = time.monotonic() + duration
@@ -1598,9 +1627,21 @@ class RobotRuntime:
             elapsed = max(0.0, duration - max(0.0, deadline - time.monotonic()))
         if self._manual_override.is_set():
             self.motion.stop()
-            return
+            return False
         if not keep_running or latched or self._stop_event.is_set():
             self.motion.stop()
+        if latched:
+            self._handle_pending_motion_boundary()
+        return latched
+
+    def _handle_pending_motion_boundary(self) -> bool:
+        if self._transfer_line_context is not None or self._pending_boundary_state is None:
+            return False
+        state = self._pending_boundary_state
+        handled = self._handle_tape_boundary(state) != "none"
+        if handled:
+            self._motion_boundary_action_taken = True
+        return handled
 
     def _start_guarded_motion(
         self,

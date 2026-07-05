@@ -93,7 +93,7 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
         fake_motion = FakeMotion()
         fake_sensors = FakeSensors(
             distances=[400] * 8,
-            tapes=[(0, 0, 0, 0), (1, 1, 1, 1)],
+            tapes=[(1, 1, 1, 1), (1, 1, 1, 1)],
         )
         runtime = RobotRuntime(
             store,

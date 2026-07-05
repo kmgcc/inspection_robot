@@ -135,6 +135,38 @@ class AudioPlaybackTest(unittest.TestCase):
         self.assertEqual(kwargs_seen[0]["input"], "检测到 A1 缺少 红瓶。")
         self.assertNotIn("stdin", kwargs_seen[0])
 
+    def test_piper_is_discovered_from_default_directory_without_path_or_model_env(self) -> None:
+        piper_dir = self.root / "piper"
+        piper_dir.mkdir()
+        piper_bin = piper_dir / "piper"
+        piper_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+        piper_bin.chmod(0o755)
+        model = piper_dir / "zh_CN-huayan-x_low.onnx"
+        model.write_bytes(b"model")
+        synth_commands: list[list[str]] = []
+
+        def fake_which(name: str) -> str | None:
+            if name == "pw-play":
+                return "/usr/bin/pw-play"
+            return None
+
+        def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            synth_commands.append(command)
+            Path(command[command.index("--output_file") + 1]).write_bytes(b"RIFF")
+            return subprocess.CompletedProcess(command, 0)
+
+        with (
+            mock.patch.dict(audio.os.environ, {"ROBOT_PIPER_DIR": str(piper_dir), "ROBOT_PIPER_MODEL": ""}, clear=False),
+            mock.patch.object(audio, "_ensure_worker"),
+            mock.patch.object(audio.shutil, "which", side_effect=fake_which),
+            mock.patch.object(audio.subprocess, "run", side_effect=fake_run),
+        ):
+            payload, status = audio.start_spoken_message(self.root, "检测到 A区一号货架 缺少 手机。")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["tts_player"], "piper")
+        self.assertEqual(synth_commands[0][:4], [str(piper_bin), "--model", str(model), "--output_file"])
+
     def test_edge_tts_is_not_selected_without_online_opt_in(self) -> None:
         def fake_which(name: str) -> str | None:
             if name == "edge-tts":

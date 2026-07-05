@@ -637,6 +637,7 @@ class CruiseRuntimeTest(unittest.TestCase):
                 cruise_vision_enabled=True,
                 object_trigger_enabled=False,
                 action_settle_seconds=0,
+                transfer_line_enabled=True,
                 transfer_line_exit_confirm_frames=1,
                 turn_90_seconds=0,
             )

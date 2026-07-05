@@ -206,7 +206,7 @@ class RuntimeTest(unittest.TestCase):
         self.assertFalse(config.line_follow_auto_enter)
         self.assertEqual(config.line_follow_speed, 16)
         self.assertEqual(config.line_follow_turn_speed, 16)
-        self.assertTrue(config.transfer_line_enabled)
+        self.assertFalse(config.transfer_line_enabled)
         self.assertEqual(config.transfer_line_speed, 16)
         self.assertEqual(config.transfer_line_min_speed, 10)
         self.assertEqual(config.transfer_line_tick_seconds, 0.04)
@@ -578,6 +578,7 @@ class RuntimeTest(unittest.TestCase):
                 boundary_retreat_speed=12,
                 boundary_retreat_seconds=0.06,
                 action_settle_seconds=0,
+                turn_90_seconds=0,
             ),
             motion_adapter=fake_motion,
             sensor_adapter=fake_sensors,
@@ -595,13 +596,9 @@ class RuntimeTest(unittest.TestCase):
         )
 
         self.assertIn("stop", fake_motion.calls)
-        # No retreat during the motion guard itself; retreat happens on boundary handling.
-        self.assertNotIn("move_backward", fake_motion.calls)
-        backward_count = fake_motion.calls.count("move_backward")
-        fake_sensors.tapes.append((0, 1, 1, 1))
-        runtime._handle_tape_boundary((0, 1, 1, 1))
-        # Boundary retreat now backs off the line (move_backward) before turning.
-        self.assertGreater(fake_motion.calls.count("move_backward"), backward_count)
+        self.assertIn("move_backward", fake_motion.calls)
+        self.assertIn("rotate_right", fake_motion.calls)
+        self.assertIsNone(runtime._pending_boundary_state)
         self.assertTrue(
             any(
                 event["type"] == "motion_debug"
@@ -610,7 +607,7 @@ class RuntimeTest(unittest.TestCase):
             )
         )
 
-    def test_a4_boundary_turn_starts_transfer_line_context(self) -> None:
+    def test_a4_boundary_turn_keeps_transfer_line_disabled_by_default(self) -> None:
         store = self.make_store()
         fake_motion = FakeMotion()
         runtime = RobotRuntime(
@@ -633,9 +630,8 @@ class RuntimeTest(unittest.TestCase):
 
         self.assertEqual(runtime._handle_tape_boundary((0, 0, 0, 0)), "turn")
 
-        self.assertIsNotNone(runtime._transfer_line_context)
-        self.assertEqual(runtime._transfer_line_context.direction, "A_TO_B")  # type: ignore[union-attr]
-        self.assertTrue(runtime._cruise_vision_suppressed_until_boundary)
+        self.assertIsNone(runtime._transfer_line_context)
+        self.assertFalse(runtime._cruise_vision_suppressed_until_boundary)
         self.assertIn("rotate_right", fake_motion.calls)
 
     def test_transfer_start_boundary_does_not_latch_until_centerline_exit(self) -> None:
@@ -651,6 +647,7 @@ class RuntimeTest(unittest.TestCase):
                 boundary_cooldown_seconds=0,
                 boundary_confirm_samples=1,
                 boundary_window_seconds=10.0,
+                transfer_line_enabled=True,
                 transfer_line_exit_confirm_frames=2,
                 turn_90_seconds=0,
             ),
@@ -686,6 +683,7 @@ class RuntimeTest(unittest.TestCase):
                 boundary_cooldown_seconds=0,
                 boundary_confirm_samples=1,
                 boundary_window_seconds=10.0,
+                transfer_line_enabled=True,
                 transfer_endpoint_window_seconds=10.0,
                 transfer_line_exit_confirm_frames=1,
                 turn_90_seconds=0,
@@ -719,6 +717,7 @@ class RuntimeTest(unittest.TestCase):
                 boundary_retreat_seconds=0,
                 boundary_cooldown_seconds=0,
                 boundary_confirm_samples=1,
+                transfer_line_enabled=True,
                 transfer_endpoint_window_seconds=10.0,
                 transfer_line_exit_confirm_frames=1,
                 turn_90_seconds=0,
@@ -751,6 +750,7 @@ class RuntimeTest(unittest.TestCase):
                 boundary_retreat_seconds=0,
                 boundary_cooldown_seconds=0,
                 boundary_confirm_samples=1,
+                transfer_line_enabled=True,
                 transfer_line_exit_confirm_frames=1,
                 turn_90_seconds=0,
             ),
@@ -779,6 +779,7 @@ class RuntimeTest(unittest.TestCase):
                 boundary_retreat_seconds=0,
                 boundary_cooldown_seconds=0,
                 boundary_confirm_samples=1,
+                transfer_line_enabled=True,
                 transfer_line_exit_confirm_frames=1,
                 transfer_line_tick_seconds=0,
                 heading_hold_enabled=True,
@@ -821,6 +822,7 @@ class RuntimeTest(unittest.TestCase):
                 boundary_retreat_seconds=0,
                 boundary_cooldown_seconds=0,
                 boundary_confirm_samples=1,
+                transfer_line_enabled=True,
                 transfer_line_exit_confirm_frames=1,
                 transfer_line_tick_seconds=0.003,
                 transfer_line_guard_poll_seconds=0.001,
