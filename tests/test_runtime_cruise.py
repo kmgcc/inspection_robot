@@ -238,6 +238,7 @@ class CruiseRuntimeTest(unittest.TestCase):
                 heading_hold_enabled=True,
                 heading_hold_tolerance_deg=3.0,
                 heading_hold_rate_damping=1.0,
+                heading_hold_confirm_samples=1,
                 action_settle_seconds=0,
             ),
             imu=FakeImu(guard),
@@ -255,6 +256,7 @@ class CruiseRuntimeTest(unittest.TestCase):
                 heading_hold_enabled=True,
                 heading_hold_tolerance_deg=3.0,
                 heading_hold_rate_damping=0.5,
+                heading_hold_confirm_samples=1,
                 action_settle_seconds=0,
             ),
             imu=FakeImu(guard),
@@ -262,7 +264,7 @@ class CruiseRuntimeTest(unittest.TestCase):
 
         runtime._apply_heading_hold()
 
-        self.assertIn("rotate_right", motion.calls)
+        self.assertIn("rotate_left", motion.calls)
 
     # --- moving recognition + orange flash ------------------------------- #
 
@@ -392,6 +394,7 @@ class CruiseRuntimeTest(unittest.TestCase):
                 heading_hold_tolerance_deg=3.0,
                 heading_hold_min_sample_interval_seconds=0.5,
                 heading_hold_min_interval_seconds=0.0,
+                heading_hold_confirm_samples=1,
                 action_settle_seconds=0,
             ),
             imu=FakeImu(guard),
@@ -418,6 +421,7 @@ class CruiseRuntimeTest(unittest.TestCase):
                 heading_hold_tolerance_deg=3.0,
                 heading_hold_min_interval_seconds=0.0,
                 heading_hold_max_consecutive=5,
+                heading_hold_confirm_samples=1,
                 cruise_tick_seconds=0,
                 cruise_log_interval_seconds=0,
                 action_settle_seconds=0,
@@ -426,7 +430,7 @@ class CruiseRuntimeTest(unittest.TestCase):
         )
 
         runtime._drive_cruise_step((1, 1, 1, 1))
-        self.assertIn("rotate_right", motion.calls)
+        self.assertIn("rotate_left", motion.calls)
         self.assertGreaterEqual(guard.reset_count, 1)
 
         motion.calls.clear()
@@ -438,11 +442,11 @@ class CruiseRuntimeTest(unittest.TestCase):
         self.assertNotIn("rotate_right", motion.calls)
 
     def test_cruise_correction_sign_convention(self) -> None:
-        """Positive deviation ⇒ rotate_right; with invert ⇒ rotate_left.
-        Positive rate (worsening) with strong damping reduces effective but
-        keeps the same sign, so the correction still fires."""
+        """Positive deviation ⇒ rotate_left by default; disabling invert ⇒ rotate_right.
+        Positive rate (worsening) with damping keeps the same sign, so the
+        correction still fires."""
 
-        # Positive deviation, no rate → rotate_right.
+        # Positive deviation, no rate → rotate_left with the field-car default.
         guard = FakeGuard(deviation=6.0, rate=0.0)
         runtime, motion, _ = self.make_runtime(
             config=RobotRuntimeConfig(
@@ -451,33 +455,35 @@ class CruiseRuntimeTest(unittest.TestCase):
                 heading_hold_rate_damping=0.0,
                 heading_hold_min_interval_seconds=0.0,
                 heading_hold_max_consecutive=5,
+                heading_hold_confirm_samples=1,
                 action_settle_seconds=0,
             ),
             imu=FakeImu(guard),
         )
         runtime._apply_heading_hold()
-        self.assertIn("rotate_right", motion.calls)
-        self.assertNotIn("rotate_left", motion.calls)
+        self.assertIn("rotate_left", motion.calls)
+        self.assertNotIn("rotate_right", motion.calls)
 
-        # Invert flips the direction.
+        # Disabling invert flips back to the old bench convention.
         guard2 = FakeGuard(deviation=6.0, rate=0.0)
         runtime2, motion2, _ = self.make_runtime(
             config=RobotRuntimeConfig(
                 heading_hold_enabled=True,
                 heading_hold_tolerance_deg=3.0,
                 heading_hold_rate_damping=0.0,
-                heading_hold_invert=True,
+                heading_hold_invert=False,
                 heading_hold_min_interval_seconds=0.0,
                 heading_hold_max_consecutive=5,
+                heading_hold_confirm_samples=1,
                 action_settle_seconds=0,
             ),
             imu=FakeImu(guard2),
         )
         runtime2._apply_heading_hold()
-        self.assertIn("rotate_left", motion2.calls)
-        self.assertNotIn("rotate_right", motion2.calls)
+        self.assertIn("rotate_right", motion2.calls)
+        self.assertNotIn("rotate_left", motion2.calls)
 
-        # Negative deviation → rotate_left (no invert).
+        # Negative deviation → rotate_right with the default inversion.
         guard3 = FakeGuard(deviation=-6.0, rate=0.0)
         runtime3, motion3, _ = self.make_runtime(
             config=RobotRuntimeConfig(
@@ -486,13 +492,33 @@ class CruiseRuntimeTest(unittest.TestCase):
                 heading_hold_rate_damping=0.0,
                 heading_hold_min_interval_seconds=0.0,
                 heading_hold_max_consecutive=5,
+                heading_hold_confirm_samples=1,
                 action_settle_seconds=0,
             ),
             imu=FakeImu(guard3),
         )
         runtime3._apply_heading_hold()
-        self.assertIn("rotate_left", motion3.calls)
-        self.assertNotIn("rotate_right", motion3.calls)
+        self.assertIn("rotate_right", motion3.calls)
+        self.assertNotIn("rotate_left", motion3.calls)
+
+    def test_heading_hold_default_waits_for_confirmed_deviation(self) -> None:
+        guard = FakeGuard(deviation=7.0, rate=0.0)
+        runtime, motion, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                heading_hold_enabled=True,
+                heading_hold_min_interval_seconds=0.0,
+                action_settle_seconds=0,
+            ),
+            imu=FakeImu(guard),
+        )
+
+        runtime._apply_heading_hold()
+        self.assertNotIn("rotate_left", motion.calls)
+        self.assertNotIn("rotate_right", motion.calls)
+
+        guard.last_sample_at = None
+        runtime._apply_heading_hold()
+        self.assertIn("rotate_left", motion.calls)
 
     def test_cruise_keep_running_rewrites_four_wheels(self) -> None:
         """keep_running=True skips the trailing stop but every chunk still

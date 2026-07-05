@@ -104,16 +104,17 @@ class RobotRuntimeConfig:
     object_slow_speed: int = field(default_factory=lambda: _env_int(12, "OBJECT_SLOW_SPEED"))
     object_settle_seconds: float = field(default_factory=lambda: _env_float(0.25, "OBJECT_SETTLE_SECONDS"))
     heading_hold_enabled: bool = field(default_factory=lambda: _env_bool("HEADING_HOLD_ENABLED", True))
-    heading_hold_tolerance_deg: float = field(default_factory=lambda: _env_float(3.0, "HEADING_HOLD_TOLERANCE_DEG"))
-    heading_hold_gain: float = field(default_factory=lambda: _env_float(0.02, "HEADING_HOLD_GAIN"))
-    heading_hold_min_pulse_seconds: float = field(default_factory=lambda: _env_float(0.03, "HEADING_HOLD_MIN_PULSE_SECONDS"))
-    heading_hold_max_pulse_seconds: float = field(default_factory=lambda: _env_float(0.12, "HEADING_HOLD_MAX_PULSE_SECONDS"))
-    heading_hold_correction_speed: int | None = field(default_factory=lambda: _env_optional_int("HEADING_HOLD_CORRECTION_SPEED"))
-    heading_hold_invert: bool = field(default_factory=lambda: _env_bool("HEADING_HOLD_INVERT", False))
-    heading_hold_rate_damping: float = field(default_factory=lambda: _env_float(0.02, "HEADING_HOLD_KD", "HEADING_HOLD_RATE_DAMPING"))
-    heading_hold_min_sample_interval_seconds: float = field(default_factory=lambda: _env_float(0.04, "HEADING_HOLD_MIN_SAMPLE_INTERVAL_SECONDS"))
-    heading_hold_min_interval_seconds: float = field(default_factory=lambda: _env_float(0.2, "HEADING_HOLD_MIN_INTERVAL_SECONDS"))
-    heading_hold_max_consecutive: int = field(default_factory=lambda: _env_int(3, "HEADING_HOLD_MAX_CONSECUTIVE"))
+    heading_hold_tolerance_deg: float = field(default_factory=lambda: _env_float(6.0, "HEADING_HOLD_TOLERANCE_DEG"))
+    heading_hold_gain: float = field(default_factory=lambda: _env_float(0.008, "HEADING_HOLD_GAIN"))
+    heading_hold_min_pulse_seconds: float = field(default_factory=lambda: _env_float(0.02, "HEADING_HOLD_MIN_PULSE_SECONDS"))
+    heading_hold_max_pulse_seconds: float = field(default_factory=lambda: _env_float(0.07, "HEADING_HOLD_MAX_PULSE_SECONDS"))
+    heading_hold_correction_speed: int = field(default_factory=lambda: _env_int(12, "HEADING_HOLD_CORRECTION_SPEED"))
+    heading_hold_invert: bool = field(default_factory=lambda: _env_bool("HEADING_HOLD_INVERT", True))
+    heading_hold_rate_damping: float = field(default_factory=lambda: _env_float(0.03, "HEADING_HOLD_KD", "HEADING_HOLD_RATE_DAMPING"))
+    heading_hold_min_sample_interval_seconds: float = field(default_factory=lambda: _env_float(0.08, "HEADING_HOLD_MIN_SAMPLE_INTERVAL_SECONDS"))
+    heading_hold_min_interval_seconds: float = field(default_factory=lambda: _env_float(0.45, "HEADING_HOLD_MIN_INTERVAL_SECONDS"))
+    heading_hold_max_consecutive: int = field(default_factory=lambda: _env_int(1, "HEADING_HOLD_MAX_CONSECUTIVE"))
+    heading_hold_confirm_samples: int = field(default_factory=lambda: _env_int(2, "HEADING_HOLD_CONFIRM_SAMPLES"))
     heading_zupt_enabled: bool = field(default_factory=lambda: _env_bool("HEADING_ZUPT_ENABLED", True))
     heading_zupt_samples: int = field(default_factory=lambda: _env_int(15, "HEADING_ZUPT_SAMPLES"))
     heading_zupt_sample_seconds: float = field(default_factory=lambda: _env_float(0.005, "HEADING_ZUPT_SAMPLE_SECONDS"))
@@ -220,6 +221,7 @@ class RobotRuntime:
         self._manual_override = threading.Event()
         self._last_heading_correction_at = 0.0
         self._heading_consecutive_count = 0
+        self._heading_over_tolerance_count = 0
 
     def start(self, shelf_order: Iterable[str] | None = None) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -284,6 +286,7 @@ class RobotRuntime:
         if callable(clearer):
             clearer()
         self._heading_consecutive_count = 0
+        self._heading_over_tolerance_count = 0
         self._last_heading_correction_at = 0.0
 
     def release_manual_override(self) -> None:
@@ -1592,6 +1595,8 @@ class RobotRuntime:
         return False
 
     def _reset_heading_guard(self) -> None:
+        self._heading_consecutive_count = 0
+        self._heading_over_tolerance_count = 0
         guard = self._heading_guard
         if guard is not None:
             reset = getattr(guard, "reset", None)
@@ -1640,6 +1645,11 @@ class RobotRuntime:
             # reset the consecutive-corrector counter so the next outbound
             # deviation starts a fresh burst.
             self._heading_consecutive_count = 0
+            self._heading_over_tolerance_count = 0
+            return
+        self._heading_over_tolerance_count += 1
+        confirm_samples = max(1, int(self.config.heading_hold_confirm_samples))
+        if self._heading_over_tolerance_count < confirm_samples:
             return
         # R5: minimum interval between corrections, max consecutive corrections.
         # Without these the controller would fire every 50ms tick and overshoot.
@@ -1667,6 +1677,9 @@ class RobotRuntime:
         if pulse_seconds <= 0:
             return
         turn_right = effective > 0.0
+        # The MPU yaw sign can vary with board mounting. The field car was
+        # observed to diverge with the original positive=>right mapping, so the
+        # runtime default is inverted while keeping HEADING_HOLD_INVERT tunable.
         if self.config.heading_hold_invert:
             turn_right = not turn_right
         speed = self.config.heading_hold_correction_speed or max(1, int(self.config.turn_speed))
@@ -1699,6 +1712,7 @@ class RobotRuntime:
             reset()
         self._last_heading_correction_at = now
         self._heading_consecutive_count += 1
+        self._heading_over_tolerance_count = 0
         self.store.record_motion_debug(
             "heading_hold_correction",
             "heading hold correction pulse applied.",

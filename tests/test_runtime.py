@@ -70,6 +70,16 @@ class RuntimeTest(unittest.TestCase):
             "OBJECT_PRESENCE_COOLDOWN_SECONDS",
             "HEADING_HOLD_ENABLED",
             "HEADING_HOLD_TOLERANCE_DEG",
+            "HEADING_HOLD_GAIN",
+            "HEADING_HOLD_MIN_PULSE_SECONDS",
+            "HEADING_HOLD_MAX_PULSE_SECONDS",
+            "HEADING_HOLD_CORRECTION_SPEED",
+            "HEADING_HOLD_INVERT",
+            "HEADING_HOLD_RATE_DAMPING",
+            "HEADING_HOLD_MIN_SAMPLE_INTERVAL_SECONDS",
+            "HEADING_HOLD_MIN_INTERVAL_SECONDS",
+            "HEADING_HOLD_MAX_CONSECUTIVE",
+            "HEADING_HOLD_CONFIRM_SAMPLES",
             "LINE_FOLLOW_ENABLED",
             "LINE_FOLLOW_SPEED",
             "LINE_FOLLOW_TURN_SPEED",
@@ -90,6 +100,15 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(config.object_detector, "opencv")
         self.assertEqual(config.object_presence_confirm_frames, 2)
         self.assertTrue(config.heading_hold_enabled)
+        self.assertEqual(config.heading_hold_tolerance_deg, 6.0)
+        self.assertEqual(config.heading_hold_gain, 0.008)
+        self.assertEqual(config.heading_hold_min_pulse_seconds, 0.02)
+        self.assertEqual(config.heading_hold_max_pulse_seconds, 0.07)
+        self.assertEqual(config.heading_hold_correction_speed, 12)
+        self.assertTrue(config.heading_hold_invert)
+        self.assertEqual(config.heading_hold_min_interval_seconds, 0.45)
+        self.assertEqual(config.heading_hold_max_consecutive, 1)
+        self.assertEqual(config.heading_hold_confirm_samples, 2)
         self.assertTrue(config.line_follow_enabled)
         self.assertEqual(config.line_follow_speed, 30)
         self.assertEqual(config.line_follow_turn_speed, 30)
@@ -389,6 +408,7 @@ class RuntimeTest(unittest.TestCase):
                 heading_hold_gain=0.02,
                 heading_hold_min_pulse_seconds=0.03,
                 heading_hold_max_pulse_seconds=0.12,
+                heading_hold_confirm_samples=1,
             ),
             motion_adapter=fake_motion,
             sensor_adapter=FakeSensors(distances=[400], tapes=[]),
@@ -399,7 +419,7 @@ class RuntimeTest(unittest.TestCase):
 
         runtime._forward_step(speed=20, duration_seconds=0)
 
-        self.assertIn("rotate_right", fake_motion.calls)
+        self.assertIn("rotate_left", fake_motion.calls)
         self.assertIn("move_forward", fake_motion.calls)
 
     def test_continuous_patrol_ignores_three_black_boundary_by_default(self) -> None:
