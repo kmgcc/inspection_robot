@@ -17,7 +17,13 @@ from .core.events import EventRecord
 from .core.store import InspectionStore
 from .robot import alarm, gimbal, motion, mpu6050, sensors
 from .robot.heading_hold import HeadingHoldCorrection, HeadingHoldSettings, compute_heading_hold_correction
-from .robot.line_following import decide_line_follow_motion
+from .robot.line_following import (
+    TransferLineCommand,
+    TransferLineController,
+    TransferLineSettings,
+    decide_line_follow_motion,
+    is_transfer_exit_line_frame,
+)
 from .robot.sensors import RobotHardwareError
 from .vision import tag_detector
 from .vision.tag_detector import VisionDependencyError
@@ -155,6 +161,20 @@ class RobotRuntimeConfig:
     line_follow_search_seconds: float = field(default_factory=lambda: _env_float(0.08, "LINE_FOLLOW_SEARCH_SECONDS"))
     line_follow_poll_seconds: float = field(default_factory=lambda: _env_float(0.01, "LINE_FOLLOW_POLL_SECONDS"))
     line_follow_max_lost_ticks: int = field(default_factory=lambda: _env_int(15, "LINE_FOLLOW_MAX_LOST_TICKS"))
+    transfer_line_enabled: bool = field(default_factory=lambda: _env_bool("TRANSFER_LINE_ENABLED", True))
+    transfer_line_speed: int = field(default_factory=lambda: _env_int(16, "TRANSFER_LINE_SPEED", "ROBOT_PATROL_SPEED", "ROBOT_SLOW_SPEED"))
+    transfer_line_min_speed: int = field(default_factory=lambda: _env_int(10, "TRANSFER_LINE_MIN_SPEED"))
+    transfer_line_tick_seconds: float = field(default_factory=lambda: _env_float(0.04, "TRANSFER_LINE_TICK_SECONDS"))
+    transfer_line_kp: float = field(default_factory=lambda: _env_float(10.0, "TRANSFER_LINE_KP"))
+    transfer_line_kd: float = field(default_factory=lambda: _env_float(2.0, "TRANSFER_LINE_KD"))
+    transfer_line_turn_max: int = field(default_factory=lambda: _env_int(10, "TRANSFER_LINE_TURN_MAX"))
+    transfer_line_error_alpha: float = field(default_factory=lambda: _env_float(0.45, "TRANSFER_LINE_ERROR_ALPHA"))
+    transfer_line_rate_alpha: float = field(default_factory=lambda: _env_float(0.35, "TRANSFER_LINE_RATE_ALPHA"))
+    transfer_line_debounce_frames: int = field(default_factory=lambda: _env_int(1, "TRANSFER_LINE_DEBOUNCE_FRAMES"))
+    transfer_line_exit_confirm_frames: int = field(default_factory=lambda: _env_int(2, "TRANSFER_LINE_EXIT_CONFIRM_FRAMES"))
+    transfer_line_bridge_seconds: float = field(default_factory=lambda: _env_float(0.18, "TRANSFER_LINE_BRIDGE_SECONDS"))
+    transfer_line_search_seconds: float = field(default_factory=lambda: _env_float(0.65, "TRANSFER_LINE_SEARCH_SECONDS"))
+    transfer_line_failsafe_seconds: float = field(default_factory=lambda: _env_float(1.2, "TRANSFER_LINE_FAILSAFE_SECONDS"))
     motion_sensor_interval_seconds: float = field(default_factory=lambda: _env_float(0.5, "MOTION_SENSOR_INTERVAL_SECONDS"))
     skip_scan_cycles: int = 1
     camera_device: int = 0
@@ -178,6 +198,18 @@ class RobotRuntimeConfig:
 
     def __post_init__(self) -> None:
         _clamp_config_speeds(self)
+
+
+@dataclass(slots=True)
+class TransferLineContext:
+    origin_anchor: str
+    direction: str
+    destination_column: str
+    transfer_heading: str
+    post_turn_heading: str
+    endpoint_unlocked: bool = False
+    endpoint_latched: bool = False
+    exit_confirm_count: int = 0
 
 
 class RobotRuntime:
@@ -218,6 +250,8 @@ class RobotRuntime:
         self._line_follow_active = False
         self._line_lost_ticks = 0
         self._last_line_correction: str | None = None
+        self._transfer_line_context: TransferLineContext | None = None
+        self._transfer_line_controller = TransferLineController(self._transfer_line_settings())
         self._motion_step_index = 0
         self._last_motion_sensor_at = 0.0
         self._observed_shelf_sequence: list[str] = []
@@ -364,6 +398,8 @@ class RobotRuntime:
         self._line_follow_active = False
         self._line_lost_ticks = 0
         self._last_line_correction = None
+        self._transfer_line_context = None
+        self._transfer_line_controller = TransferLineController(self._transfer_line_settings())
         self._motion_step_index = 0
         self._object_presence_hits = 0
         self._orange_flash_until = 0.0
@@ -508,6 +544,8 @@ class RobotRuntime:
     def _handle_tape_boundary(self, tape_state: tuple[int, int, int, int] | None = None) -> str:
         if tape_state is None:
             tape_state = self.sensors.read_tape_boundary()
+        if self._transfer_line_context is not None:
+            return self._handle_transfer_tape_boundary(tape_state)
         candidate = self._feed_boundary_window(tape_state)
         if not candidate and self._pending_boundary_state is not None:
             tape_state = self._pending_boundary_state
@@ -580,21 +618,198 @@ class RobotRuntime:
         self._reset_heading_guard()
         self._zupt_recalibrate("post_boundary_turn")
         self.store.record_forbidden_zone(zone_id, False)
+        transfer_started = self._maybe_start_transfer_line_after_boundary_turn()
         self._advance_boundary_event()
-        self._cruise_vision_suppressed_until_boundary = False
+        self._cruise_vision_suppressed_until_boundary = transfer_started
         self.store.record_motion_debug(
             "boundary_action_done",
             f"转向完成，当前阶段：{self._patrol_phase_label()}。",
             evidence={
                 "line_follow_active": self._line_follow_active,
+                "transfer_line_active": transfer_started,
                 "phase_after": self._patrol_phase_label(),
             },
         )
-        self._show_line_follow() if self._line_follow_active else self._show_normal()
+        if self._line_follow_active or transfer_started:
+            self._show_line_follow()
+        else:
+            self._show_normal()
         return "turn"
 
     def _line_follow_auto_enter_allowed(self) -> bool:
         return self._last_shelf_anchor not in {"A4", "B1"}
+
+    def _transfer_line_settings(self) -> TransferLineSettings:
+        return TransferLineSettings(
+            base_speed=self.config.transfer_line_speed,
+            min_speed=self.config.transfer_line_min_speed,
+            kp=self.config.transfer_line_kp,
+            kd=self.config.transfer_line_kd,
+            turn_max=self.config.transfer_line_turn_max,
+            error_alpha=self.config.transfer_line_error_alpha,
+            rate_alpha=self.config.transfer_line_rate_alpha,
+            debounce_frames=self.config.transfer_line_debounce_frames,
+            bridge_seconds=self.config.transfer_line_bridge_seconds,
+            search_seconds=self.config.transfer_line_search_seconds,
+            failsafe_seconds=self.config.transfer_line_failsafe_seconds,
+        )
+
+    def _maybe_start_transfer_line_after_boundary_turn(self) -> bool:
+        if not self.config.transfer_line_enabled:
+            self._transfer_line_context = None
+            return False
+        anchor = self._last_shelf_anchor
+        if anchor == "A4":
+            context = TransferLineContext(
+                origin_anchor="A4",
+                direction="A_TO_B",
+                destination_column="B",
+                transfer_heading="A4_right_turn_transfer",
+                post_turn_heading="B_column_patrol",
+            )
+        elif anchor == "B1":
+            context = TransferLineContext(
+                origin_anchor="B1",
+                direction="B_TO_A",
+                destination_column="A",
+                transfer_heading="B1_right_turn_transfer",
+                post_turn_heading="A_column_patrol",
+            )
+        else:
+            self._transfer_line_context = None
+            return False
+        self._transfer_line_context = context
+        self._transfer_line_controller = TransferLineController(self._transfer_line_settings())
+        self._reset_boundary_window()
+        self._cruise_vision_suppressed_until_boundary = True
+        self._stop_cruise_scanner()
+        self.store.record_motion_debug(
+            "transfer_line_started",
+            f"{context.direction} 转场巡线已启动：等待离开起点横线后解锁终点边界。",
+            evidence=self._transfer_line_context_evidence(context),
+        )
+        return True
+
+    def _handle_transfer_tape_boundary(self, tape_state: tuple[int, int, int, int] | None) -> str:
+        context = self._transfer_line_context
+        if context is None:
+            return "none"
+        if context.endpoint_latched:
+            endpoint_state = self._pending_boundary_state or self._boundary_window_state(tape_state) or tape_state
+            return self._handle_transfer_endpoint_boundary(endpoint_state)
+        if not context.endpoint_unlocked:
+            self._observe_transfer_line_exit(tape_state)
+            return "none"
+        candidate = self._feed_transfer_endpoint_window(tape_state)
+        if not candidate and self._pending_boundary_state is not None:
+            tape_state = self._pending_boundary_state
+            self._pending_boundary_state = None
+            candidate = True
+        elif candidate:
+            self._pending_boundary_state = None
+            tape_state = self._boundary_window_state(tape_state)
+        if not candidate:
+            return "none"
+        context.endpoint_latched = True
+        self.motion.stop()
+        self.store.record_motion_debug(
+            "transfer_endpoint_candidate",
+            f"{context.direction} 转场终点横线已锁存：tape={_format_tape_state(tape_state)}。",
+            status="TURNING_AT_BOUNDARY",
+            evidence={
+                **self._transfer_line_context_evidence(context),
+                "tape_state": _json_tape_state(tape_state),
+                "boundary_window_seconds": self.config.boundary_window_seconds,
+            },
+        )
+        return self._handle_transfer_endpoint_boundary(tape_state)
+
+    def _observe_transfer_line_exit(self, tape_state: tuple[int, int, int, int] | None) -> None:
+        context = self._transfer_line_context
+        if context is None or context.endpoint_unlocked:
+            return
+        if is_transfer_exit_line_frame(tape_state):
+            context.exit_confirm_count += 1
+        else:
+            context.exit_confirm_count = 0
+        required = max(1, int(self.config.transfer_line_exit_confirm_frames))
+        if context.exit_confirm_count < required:
+            return
+        context.endpoint_unlocked = True
+        context.exit_confirm_count = 0
+        self._reset_boundary_window()
+        self.store.record_motion_debug(
+            "transfer_endpoint_unlocked",
+            f"{context.direction} 已离开起点横线，终点边界检测解锁。",
+            evidence={
+                **self._transfer_line_context_evidence(context),
+                "exit_confirm_frames": required,
+                "tape_state": _json_tape_state(tape_state),
+            },
+        )
+
+    def _feed_transfer_endpoint_window(self, tape_state: tuple[int, int, int, int] | None) -> bool:
+        context = self._transfer_line_context
+        if context is None or not context.endpoint_unlocked or context.endpoint_latched:
+            return False
+        return self._feed_boundary_window(tape_state, min_black=4)
+
+    def _handle_transfer_endpoint_boundary(self, tape_state: tuple[int, int, int, int] | None) -> str:
+        context = self._transfer_line_context
+        if context is None:
+            return "none"
+        now = time.monotonic()
+        self._last_boundary_turn = now
+        self.alarm.show_warning()
+        self.store.record_boundary(tape_state, True, f"transfer_endpoint_{context.direction.lower()}")
+        self.store.record_motion_debug(
+            "transfer_endpoint_turn",
+            f"{context.direction} 到达 {context.destination_column} 端，执行第二次顺时针 90 度转向并恢复普通巡逻。",
+            status="TURNING_AT_BOUNDARY",
+            evidence={
+                **self._transfer_line_context_evidence(context),
+                "tape_state": _json_tape_state(tape_state),
+            },
+        )
+        if not _turn_succeeded(self._turn_90("right")):
+            return "none"
+        self.store.record_boundary_turn("clockwise", 90)
+        direction = context.direction
+        destination = context.destination_column
+        self._transfer_line_context = None
+        self._transfer_line_controller.reset()
+        self._line_follow_active = False
+        self._line_lost_ticks = 0
+        self._last_line_correction = None
+        self._reset_boundary_window()
+        self._reset_heading_guard()
+        self._zupt_recalibrate("post_transfer_endpoint_turn")
+        self._advance_boundary_event()
+        self._cruise_vision_suppressed_until_boundary = False
+        if self.config.smooth_cruise_enabled:
+            self._sync_cruise_scanner_for_phase()
+        self._show_normal()
+        self.store.record_motion_debug(
+            "transfer_line_done",
+            f"{direction} 转场完成，已恢复 {destination} 列普通巡逻。",
+            evidence={"direction": direction, "destination_column": destination, "phase_after": self._patrol_phase_label()},
+        )
+        return "turn"
+
+    def _transfer_line_context_evidence(self, context: TransferLineContext | None = None) -> dict[str, object]:
+        context = self._transfer_line_context if context is None else context
+        if context is None:
+            return {"transfer_line_active": False}
+        return {
+            "transfer_line_active": True,
+            "origin_anchor": context.origin_anchor,
+            "direction": context.direction,
+            "destination_column": context.destination_column,
+            "transfer_heading": context.transfer_heading,
+            "post_turn_heading": context.post_turn_heading,
+            "endpoint_unlocked": context.endpoint_unlocked,
+            "endpoint_latched": context.endpoint_latched,
+        }
 
     def _handle_forbidden_bypass(self, tape_state: tuple[int, int, int, int]) -> str:
         action_number = self._boundary_event_index + 1
@@ -650,7 +865,7 @@ class RobotRuntime:
         self._pending_boundary_state = None
         self._boundary_retreat_latched = False
 
-    def _feed_boundary_window(self, tape_state: tuple[int, int, int, int] | None) -> bool:
+    def _feed_boundary_window(self, tape_state: tuple[int, int, int, int] | None, *, min_black: int | None = None) -> bool:
         if tape_state is None:
             return False
         now = time.monotonic()
@@ -658,9 +873,10 @@ class RobotRuntime:
             if int(value) == 0:
                 self._black_seen_at[index] = now
         window = max(0.0, float(self.config.boundary_window_seconds))
-        min_black = max(1, min(4, int(self.config.boundary_min_black_sensors)))
+        threshold = self.config.boundary_min_black_sensors if min_black is None else min_black
+        threshold = max(1, min(4, int(threshold)))
         recent_black = sum(1 for seen_at in self._black_seen_at if now - seen_at <= window)
-        return recent_black >= min_black
+        return recent_black >= threshold
 
     def _boundary_window_state(
         self,
@@ -724,6 +940,9 @@ class RobotRuntime:
         return True
 
     def _drive_patrol_step(self, tape_state: tuple[int, int, int, int] | None) -> None:
+        if self._transfer_line_context is not None:
+            self._drive_transfer_line_step(tape_state)
+            return
         if self._line_follow_active and self.config.line_follow_enabled:
             self._drive_line_follow_step(tape_state)
             return
@@ -770,6 +989,82 @@ class RobotRuntime:
             speed=self.config.patrol_speed,
             duration_seconds=self.config.step_seconds,
             settle_seconds=self.config.patrol_settle_seconds,
+        )
+
+    def _drive_transfer_line_step(self, tape_state: tuple[int, int, int, int] | None) -> None:
+        context = self._transfer_line_context
+        if context is None:
+            return
+        if self._stop_event.is_set() or self._manual_override.is_set():
+            self.motion.stop()
+            return
+        command = self._transfer_line_controller.update(tape_state)
+        self._motion_step_index += 1
+        evidence = {
+            **self._transfer_line_context_evidence(context),
+            "state": command.state,
+            "line_seen": command.line_seen,
+            "speed": command.speed,
+            "correction": command.correction,
+            "direction_command": command.direction,
+            "error": None if command.error is None else round(command.error, 3),
+            "mask": list(command.mask) if command.mask is not None else None,
+            "tape_state": _json_tape_state(tape_state),
+            "tick_seconds": self.config.transfer_line_tick_seconds,
+        }
+        if command.stop:
+            self.motion.stop()
+            self.store.record_motion_debug(
+                "transfer_line_failsafe",
+                f"{context.direction}：{command.description}，已停车等待人工处理。",
+                status="STOPPED",
+                evidence=evidence,
+            )
+            self._interruptible_sleep(max(0.0, self.config.transfer_line_tick_seconds))
+            return
+        self.store.record_motion_debug(
+            "transfer_line_step",
+            (
+                f"{context.direction} 转场巡线 #{self._motion_step_index}：{command.description}，"
+                f"speed={command.speed}, correction={command.correction}, direction={command.direction}, "
+                f"state={command.state}, tape={_format_tape_state(tape_state)}。"
+            ),
+            evidence=evidence,
+        )
+        self._run_transfer_line_motion(command)
+
+    def _run_transfer_line_motion(self, command: TransferLineCommand) -> None:
+        corrected = getattr(self.motion, "move_forward_corrected_slow", None)
+        if callable(corrected):
+
+            def mover(*, speed: int, duration_seconds: float) -> None:
+                corrected(
+                    speed=speed,
+                    correction=command.correction,
+                    direction=command.direction,
+                    duration_seconds=duration_seconds,
+                )
+
+            command_name = "move_forward_corrected"
+        else:
+            mover = self.motion.move_forward_slow
+            command_name = "move_forward"
+        self._log_motion_command(
+            "transfer_line",
+            command_name,
+            speed=command.speed,
+            duration_seconds=self.config.transfer_line_tick_seconds,
+            correction=command.correction,
+            direction=command.direction,
+            state=command.state,
+        )
+        self._run_timed_motion(
+            mover,
+            speed=command.speed,
+            duration_seconds=self.config.transfer_line_tick_seconds,
+            watch_boundary=True,
+            heading_hold=False,
+            keep_running=True,
         )
 
     def _drive_cruise_step(self, tape_state: tuple[int, int, int, int] | None) -> None:
@@ -1038,6 +1333,32 @@ class RobotRuntime:
             tape_state = self.sensors.read_tape_boundary()
         except RobotHardwareError:
             return False
+        context = self._transfer_line_context
+        if context is not None:
+            if not context.endpoint_unlocked:
+                self._observe_transfer_line_exit(tape_state)
+                return False
+            if not self._feed_transfer_endpoint_window(tape_state):
+                return False
+            context.endpoint_latched = True
+            self._pending_boundary_state = self._boundary_window_state(tape_state)
+            self.motion.stop()
+            self.store.record_motion_debug(
+                "transfer_motion_guard_endpoint_latched",
+                (
+                    "转场巡线运动中捕捉到终点横线四路窗口覆盖，已立即停车并锁存读数，"
+                    "下一轮控制循环将执行第二次90度转向。"
+                ),
+                status="TURNING_AT_BOUNDARY",
+                evidence={
+                    **self._transfer_line_context_evidence(context),
+                    "tape_state": _json_tape_state(self._pending_boundary_state),
+                    "elapsed_seconds": round(max(0.0, float(elapsed_seconds)), 3),
+                    "guard_poll_seconds": self.config.motion_guard_poll_seconds,
+                    "boundary_window_seconds": self.config.boundary_window_seconds,
+                },
+            )
+            return True
         if not self._feed_boundary_window(tape_state):
             return False
         self._pending_boundary_state = self._boundary_window_state(tape_state)
@@ -1490,6 +1811,8 @@ class RobotRuntime:
         return "尚未识别到货架锚点：黑胶带按保守行驶转向处理，不参与位置计数。"
 
     def _patrol_phase_label(self) -> str:
+        if self._transfer_line_context is not None:
+            return f"{self._transfer_line_context.direction}转场巡线"
         if self._line_follow_active:
             return "寻线过渡"
         anchor = self._last_shelf_anchor
@@ -2683,6 +3006,8 @@ def _clamp_config_speeds(config: RobotRuntimeConfig) -> None:
         "cruise_speed",
         "line_follow_speed",
         "line_follow_turn_speed",
+        "transfer_line_speed",
+        "transfer_line_min_speed",
     ):
         setattr(config, name, _running_speed(getattr(config, name)))
 
@@ -2709,6 +3034,18 @@ def load_calibration_into_config(config: RobotRuntimeConfig, root: Path) -> None
                 config.line_follow_speed = int(data["line_follow_speed"])
             if data.get("line_follow_step_seconds") is not None:
                 config.line_follow_step_seconds = float(data["line_follow_step_seconds"])
+            if data.get("transfer_line_speed") is not None:
+                config.transfer_line_speed = int(data["transfer_line_speed"])
+            if data.get("transfer_line_min_speed") is not None:
+                config.transfer_line_min_speed = int(data["transfer_line_min_speed"])
+            if data.get("transfer_line_tick_seconds") is not None:
+                config.transfer_line_tick_seconds = float(data["transfer_line_tick_seconds"])
+            if data.get("transfer_line_kp") is not None:
+                config.transfer_line_kp = float(data["transfer_line_kp"])
+            if data.get("transfer_line_kd") is not None:
+                config.transfer_line_kd = float(data["transfer_line_kd"])
+            if data.get("transfer_line_turn_max") is not None:
+                config.transfer_line_turn_max = int(data["transfer_line_turn_max"])
             _clamp_config_speeds(config)
         except (OSError, json.JSONDecodeError, TypeError, ValueError):
             pass
