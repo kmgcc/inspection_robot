@@ -49,6 +49,9 @@ def _env_int(default: int, *names: str) -> int:
     return int(_env_value(names, str(default)))
 
 
+DEFAULT_MIN_RUNNING_SPEED = max(0, _env_int(5, "ROBOT_MIN_SPEED"))
+
+
 def _env_float(default: float, *names: str) -> float:
     return float(_env_value(names, str(default)))
 
@@ -74,8 +77,8 @@ class RobotRuntimeConfig:
     patrol_settle_seconds: float = field(default_factory=lambda: _env_float(0.05, "ROBOT_PATROL_SETTLE_SECONDS"))
     poll_seconds: float = field(default_factory=lambda: _env_float(0.12, "ROBOT_POLL_SECONDS"))
     scan_enabled: bool = field(default_factory=lambda: _env_bool("ROBOT_SCAN_ENABLED", True))
-    scan_timeout_seconds: float = 4.0
-    scan_max_detections: int = 6
+    scan_timeout_seconds: float = field(default_factory=lambda: _env_float(2.0, "ROBOT_SCAN_TIMEOUT_SECONDS", "SCAN_TIMEOUT_SECONDS"))
+    scan_max_detections: int = field(default_factory=lambda: _env_int(3, "ROBOT_SCAN_MAX_DETECTIONS", "SCAN_MAX_DETECTIONS"))
     scan_interval_seconds: float = field(default_factory=lambda: _env_float(0.8, "SCAN_INTERVAL_SECONDS"))
     turn_90_seconds: float = field(default_factory=lambda: _env_float(0.85, "ROBOT_TURN_90_SECONDS"))
     turn_speed: int = field(default_factory=lambda: _env_int(22, "ROBOT_TURN_SPEED"))
@@ -99,31 +102,36 @@ class RobotRuntimeConfig:
     object_detector_model: str = field(default_factory=lambda: _env_text("", "OBJECT_DETECTOR_MODEL"))
     object_roi: str = field(default_factory=lambda: _env_text("", "OBJECT_ROI"))
     object_presence_min_area_ratio: float = field(default_factory=lambda: _env_float(0.015, "OBJECT_PRESENCE_MIN_AREA_RATIO"))
-    object_presence_confirm_frames: int = field(default_factory=lambda: _env_int(2, "OBJECT_PRESENCE_CONFIRM_FRAMES"))
-    object_presence_cooldown_seconds: float = field(default_factory=lambda: _env_float(2.0, "OBJECT_PRESENCE_COOLDOWN_SECONDS"))
+    object_presence_confirm_frames: int = field(default_factory=lambda: _env_int(1, "OBJECT_PRESENCE_CONFIRM_FRAMES"))
+    object_presence_cooldown_seconds: float = field(default_factory=lambda: _env_float(1.0, "OBJECT_PRESENCE_COOLDOWN_SECONDS"))
     object_yolo_min_interval_seconds: float = field(default_factory=lambda: _env_float(0.5, "OBJECT_YOLO_MIN_INTERVAL_SECONDS"))
     object_slow_speed: int = field(default_factory=lambda: _env_int(12, "OBJECT_SLOW_SPEED"))
-    object_settle_seconds: float = field(default_factory=lambda: _env_float(0.25, "OBJECT_SETTLE_SECONDS"))
+    object_settle_seconds: float = field(default_factory=lambda: _env_float(0.2, "OBJECT_SETTLE_SECONDS"))
     heading_hold_enabled: bool = field(default_factory=lambda: _env_bool("HEADING_HOLD_ENABLED", True))
     heading_hold_tolerance_deg: float = field(default_factory=lambda: _env_float(3.0, "HEADING_HOLD_TOLERANCE_DEG"))
-    heading_hold_gain: float = field(default_factory=lambda: _env_float(0.02, "HEADING_HOLD_GAIN"))
-    heading_hold_min_pulse_seconds: float = field(default_factory=lambda: _env_float(0.03, "HEADING_HOLD_MIN_PULSE_SECONDS"))
-    heading_hold_max_pulse_seconds: float = field(default_factory=lambda: _env_float(0.12, "HEADING_HOLD_MAX_PULSE_SECONDS"))
-    heading_hold_correction_speed: int | None = field(default_factory=lambda: _env_optional_int("HEADING_HOLD_CORRECTION_SPEED"))
-    heading_hold_invert: bool = field(default_factory=lambda: _env_bool("HEADING_HOLD_INVERT", False))
-    heading_hold_rate_damping: float = field(default_factory=lambda: _env_float(0.02, "HEADING_HOLD_KD", "HEADING_HOLD_RATE_DAMPING"))
+    heading_hold_gain: float = field(default_factory=lambda: _env_float(0.012, "HEADING_HOLD_GAIN"))
+    heading_hold_min_pulse_seconds: float = field(default_factory=lambda: _env_float(0.025, "HEADING_HOLD_MIN_PULSE_SECONDS"))
+    heading_hold_max_pulse_seconds: float = field(default_factory=lambda: _env_float(0.10, "HEADING_HOLD_MAX_PULSE_SECONDS"))
+    heading_hold_correction_speed: int = field(default_factory=lambda: _env_int(20, "HEADING_HOLD_CORRECTION_SPEED"))
+    heading_hold_invert: bool = field(default_factory=lambda: _env_bool("HEADING_HOLD_INVERT", True))
+    heading_hold_rate_damping: float = field(default_factory=lambda: _env_float(0.03, "HEADING_HOLD_KD", "HEADING_HOLD_RATE_DAMPING"))
+    heading_hold_min_sample_interval_seconds: float = field(default_factory=lambda: _env_float(0.08, "HEADING_HOLD_MIN_SAMPLE_INTERVAL_SECONDS"))
+    heading_hold_min_interval_seconds: float = field(default_factory=lambda: _env_float(0.25, "HEADING_HOLD_MIN_INTERVAL_SECONDS"))
+    heading_hold_max_consecutive: int = field(default_factory=lambda: _env_int(2, "HEADING_HOLD_MAX_CONSECUTIVE"))
+    heading_hold_confirm_samples: int = field(default_factory=lambda: _env_int(1, "HEADING_HOLD_CONFIRM_SAMPLES"))
     heading_zupt_enabled: bool = field(default_factory=lambda: _env_bool("HEADING_ZUPT_ENABLED", True))
     heading_zupt_samples: int = field(default_factory=lambda: _env_int(15, "HEADING_ZUPT_SAMPLES"))
     heading_zupt_sample_seconds: float = field(default_factory=lambda: _env_float(0.005, "HEADING_ZUPT_SAMPLE_SECONDS"))
     smooth_cruise_enabled: bool = field(default_factory=lambda: _env_bool("SMOOTH_CRUISE_ENABLED", False))
-    cruise_speed: int = field(default_factory=lambda: _env_int(14, "CRUISE_SPEED", "SMOOTH_CRUISE_SPEED"))
+    cruise_speed: int = field(default_factory=lambda: _env_int(8, "CRUISE_SPEED", "SMOOTH_CRUISE_SPEED"))
     cruise_tick_seconds: float = field(default_factory=lambda: _env_float(0.05, "CRUISE_TICK_SECONDS"))
     cruise_log_interval_seconds: float = field(default_factory=lambda: _env_float(1.0, "CRUISE_LOG_INTERVAL_SECONDS"))
-    cruise_vision_enabled: bool = field(default_factory=lambda: _env_bool("CRUISE_VISION_ENABLED", True))
+    cruise_vision_enabled: bool = field(default_factory=lambda: _env_bool("CRUISE_VISION_ENABLED", False))
     cruise_recognition_flash_seconds: float = field(default_factory=lambda: _env_float(0.12, "CRUISE_RECOGNITION_FLASH_SECONDS"))
     cruise_recognition_cooldown_seconds: float = field(default_factory=lambda: _env_float(1.5, "CRUISE_RECOGNITION_COOLDOWN_SECONDS"))
     cruise_vision_reopen_seconds: float = field(default_factory=lambda: _env_float(0.3, "CRUISE_VISION_REOPEN_SECONDS"))
-    line_follow_enabled: bool = field(default_factory=lambda: _env_bool("LINE_FOLLOW_ENABLED", True))
+    line_follow_enabled: bool = field(default_factory=lambda: _env_bool("LINE_FOLLOW_ENABLED", False))
+    line_follow_auto_enter: bool = field(default_factory=lambda: _env_bool("LINE_FOLLOW_AUTO_ENTER", False))
     line_follow_speed: int = field(default_factory=lambda: _env_int(30, "LINE_FOLLOW_SPEED", "ROBOT_PATROL_SPEED", "ROBOT_SLOW_SPEED"))
     line_follow_step_seconds: float = field(default_factory=lambda: _env_float(0.14, "LINE_FOLLOW_STEP_SECONDS", "ROBOT_STEP_SECONDS"))
     line_follow_turn_speed: int = field(
@@ -144,7 +152,7 @@ class RobotRuntimeConfig:
     turns_per_cycle: int = 2
     skip_scan_cycles: int = 1
     camera_device: int = 0
-    patrol_order: tuple[str, ...] = field(default_factory=lambda: ("A1", "A2", "A3", "A4", "B4", "B3", "B2", "B1"))
+    patrol_order: tuple[str, ...] = field(default_factory=lambda: ("A1", "A2", "A3", "A4", "B3", "B2", "B1"))
     cycle_max_missed_shelves: int = 1
     video_width: int = 640
     video_height: int = 360
@@ -161,6 +169,9 @@ class RobotRuntimeConfig:
         default_factory=lambda: _env_float(30.0, "CAMERA_FAILURE_REQUEST_COOLDOWN_SECONDS")
     )
     missing_alert_cooldown_seconds: float = field(default_factory=lambda: _env_float(8.0, "MISSING_ALERT_COOLDOWN_SECONDS"))
+
+    def __post_init__(self) -> None:
+        _clamp_config_speeds(self)
 
 
 class RobotRuntime:
@@ -215,6 +226,10 @@ class RobotRuntime:
         self._last_cruise_log_at = 0.0
         self._recognition_last_at: dict[str, float] = {}
         self._cruise_scanner: _CruiseVisionScanner | None = None
+        self._manual_override = threading.Event()
+        self._last_heading_correction_at = 0.0
+        self._heading_consecutive_count = 0
+        self._heading_over_tolerance_count = 0
 
     def start(self, shelf_order: Iterable[str] | None = None) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -245,6 +260,49 @@ class RobotRuntime:
     def join(self, timeout: float | None = None) -> None:
         if self._thread is not None:
             self._thread.join(timeout)
+
+    def request_manual_override(self) -> None:
+        """Manual control takes over: halt the patrol loop, then clear _stop_event so
+        the IMU closed-loop 90° turn (whose ``should_abort`` reads ``_stop_event``)
+        does not self-abort on its very first check.
+
+        R1 root cause: ``runtime.stop()`` sets ``_stop_event`` and never clears it
+        before the manual command runs, so ``imu_turn(..., should_abort=_stop_event.is_set)``
+        returns ``"aborted before motion"`` and the turn pulse is never issued.
+        Joining the patrol thread first avoids the race in which a cruise tick
+        rewrites the wheels mid-turn (R7).
+        """
+
+        self._manual_override.set()
+        self._stop_event.set()  # let the patrol loop / motion slices exit
+        self._stop_cruise_scanner()
+        stopper = getattr(self.motion, "request_stop", None)
+        if callable(stopper):
+            stopper()
+        else:
+            try:
+                self.motion.stop()
+            except RobotHardwareError:
+                pass
+        # Wait for the patrol thread to actually exit so it cannot overwrite the
+        # wheels while the manual command is running (R7).
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=1.0)
+        # Critical: clear so the manual turn_90_closed_loop does not self-abort.
+        self._stop_event.clear()
+        clearer = getattr(self.motion, "clear_stop", None)
+        if callable(clearer):
+            clearer()
+        self._heading_consecutive_count = 0
+        self._heading_over_tolerance_count = 0
+        self._last_heading_correction_at = 0.0
+
+    def release_manual_override(self) -> None:
+        """Manual control finished. The patrol thread has already exited, so to
+        resume cruising the caller must invoke ``start()`` again.
+        """
+
+        self._manual_override.clear()
 
     def _run_patrol_safely(self, shelf_order: Iterable[str] | None = None) -> None:
         try:
@@ -307,6 +365,11 @@ class RobotRuntime:
 
         try:
             while not self._stop_event.is_set():
+                if self._manual_override.is_set():
+                    # Manual control has the floor: don't run any patrol tick that
+                    # could overwrite the wheels. Spin cheaply until release().
+                    self._interruptible_sleep(0.02)
+                    continue
                 if max_iterations is not None and iterations >= max_iterations:
                     self.motion.stop()
                     self.store.record_motion_debug(
@@ -335,6 +398,8 @@ class RobotRuntime:
 
                 now = time.monotonic()
                 if cruise:
+                    if self._maybe_scan_for_object_presence():
+                        continue
                     self._handle_cruise_recognitions()
                     continue
                 if self._maybe_scan_for_object_presence():
@@ -565,7 +630,7 @@ class RobotRuntime:
         if self._line_follow_active and self.config.line_follow_enabled:
             self._drive_line_follow_step(tape_state)
             return
-        if self.config.line_follow_enabled:
+        if self.config.line_follow_enabled and self.config.line_follow_auto_enter:
             decision = decide_line_follow_motion(tape_state)
             if decision.line_seen and not decision.boundary_candidate:
                 self._line_follow_active = True
@@ -617,10 +682,18 @@ class RobotRuntime:
         we correct heading (a brief micro-pulse only when needed) and then keep
         driving forward, so the car glides at the lowest stable speed instead of
         lurching stop-go-stop. Boundary latching still runs inside the slice.
+
+        Heading hold is applied once at the top of the tick — if it fires, it
+        has already stop+rotate+stop+reset internally, so the subsequent
+        ``move_forward`` rewrites all four wheels cleanly. The deadband case
+        (deviation within tolerance) issues no ``rotate_*`` at all, which is
+        what keeps the car going straight on the straight stretches.
         """
 
+        if self._manual_override.is_set():
+            return
         self._apply_heading_hold()
-        if self._stop_event.is_set():
+        if self._stop_event.is_set() or self._manual_override.is_set():
             self.motion.stop()
             return
         self._motion_step_index += 1
@@ -649,6 +722,12 @@ class RobotRuntime:
             watch_boundary=True,
             heading_hold=False,
             keep_running=True,
+        )
+        self._log_motion_command(
+            "cruise",
+            "move_forward",
+            speed=self.config.cruise_speed,
+            duration_seconds=self.config.cruise_tick_seconds,
         )
 
     def _drive_line_follow_step(self, tape_state: tuple[int, int, int, int] | None) -> None:
@@ -736,6 +815,13 @@ class RobotRuntime:
         step_seconds = self.config.line_follow_search_seconds if search else self.config.line_follow_step_seconds
         turn_seconds = self.config.line_follow_search_seconds if search else self.config.line_follow_turn_seconds
         if command == "forward":
+            self._log_motion_command(
+                "line_follow",
+                "move_forward",
+                speed=self.config.line_follow_speed,
+                duration_seconds=step_seconds,
+                search=search,
+            )
             self._run_timed_motion(
                 self.motion.move_forward_slow,
                 speed=self.config.line_follow_speed,
@@ -743,6 +829,13 @@ class RobotRuntime:
                 heading_hold=False,
             )
         elif command == "strafe_left":
+            self._log_motion_command(
+                "line_follow",
+                "strafe_left",
+                speed=self.config.line_follow_speed,
+                duration_seconds=step_seconds,
+                search=search,
+            )
             self._run_timed_motion(
                 self.motion.strafe_left_slow,
                 speed=self.config.line_follow_speed,
@@ -750,6 +843,13 @@ class RobotRuntime:
                 heading_hold=False,
             )
         elif command == "strafe_right":
+            self._log_motion_command(
+                "line_follow",
+                "strafe_right",
+                speed=self.config.line_follow_speed,
+                duration_seconds=step_seconds,
+                search=search,
+            )
             self._run_timed_motion(
                 self.motion.strafe_right_slow,
                 speed=self.config.line_follow_speed,
@@ -757,6 +857,13 @@ class RobotRuntime:
                 heading_hold=False,
             )
         elif command == "turn_left":
+            self._log_motion_command(
+                "line_follow",
+                "rotate_left",
+                speed=self.config.line_follow_turn_speed,
+                duration_seconds=turn_seconds,
+                search=search,
+            )
             self._run_timed_motion(
                 self.motion.rotate_left_slow,
                 speed=self.config.line_follow_turn_speed,
@@ -764,6 +871,13 @@ class RobotRuntime:
                 heading_hold=False,
             )
         elif command == "turn_right":
+            self._log_motion_command(
+                "line_follow",
+                "rotate_right",
+                speed=self.config.line_follow_turn_speed,
+                duration_seconds=turn_seconds,
+                search=search,
+            )
             self._run_timed_motion(
                 self.motion.rotate_right_slow,
                 speed=self.config.line_follow_turn_speed,
@@ -800,11 +914,11 @@ class RobotRuntime:
         remaining = duration
         elapsed = 0.0
         latched = False
-        while remaining > 0 and not self._stop_event.is_set():
+        while remaining > 0 and not self._stop_event.is_set() and not self._manual_override.is_set():
             chunk = min(remaining, guard_interval)
             if heading_hold and watch_boundary:
                 self._apply_heading_hold()
-                if self._stop_event.is_set():
+                if self._stop_event.is_set() or self._manual_override.is_set():
                     break
             mover(speed=speed, duration_seconds=chunk)
             elapsed += chunk
@@ -812,6 +926,11 @@ class RobotRuntime:
             if watch_boundary and self._poll_boundary_during_motion(elapsed):
                 latched = True
                 break
+        if self._manual_override.is_set():
+            # Manual control needs a clean slate: drop any energised axis so the
+            # next manual motion command starts from a stopped chassis.
+            self.motion.stop()
+            return
         if not keep_running or latched or self._stop_event.is_set():
             self.motion.stop()
 
@@ -957,7 +1076,7 @@ class RobotRuntime:
         self.motion.stop()
         self.store.record_motion_debug(
             "object_presence_triggered",
-            "object presence detected; stopped for full vision recognition.",
+            "检测到画面中有新目标进入：已停车，执行一次完整视觉识别后继续巡逻。",
             status="SCANNING_SHELF",
             evidence={
                 "detector": detector,
@@ -970,6 +1089,14 @@ class RobotRuntime:
         if self._stop_event.is_set():
             return True
         self._scan_visible_shelf()
+        self.motion.stop()
+        self._reset_heading_guard()
+        self._zupt_recalibrate("post_object_scan")
+        self.store.record_motion_debug(
+            "object_presence_resume",
+            "目标识别完成，恢复低速巡逻。",
+            evidence={"cooldown_seconds": cooldown},
+        )
         return True
 
     def _shelf_id_from_detections(self, detections: list[dict[str, object]]) -> str | None:
@@ -1180,7 +1307,12 @@ class RobotRuntime:
     def _avoidance_forward(self, step: str, body_multiplier: float = 1.0) -> bool:
         self.store.record_avoidance_step(step, nested_level=0)
         duration_seconds = self.config.avoidance_body_seconds * max(0.0, float(body_multiplier))
-        self._forward_step(speed=self.config.avoidance_speed, duration_seconds=duration_seconds, watch_boundary=False)
+        self._forward_step(
+            speed=self.config.avoidance_speed,
+            duration_seconds=duration_seconds,
+            watch_boundary=False,
+            source="obstacle",
+        )
         return self._avoidance_path_clear(f"after_{step}")
 
     def _avoidance_path_clear(self, step: str) -> bool:
@@ -1297,7 +1429,14 @@ class RobotRuntime:
         duration_seconds: float,
         watch_boundary: bool = True,
         settle_seconds: float | None = None,
+        source: str = "patrol",
     ) -> None:
+        self._log_motion_command(
+            source,
+            "move_forward",
+            speed=speed,
+            duration_seconds=duration_seconds,
+        )
         self._run_timed_motion(
             self.motion.move_forward_slow,
             speed=speed,
@@ -1311,6 +1450,7 @@ class RobotRuntime:
         normalized = direction.strip().lower()
         turn_speed = self.config.turn_speed if speed is None else speed
         turn_seconds = self.config.turn_90_seconds if duration_seconds is None else duration_seconds
+        turn_source = "manual" if self._manual_override.is_set() else "boundary"
         imu_turn = getattr(self.imu, "turn_90_with_result", None)
         if callable(imu_turn):
             imu_result = None
@@ -1328,6 +1468,14 @@ class RobotRuntime:
                 self._settle()
                 result = dict(imu_result) if isinstance(imu_result, dict) else {"ok": bool(imu_result)}
                 self._record_gyro_turn_result(result)
+                self._log_motion_command(
+                    turn_source,
+                    f"turn_90_{normalized}",
+                    speed=turn_speed,
+                    duration_seconds=turn_seconds,
+                    source_detail=result.get("source"),
+                    ok=result.get("ok"),
+                )
                 self.refresh_motion_sensor(force=True)
                 if not result.get("ok"):
                     message = str(
@@ -1344,15 +1492,36 @@ class RobotRuntime:
                     if legacy_result is not None:
                         self.motion.stop()
                         self._settle()
+                        self._log_motion_command(
+                            turn_source,
+                            f"turn_90_{normalized}",
+                            speed=turn_speed,
+                            duration_seconds=turn_seconds,
+                            source_detail="mpu6050_legacy",
+                        )
                         return {"ok": bool(legacy_result), "source": "mpu6050_legacy", "direction": normalized}
                 except RobotHardwareError as exc:
                     self.store.record_robot_status("TURNING_AT_BOUNDARY", f"MPU6050 turn skipped: {exc}")
         if normalized == "left":
+            self._log_motion_command(
+                turn_source,
+                "rotate_left",
+                speed=turn_speed,
+                duration_seconds=turn_seconds,
+                source_detail="open_loop",
+            )
             self.motion.rotate_left_slow(
                 speed=turn_speed,
                 duration_seconds=turn_seconds,
             )
         elif normalized == "right":
+            self._log_motion_command(
+                turn_source,
+                "rotate_right",
+                speed=turn_speed,
+                duration_seconds=turn_seconds,
+                source_detail="open_loop",
+            )
             self.motion.rotate_right_slow(
                 speed=turn_speed,
                 duration_seconds=turn_seconds,
@@ -1392,6 +1561,41 @@ class RobotRuntime:
             evidence=evidence,
         )
 
+    def _log_motion_command(
+        self,
+        source: str,
+        command: str,
+        *,
+        speed: int | None = None,
+        duration_seconds: float | None = None,
+        **extra: object,
+    ) -> None:
+        """Record a single structured trace of every motor output.
+
+        The cruise regression (commit 7f7466e) made it impossible to tell which
+        ``source`` was writing the wheels at any given tick — cruise, heading
+        hold, manual, boundary and obstacle paths all call into the motion
+        module directly. This helper gives every one of those call sites a
+        single uniform record so the on-car motion log can answer "who issued
+        this rotate_*?" and "was manual override armed?" without ambiguity.
+        """
+
+        self.store.record_motion_debug(
+            "motion_command",
+            (
+                f"motor cmd: source={source}, command={command}, speed={speed}, "
+                f"duration={duration_seconds}, manual_override={self._manual_override.is_set()}"
+            ),
+            evidence={
+                "source": source,
+                "command": command,
+                "speed": speed,
+                "duration_seconds": duration_seconds,
+                "manual_override": self._manual_override.is_set(),
+                **extra,
+            },
+        )
+
     def _settle(self, seconds: float | None = None) -> None:
         delay = self.config.action_settle_seconds if seconds is None else seconds
         delay = max(0.0, float(delay))
@@ -1409,6 +1613,8 @@ class RobotRuntime:
         return False
 
     def _reset_heading_guard(self) -> None:
+        self._heading_consecutive_count = 0
+        self._heading_over_tolerance_count = 0
         guard = self._heading_guard
         if guard is not None:
             reset = getattr(guard, "reset", None)
@@ -1431,7 +1637,40 @@ class RobotRuntime:
 
     def _apply_heading_hold(self) -> None:
         guard = self._heading_guard_instance()
-        if guard is None or self._stop_event.is_set():
+        if guard is None or self._stop_event.is_set() or self._manual_override.is_set():
+            return
+        # R4: sample freshness gate. If the guard hasn't produced a new sample
+        # since the last correction (I2C jitter returning the same rate, or a
+        # very fast tick), the integrator hasn't actually integrated anything
+        # new — issuing another pulse would be chasing a stale deviation.
+        now = time.monotonic()
+        last_sample = getattr(guard, "last_sample_at", None)
+        if last_sample is not None:
+            min_sample_interval = max(0.0, float(self.config.heading_hold_min_sample_interval_seconds))
+            if now - float(last_sample) < min_sample_interval:
+                return
+        updater = getattr(guard, "update", None)
+        if not callable(updater):
+            return
+        try:
+            deviation = float(updater())
+        except (RobotHardwareError, OSError, AttributeError, TypeError, ValueError):
+            self._heading_guard = None
+            return
+        tolerance = max(0.0, float(self.config.heading_hold_tolerance_deg))
+        if abs(deviation) <= tolerance:
+            self._heading_consecutive_count = 0
+            self._heading_over_tolerance_count = 0
+            return
+        self._heading_over_tolerance_count += 1
+        confirm_samples = max(1, int(self.config.heading_hold_confirm_samples))
+        if self._heading_over_tolerance_count < confirm_samples:
+            return
+        min_interval = max(0.0, float(self.config.heading_hold_min_interval_seconds))
+        if now - self._last_heading_correction_at < min_interval:
+            return
+        max_consecutive = max(0, int(self.config.heading_hold_max_consecutive))
+        if max_consecutive > 0 and self._heading_consecutive_count >= max_consecutive:
             return
         try:
             pulse = apply_heading_hold(
@@ -1448,13 +1687,27 @@ class RobotRuntime:
                     invert=self.config.heading_hold_invert,
                     rate_damping=self.config.heading_hold_rate_damping,
                 ),
-                stop_requested=self._stop_event.is_set,
+                stop_requested=lambda: self._stop_event.is_set() or self._manual_override.is_set(),
+                deviation_degrees=deviation,
             )
         except (RobotHardwareError, OSError, AttributeError, TypeError, ValueError):
             self._heading_guard = None
             return
         if pulse is None:
             return
+        self._log_motion_command(
+            "heading_hold",
+            f"rotate_{pulse.direction}",
+            speed=pulse.speed,
+            duration_seconds=pulse.pulse_seconds,
+            deviation=round(pulse.deviation_degrees, 3),
+            rate=round(pulse.rate_dps, 3),
+            effective=round(pulse.effective_degrees, 3),
+            fresh_sample=True,
+        )
+        self._last_heading_correction_at = now
+        self._heading_consecutive_count += 1
+        self._heading_over_tolerance_count = 0
         self.store.record_motion_debug(
             "heading_hold_correction",
             "heading hold correction pulse applied.",
@@ -1465,6 +1718,7 @@ class RobotRuntime:
                 "direction": pulse.direction,
                 "pulse_seconds": round(pulse.pulse_seconds, 3),
                 "speed": pulse.speed,
+                "consecutive_count": self._heading_consecutive_count,
             },
         )
 
@@ -1924,6 +2178,29 @@ def _cells_from_step(step: RouteStep) -> list[Cell]:
     return [(int(cell[0]), int(cell[1])) for cell in step["path"]]
 
 
+def _running_speed(value: int | None) -> int:
+    if value is None:
+        return DEFAULT_MIN_RUNNING_SPEED
+    parsed = int(value)
+    if parsed <= 0:
+        return 0
+    return max(DEFAULT_MIN_RUNNING_SPEED, min(parsed, 100))
+
+
+def _clamp_config_speeds(config: RobotRuntimeConfig) -> None:
+    for name in (
+        "patrol_speed",
+        "turn_speed",
+        "avoidance_speed",
+        "object_slow_speed",
+        "heading_hold_correction_speed",
+        "cruise_speed",
+        "line_follow_speed",
+        "line_follow_turn_speed",
+    ):
+        setattr(config, name, _running_speed(getattr(config, name)))
+
+
 def load_calibration_into_config(config: RobotRuntimeConfig, root: Path) -> None:
     path = root / "config" / "calibration.json"
     if path.exists():
@@ -1946,5 +2223,6 @@ def load_calibration_into_config(config: RobotRuntimeConfig, root: Path) -> None
                 config.line_follow_speed = int(data["line_follow_speed"])
             if data.get("line_follow_step_seconds") is not None:
                 config.line_follow_step_seconds = float(data["line_follow_step_seconds"])
+            _clamp_config_speeds(config)
         except (OSError, json.JSONDecodeError, TypeError, ValueError):
             pass

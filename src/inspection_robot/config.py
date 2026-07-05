@@ -84,10 +84,8 @@ def validate_shelf_manifest(data: JsonValue) -> ShelfManifest:
             raise ConfigError(f"shelf {shelf_key} must be an object")
         raw_items = raw_entry.get("expected_items")
         if not isinstance(raw_items, list):
-            raise ConfigError(f"shelf {shelf_key} expected_items must be a non-empty list")
+            raise ConfigError(f"shelf {shelf_key} expected_items must be a list")
         items = [str(item).strip() for item in raw_items if str(item).strip()]
-        if not items:
-            raise ConfigError(f"shelf {shelf_key} expected_items must be a non-empty list")
         manifest[shelf_key] = {"expected_items": items}
     if not manifest:
         raise ConfigError("shelf_manifest.json must define at least one shelf")
@@ -115,10 +113,9 @@ def _normalize_tag(tag_id: str, info: dict[str, JsonValue]) -> TagInfo:
             expected_shelf = _legacy_shelf_from_zone(str(info["expected_zone"]))
         if item_id is None:
             raise ConfigError(f"tag {tag_id} item_id is required for item tags")
-        if expected_shelf is None:
-            raise ConfigError(f"tag {tag_id} expected_shelf is required for item tags")
         normalized["item_id"] = item_id
-        normalized["expected_shelf"] = expected_shelf
+        if expected_shelf is not None:
+            normalized["expected_shelf"] = expected_shelf
         _copy_optional(info, normalized, "expected_color")
         _copy_optional(info, normalized, "expected_ocr")
         _copy_optional(info, normalized, "expected_image_class")

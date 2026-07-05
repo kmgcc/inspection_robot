@@ -55,6 +55,11 @@ class RuntimeTest(unittest.TestCase):
             "ROBOT_PATROL_SETTLE_SECONDS",
             "ROBOT_ACTION_SETTLE_SECONDS",
             "ROBOT_SCAN_ENABLED",
+            "ROBOT_SCAN_TIMEOUT_SECONDS",
+            "SCAN_TIMEOUT_SECONDS",
+            "ROBOT_SCAN_MAX_DETECTIONS",
+            "SCAN_MAX_DETECTIONS",
+            "ROBOT_MIN_SPEED",
             "AVOIDANCE_SPEED",
             "AVOIDANCE_BODY_SECONDS",
             "AVOIDANCE_SIDE_CLEARANCE_BODIES",
@@ -68,17 +73,34 @@ class RuntimeTest(unittest.TestCase):
             "OBJECT_TRIGGER_ENABLED",
             "OBJECT_PRESENCE_CONFIRM_FRAMES",
             "OBJECT_PRESENCE_COOLDOWN_SECONDS",
+            "OBJECT_SETTLE_SECONDS",
             "HEADING_HOLD_ENABLED",
             "HEADING_HOLD_TOLERANCE_DEG",
+            "HEADING_HOLD_GAIN",
+            "HEADING_HOLD_MIN_PULSE_SECONDS",
+            "HEADING_HOLD_MAX_PULSE_SECONDS",
+            "HEADING_HOLD_CORRECTION_SPEED",
+            "HEADING_HOLD_INVERT",
+            "HEADING_HOLD_RATE_DAMPING",
+            "HEADING_HOLD_MIN_SAMPLE_INTERVAL_SECONDS",
+            "HEADING_HOLD_MIN_INTERVAL_SECONDS",
+            "HEADING_HOLD_MAX_CONSECUTIVE",
+            "HEADING_HOLD_CONFIRM_SAMPLES",
             "LINE_FOLLOW_ENABLED",
+            "LINE_FOLLOW_AUTO_ENTER",
             "LINE_FOLLOW_SPEED",
             "LINE_FOLLOW_TURN_SPEED",
+            "CRUISE_SPEED",
+            "SMOOTH_CRUISE_SPEED",
+            "CRUISE_VISION_ENABLED",
         ):
             config = RobotRuntimeConfig()
 
         self.assertEqual(config.patrol_speed, 20)
         self.assertEqual(config.step_seconds, 0.18)
         self.assertEqual(config.patrol_settle_seconds, 0.05)
+        self.assertEqual(config.scan_timeout_seconds, 2.0)
+        self.assertEqual(config.scan_max_detections, 3)
         self.assertEqual(config.action_settle_seconds, 0.7)
         self.assertEqual(config.avoidance_speed, 20)
         self.assertEqual(config.avoidance_body_seconds, 0.35)
@@ -88,9 +110,21 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(config.boundary_cooldown_seconds, 0.05)
         self.assertEqual(config.motion_guard_poll_seconds, 0.02)
         self.assertEqual(config.object_detector, "opencv")
-        self.assertEqual(config.object_presence_confirm_frames, 2)
+        self.assertEqual(config.object_presence_confirm_frames, 1)
         self.assertTrue(config.heading_hold_enabled)
-        self.assertTrue(config.line_follow_enabled)
+        self.assertEqual(config.heading_hold_tolerance_deg, 3.0)
+        self.assertEqual(config.heading_hold_gain, 0.012)
+        self.assertEqual(config.heading_hold_min_pulse_seconds, 0.025)
+        self.assertEqual(config.heading_hold_max_pulse_seconds, 0.10)
+        self.assertEqual(config.heading_hold_correction_speed, 20)
+        self.assertTrue(config.heading_hold_invert)
+        self.assertEqual(config.heading_hold_min_interval_seconds, 0.25)
+        self.assertEqual(config.heading_hold_max_consecutive, 2)
+        self.assertEqual(config.heading_hold_confirm_samples, 1)
+        self.assertFalse(config.cruise_vision_enabled)
+        self.assertEqual(config.cruise_speed, 8)
+        self.assertFalse(config.line_follow_enabled)
+        self.assertFalse(config.line_follow_auto_enter)
         self.assertEqual(config.line_follow_speed, 30)
         self.assertEqual(config.line_follow_turn_speed, 30)
 
@@ -177,7 +211,7 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(snapshot["task_status"], "FINISHED")
         self.assertEqual(snapshot["current_shelf"], "A1")
         self.assertGreater(len(snapshot["path"]["waypoints"]), 0)
-        self.assertTrue(any(event["type"] == "shelf_scanned" for event in snapshot["events"]))
+        self.assertTrue(any(event["type"] in {"shelf_scanned", "normal_item"} for event in snapshot["events"]))
         self.assertIn("move_forward", fake_motion.calls)
         self.assertIn("strafe_right", fake_motion.calls)
         self.assertNotIn("move_backward", fake_motion.calls)
@@ -272,6 +306,8 @@ class RuntimeTest(unittest.TestCase):
             config=RobotRuntimeConfig(
                 step_seconds=0,
                 line_follow_step_seconds=0,
+                line_follow_enabled=True,
+                line_follow_auto_enter=True,
                 scan_timeout_seconds=0,
                 action_settle_seconds=0,
                 boundary_cooldown_seconds=0,
@@ -302,6 +338,8 @@ class RuntimeTest(unittest.TestCase):
             config=RobotRuntimeConfig(
                 step_seconds=0,
                 line_follow_step_seconds=0,
+                line_follow_enabled=True,
+                line_follow_auto_enter=True,
                 scan_timeout_seconds=0,
                 action_settle_seconds=0,
                 boundary_cooldown_seconds=0,
@@ -389,6 +427,7 @@ class RuntimeTest(unittest.TestCase):
                 heading_hold_gain=0.02,
                 heading_hold_min_pulse_seconds=0.03,
                 heading_hold_max_pulse_seconds=0.12,
+                heading_hold_confirm_samples=1,
             ),
             motion_adapter=fake_motion,
             sensor_adapter=FakeSensors(distances=[400], tapes=[]),
@@ -399,7 +438,7 @@ class RuntimeTest(unittest.TestCase):
 
         runtime._forward_step(speed=20, duration_seconds=0)
 
-        self.assertIn("rotate_right", fake_motion.calls)
+        self.assertIn("rotate_left", fake_motion.calls)
         self.assertIn("move_forward", fake_motion.calls)
 
     def test_continuous_patrol_ignores_three_black_boundary_by_default(self) -> None:
@@ -625,10 +664,16 @@ class RuntimeTest(unittest.TestCase):
         self.assertIn("rotate_right", fake_motion.calls)
         self.assertIn("move_forward", fake_motion.calls)
         self.assertEqual(snapshot["current_shelf"], "A1")
-        self.assertTrue(any(event["type"] == "shelf_scanned" for event in snapshot["events"]))
+        self.assertTrue(any(event["type"] in {"shelf_scanned", "normal_item"} for event in snapshot["events"]))
 
     def test_scan_visible_shelf_maps_shelf_tag_to_shelf_id(self) -> None:
-        store = self.make_store()
+        manifest = {"A1": {"expected_items": ["item_09"]}}
+        store = InspectionStore(
+            DEFAULT_TAG_MAP,
+            warehouse_map=DEFAULT_WAREHOUSE_MAP,
+            shelf_manifest=manifest,
+            root=self.root,
+        )
         runtime = RobotRuntime(
             store,
             DEFAULT_WAREHOUSE_MAP,
@@ -668,7 +713,7 @@ class RuntimeTest(unittest.TestCase):
             if event["type"] == "motion_debug" and isinstance(event.get("evidence"), dict)
         ]
 
-        self.assertEqual(detections[0]["tag_id"], "101")
+        self.assertEqual(detections[0]["tag_id"], "118")
         self.assertIn("vision_scan_start", stages)
         self.assertIn("vision_scan_result", stages)
         self.assertIn("vision_text_missing", stages)
@@ -692,14 +737,14 @@ class RuntimeTest(unittest.TestCase):
             detection_provider=fake_detection_provider,
         )
 
-        for shelf_id in ["A1", "A2", "A3", "A4", "B4", "B3", "B1"]:
+        for shelf_id in ["A1", "A2", "A3", "A4", "B3", "B1"]:
             runtime._perform_scan(shelf_id, f"{shelf_id}_SCAN", detections=[])
         snapshot = store.snapshot()
 
         self.assertEqual(snapshot["patrol_cycle"], 2)
         self.assertFalse(snapshot["skip_shortage_detection"])
         cycle_event = next(event for event in snapshot["events"] if event["type"] == "cycle_completed")
-        self.assertEqual(cycle_event["evidence"], {"observed_shelves": ["A1", "A2", "A3", "A4", "B4", "B3", "B1"], "missed_shelves": ["B2"]})
+        self.assertEqual(cycle_event["evidence"], {"observed_shelves": ["A1", "A2", "A3", "A4", "B3", "B1"], "missed_shelves": ["B2"]})
 
     def test_perceptual_cycle_does_not_advance_when_two_shelves_are_missed(self) -> None:
         store = InspectionStore(
@@ -720,18 +765,24 @@ class RuntimeTest(unittest.TestCase):
             detection_provider=fake_detection_provider,
         )
 
-        for shelf_id in ["A1", "A2", "A3", "A4", "B4", "B1"]:
+        for shelf_id in ["A1", "A2", "A3", "A4", "B1"]:
             runtime._perform_scan(shelf_id, f"{shelf_id}_SCAN", detections=[])
 
         self.assertEqual(store.snapshot()["patrol_cycle"], 1)
 
     def test_second_cycle_missing_item_triggers_high_priority_alarm(self) -> None:
-        store = self.make_store()
+        manifest = {"A1": {"expected_items": ["item_09"]}}
+        store = InspectionStore(
+            DEFAULT_TAG_MAP,
+            warehouse_map=DEFAULT_WAREHOUSE_MAP,
+            shelf_manifest=manifest,
+            root=self.root,
+        )
         fake_alarm = FakeAlarm()
         runtime = RobotRuntime(
             store,
             DEFAULT_WAREHOUSE_MAP,
-            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            manifest,
             config=RobotRuntimeConfig(scan_timeout_seconds=0, action_settle_seconds=0),
             motion_adapter=FakeMotion(),
             sensor_adapter=FakeSensors(distances=[400] * 4, tapes=[(1, 1, 1, 1)] * 4),
@@ -747,13 +798,11 @@ class RuntimeTest(unittest.TestCase):
                 "A1_SCAN",
                 detections=[
                     {
-                        "tag_id": "1",
+                        "tag_id": "46",
                         "kind": "item",
-                        "item_id": "item_01",
+                        "item_id": "item_46",
                         "marker_family": "TAG36H11",
                         "color": "RED",
-                        "ocr_text": "ITEM-01",
-                        "image_class": "BOTTLE",
                     }
                 ],
             )
@@ -906,33 +955,29 @@ class FakeImuHeading:
 
 
 def fake_detection_provider(**_: object) -> Iterator[dict[str, object]]:
-    yield {"tag_id": "101", "kind": "shelf", "shelf_id": "A1", "marker_family": "TAG36H11", "ocr_text": "A1"}
+    yield {"tag_id": "118", "kind": "shelf", "shelf_id": "A1", "marker_family": "TAG36H11", "ocr_text": "A1"}
     yield {
-        "tag_id": "1",
+        "tag_id": "46",
         "kind": "item",
-        "item_id": "item_01",
+        "item_id": "item_46",
         "marker_family": "TAG36H11",
         "color": "RED",
-        "ocr_text": "ITEM-01",
-        "image_class": "BOTTLE",
     }
     yield {
-        "tag_id": "2",
+        "tag_id": "9",
         "kind": "item",
-        "item_id": "item_02",
+        "item_id": "item_09",
         "marker_family": "TAG36H11",
-        "color": "BLUE",
-        "ocr_text": "ITEM-02",
-        "image_class": "BOX",
+        "color": "RED",
     }
 
 
 def shelf_tag_only_detection_provider(**_: object) -> Iterator[dict[str, object]]:
-    yield {"tag_id": "101", "marker_family": "TAG36H11", "ocr_text": "A1"}
+    yield {"tag_id": "118", "marker_family": "TAG36H11", "ocr_text": "A1"}
 
 
 def tag_without_ocr_detection_provider(**_: object) -> Iterator[dict[str, object]]:
-    yield {"tag_id": "101", "marker_family": "TAG36H11"}
+    yield {"tag_id": "118", "marker_family": "TAG36H11"}
 
 
 def empty_detection_provider(**_: object) -> Iterator[dict[str, object]]:

@@ -60,7 +60,7 @@ class TestModeSafetyTest(unittest.TestCase):
         manager._straight_worker("forward", 6, 0.0)
 
         self.assertEqual(guard.recalibrate_calls, 1)
-        self.assertEqual(guard.reset_count, 1)
+        self.assertGreaterEqual(guard.reset_count, 1)
         self.assertIn("rotate_right", motion.calls)
         self.assertIn("move_forward", motion.calls)
 

@@ -4,9 +4,9 @@ set -euo pipefail
 CAR_HOST="${CAR_HOST:-pi@192.168.1.11}"
 CAR_DIR="${CAR_DIR:-/home/pi/temp/inspection_robot}"
 RUN_MODE="${RUN_MODE:-robot}"
-AUTO_START_RUNTIME="${AUTO_START_RUNTIME:-0}"
+AUTO_START_RUNTIME="${AUTO_START_RUNTIME:-0}"  # 默认不自动启动，需在网页手动点击
 PORT="${PORT:-5000}"
-LINE_FOLLOW_ENABLED="${LINE_FOLLOW_ENABLED:-0}"
+LINE_FOLLOW_ENABLED="${LINE_FOLLOW_ENABLED:-0}"  # 强制禁用循线，避免干扰测试
 # Low-speed constant-velocity cruise: continuous gyro heading correction +
 # recognise-while-moving orange flash, no stop-go patrol. Override with 0 to
 # fall back to the classic short-step patrol.

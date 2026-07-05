@@ -53,6 +53,19 @@ class RobotAdapterTest(unittest.TestCase):
 
         self.assertEqual(fake.calls, [("stop", None), ("stop", None)])
 
+    def test_motion_clamps_tiny_running_speed_to_stable_floor(self) -> None:
+        fake = FakeMotionModule()
+        original = motion._motion_module
+        motion._motion_module = lambda: fake  # type: ignore[assignment]
+        motion.clear_stop()
+        try:
+            motion.move_forward_slow(speed=2, duration_seconds=0)
+        finally:
+            motion.clear_stop()
+            motion._motion_module = original  # type: ignore[assignment]
+
+        self.assertEqual(fake.calls, [("move_forward", motion.MIN_RUNNING_SPEED), ("move_forward", motion.MIN_RUNNING_SPEED)])
+
     def test_sensors_normalize_tape_state_and_direction_flags(self) -> None:
         self.assertEqual(sensors.normalize_tape_state([1, 0, 1, 0]), (1, 0, 1, 0))
         self.assertEqual(sensors.normalize_tape_state([0b1010]), (0, 1, 1, 0))

@@ -57,18 +57,18 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(start.status_code, 200)
         self.assertEqual(start.get_json(), {"ok": True})
 
-        normal = self.client.post("/api/simulate/tag/1")
+        normal = self.client.post("/api/simulate/tag/46")
         self.assertEqual(normal.status_code, 200)
         status = self.client.get("/api/status")
         payload = status.get_json()
         self.assertTrue(CONTRACT_FIELDS.issubset(payload))
         self.assertEqual(payload["events"][0]["type"], "normal_item")
-        self.assertEqual(payload["events"][0]["tag_id"], "1")
+        self.assertEqual(payload["events"][0]["tag_id"], "46")
 
-        wrong = self.client.post("/api/simulate/tag/4")
+        wrong = self.client.post("/api/simulate/tag/999")
         self.assertEqual(wrong.status_code, 200)
         payload = self.client.get("/api/status").get_json()
-        self.assertEqual(payload["events"][0]["type"], "wrong_shelf")
+        self.assertEqual(payload["events"][0]["type"], "unknown_item")
         self.assertEqual(payload["events"][0]["status"], "waiting_confirm")
 
         confirm = self.client.post("/api/confirm")
@@ -98,7 +98,7 @@ class WebApiTest(unittest.TestCase):
 
     def test_export_csv_defaults_to_utf8_without_bom_and_can_opt_in(self) -> None:
         self.client.post("/api/start")
-        self.client.post("/api/simulate/tag/1")
+        self.client.post("/api/simulate/tag/46")
 
         plain = self.client.get("/api/export.csv")
         with_bom = self.client.get("/api/export.csv?bom=1")
@@ -149,9 +149,8 @@ class WebApiTest(unittest.TestCase):
         payload = self.client.get("/api/status").get_json()
         event_types = {event["type"] for event in payload["events"]}
         self.assertIn("shelf_aligned", event_types)
-        self.assertIn("missing_item", event_types)
         self.assertIn("duplicate_item", event_types)
-        self.assertIn("wrong_shelf", event_types)
+        self.assertIn("normal_item", event_types)
         self.assertTrue(any(event["status"] == "waiting_confirm" for event in payload["events"]))
 
     def test_evidence_mismatch_and_demo_run_are_available_without_car(self) -> None:
@@ -272,6 +271,12 @@ class FakeRuntime:
 
     def _reset_heading_guard(self) -> None:
         self.calls.append("reset_heading")
+
+    def request_manual_override(self) -> None:
+        self.calls.append("request_manual_override")
+
+    def release_manual_override(self) -> None:
+        self.calls.append("release_manual_override")
 
     def _settle(self) -> None:
         self.calls.append("settle")

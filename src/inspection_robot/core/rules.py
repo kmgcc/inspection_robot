@@ -44,7 +44,9 @@ def evaluate_shelf_scan(
             continue
         tag_id, info = tag_entry
         expected_shelf = info.get("expected_shelf")
-        if expected_shelf != shelf_id:
+        if expected_shelf is None:
+            events.append(_normal_item(tag_id, info, shelf_id, source, frame_id))
+        elif expected_shelf != shelf_id:
             events.append(
                 make_event(
                     "wrong_shelf",
@@ -192,21 +194,10 @@ def normal_tag(tag_id: str, info: TagInfo, *, current_shelf: str | None = None, 
     if str(info.get("kind", "item")) != "item":
         return None
     shelf_id = current_shelf or "A1"
-    if info.get("expected_shelf") != shelf_id:
+    expected_shelf = info.get("expected_shelf")
+    if expected_shelf is not None and expected_shelf != shelf_id:
         return None
-    return make_event(
-        "normal_item",
-        tag_id=tag_id,
-        item=info["name"],
-        zone=info.get("zone", "-"),
-        expected_zone=info.get("expected_zone"),
-        shelf_id=shelf_id,
-        expected_shelf=info.get("expected_shelf"),
-        priority=int(info.get("priority", 1)),
-        status="normal",
-        message=f"{shelf_id} 货架识别到正常物品 {info['name']}。来源：{source}。",
-        source=source,
-    )
+    return _normal_item(tag_id, info, shelf_id, source, None)
 
 
 def unknown_tag(tag_id: str, *, current_shelf: str | None = None, source: str = "simulate") -> EventRecord:
@@ -218,7 +209,7 @@ def wrong_zone(tag_id: str, info: TagInfo, *, current_shelf: str | None = None, 
         return None
     shelf_id = current_shelf or "A1"
     expected_shelf = info.get("expected_shelf")
-    if expected_shelf == shelf_id:
+    if expected_shelf is None or expected_shelf == shelf_id:
         return None
     return make_event(
         "wrong_shelf",
@@ -252,6 +243,24 @@ def _unknown_item(tag_id: str, shelf_id: str, source: str, frame_id: str | None)
         priority=2,
         status="waiting_confirm",
         message=f"{shelf_id} 货架识别到未知标签 {tag_id}。",
+        source=source,
+        frame_id=frame_id,
+    )
+
+
+def _normal_item(tag_id: str, info: TagInfo, shelf_id: str, source: str, frame_id: str | None) -> EventRecord:
+    expected_shelf = info.get("expected_shelf") or shelf_id
+    return make_event(
+        "normal_item",
+        tag_id=tag_id,
+        item=info["name"],
+        zone=info.get("zone", "-"),
+        expected_zone=info.get("expected_zone"),
+        shelf_id=shelf_id,
+        expected_shelf=expected_shelf,
+        priority=int(info.get("priority", 1)),
+        status="normal",
+        message=f"{shelf_id} 货架识别到物品 {info['name']}。来源：{source}。",
         source=source,
         frame_id=frame_id,
     )

@@ -34,9 +34,13 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(tag_map, DEFAULT_TAG_MAP)
         self.assertEqual(warehouse_map, DEFAULT_WAREHOUSE_MAP)
         self.assertEqual(manifest, DEFAULT_SHELF_MANIFEST)
-        self.assertEqual(tag_map["1"]["priority"], 1)
-        self.assertEqual(tag_map["1"]["kind"], "item")
+        self.assertEqual(tag_map["46"]["priority"], 2)
+        self.assertEqual(tag_map["46"]["kind"], "item")
+        self.assertEqual(tag_map["46"]["name"], "手机")
+        self.assertEqual(tag_map["46"]["expected_color"], "RED")
         self.assertEqual(tag_map["101"]["kind"], "shelf")
+        self.assertEqual(tag_map["101"]["shelf_id"], "B1")
+        self.assertEqual(tag_map["118"]["shelf_id"], "A1")
         self.assertEqual(warehouse_map["grid_size"], [8, 6])
         self.assertEqual(warehouse_map["start_heading"], "E")
         self.assertIn("A1", manifest)
@@ -254,8 +258,7 @@ class ConfigTest(unittest.TestCase):
                 json.dumps({"A1": {"expected_items": []}}),
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(ConfigError, "expected_items"):
-                load_shelf_manifest(root)
+            self.assertEqual(load_shelf_manifest(root), {"A1": {"expected_items": []}})
 
 
 if __name__ == "__main__":

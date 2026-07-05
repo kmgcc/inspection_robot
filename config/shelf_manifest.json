@@ -1,10 +1,9 @@
 {
-  "A1": {"expected_items": ["item_01", "item_02"]},
-  "A2": {"expected_items": ["item_03"]},
-  "A3": {"expected_items": ["item_04"]},
-  "A4": {"expected_items": ["item_05"]},
-  "B4": {"expected_items": ["item_09", "item_10"]},
-  "B3": {"expected_items": ["item_08"]},
-  "B2": {"expected_items": ["item_07"]},
-  "B1": {"expected_items": ["item_06"]}
+  "A1": {"expected_items": []},
+  "A2": {"expected_items": []},
+  "A3": {"expected_items": []},
+  "A4": {"expected_items": []},
+  "B3": {"expected_items": []},
+  "B2": {"expected_items": []},
+  "B1": {"expected_items": []}
 }

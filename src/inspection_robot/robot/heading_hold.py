@@ -33,16 +33,20 @@ def apply_heading_hold(
     settings: HeadingHoldSettings,
     *,
     stop_requested: Callable[[], bool] | None = None,
+    deviation_degrees: float | None = None,
 ) -> HeadingHoldPulse | None:
     if not settings.enabled or guard is None:
         return None
     if stop_requested is not None and stop_requested():
         return None
-    updater = getattr(guard, "update", None)
-    if not callable(updater):
-        return None
 
-    deviation = float(updater())
+    if deviation_degrees is None:
+        updater = getattr(guard, "update", None)
+        if not callable(updater):
+            return None
+        deviation = float(updater())
+    else:
+        deviation = float(deviation_degrees)
     tolerance = max(0.0, float(settings.tolerance_degrees))
     if abs(deviation) <= tolerance:
         return None
@@ -65,8 +69,12 @@ def apply_heading_hold(
         turn_right = not turn_right
     speed = settings.correction_speed or max(1, int(settings.fallback_speed))
     mover = motion_adapter.rotate_right_slow if turn_right else motion_adapter.rotate_left_slow
+    motion_adapter.stop()
     mover(speed=speed, duration_seconds=pulse_seconds)
     motion_adapter.stop()
+    reset = getattr(guard, "reset", None)
+    if callable(reset):
+        reset()
     return HeadingHoldPulse(
         deviation_degrees=deviation,
         rate_dps=rate,

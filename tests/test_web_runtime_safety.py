@@ -66,6 +66,12 @@ class FakeRuntime:
     def stop(self) -> None:
         self.calls.append("runtime_stop")
 
+    def request_manual_override(self) -> None:
+        self.calls.append("runtime_request_manual_override")
+
+    def release_manual_override(self) -> None:
+        self.calls.append("runtime_release_manual_override")
+
 
 class FakeTestSession:
     def __init__(self, calls: list[str]) -> None:

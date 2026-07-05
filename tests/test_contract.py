@@ -104,7 +104,7 @@ class ContractTest(unittest.TestCase):
 
     def test_simulate_tag_when_started_records_event(self) -> None:
         self.client.post("/api/start")
-        tag_response = self.client.post("/api/simulate/tag/1")
+        tag_response = self.client.post("/api/simulate/tag/46")
         status_response = self.client.get("/api/status")
         payload = status_response.get_json()
 
@@ -113,7 +113,7 @@ class ContractTest(unittest.TestCase):
         self.assertGreaterEqual(len(payload["events"]), 1)
         self.assertTrue(EVENT_FIELDS.issubset(payload["events"][0]))
         self.assertTrue(EVENT_EXTENSION_FIELDS.issubset(payload["events"][0]))
-        self.assertEqual(payload["events"][0]["tag_id"], "1")
+        self.assertEqual(payload["events"][0]["tag_id"], "46")
 
 
 if __name__ == "__main__":

@@ -166,7 +166,12 @@ class StoreTest(unittest.TestCase):
         self.assertTrue(any(event["type"] == "shelf_aligned" for event in snapshot["events"]))
 
     def test_motion_updates_do_not_clear_waiting_confirmation(self) -> None:
-        store = self.make_store()
+        store = InspectionStore(
+            sample_tag_map(),
+            warehouse_map=DEFAULT_WAREHOUSE_MAP,
+            shelf_manifest={"A1": {"expected_items": ["item_01"]}},
+            root=self.root,
+        )
         store.start()
         store.record_cycle(2, skip_shortage_detection=False)
         store.record_scan_result("A1", [], frame_id="empty-1")

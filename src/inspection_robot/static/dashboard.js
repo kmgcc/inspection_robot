@@ -49,7 +49,7 @@ const DIRECTION_LABELS = {
   left: "左转", right: "右转",
 };
 
-const PATROL_ORDER = ["A1","A2","A3","A4","B4","B3","B2","B1"];
+const PATROL_ORDER = ["A1","A2","A3","A4","B3","B2","B1"];
 
 let latestEventId = null;
 let latestPendingEvent = null;
@@ -567,11 +567,11 @@ function renderCalibration(cal) {
 
   // 更新保存值显示
   const minSpeed = cal.straight_min_speed;
-  setText("saved-min-speed", minSpeed != null ? minSpeed : "⚠ 待标定");
+  setText("saved-min-speed", minSpeed != null ? minSpeed : "待标定");
   const cw90 = cal.turn_cw90_seconds;
-  setText("saved-cw90", cw90 != null ? `速度${cal.turn_speed || 18} / ${cw90}s` : "⚠ 待标定");
+  setText("saved-cw90", cw90 != null ? `速度${cal.turn_speed || 18} / ${cw90}s` : "待标定");
   const ccw90 = cal.turn_ccw90_seconds;
-  setText("saved-ccw90", ccw90 != null ? `速度${cal.turn_speed || 18} / ${ccw90}s` : "⚠ 待标定");
+  setText("saved-ccw90", ccw90 != null ? `速度${cal.turn_speed || 18} / ${ccw90}s` : "待标定");
 
   // 更新手动控制默认速度与时长（若是默认值，自动拉取标定值）
   const manualSpeed = byId("manual-speed");
@@ -620,7 +620,7 @@ function renderCalibration(cal) {
     const isEmpty = val === null || val === undefined;
     const div = document.createElement("dl");
     div.className = "cal-item" + (isEmpty ? " uncal" : "");
-    div.innerHTML = `<dt>${label}</dt><dd>${isEmpty ? "⚠ 待标定" : val}</dd>`;
+    div.innerHTML = `<dt>${label}</dt><dd>${isEmpty ? "待标定" : val}</dd>`;
     table.appendChild(div);
   }
 }
@@ -760,9 +760,14 @@ function renderMap(data, events) {
 // ============================================================
 
 function renderShelves(data, events) {
-  const root = byId("shelves");
-  if (!root) return;
-  root.innerHTML = "";
+  const shelvesA = byId("shelves-a");
+  const shelvesB = byId("shelves-b");
+  const fallbackRoot = byId("shelves");
+
+  if (shelvesA) shelvesA.innerHTML = "";
+  if (shelvesB) shelvesB.innerHTML = "";
+  if (fallbackRoot) fallbackRoot.innerHTML = "";
+
   const shelves = normalizeShelves(data, events);
   const SHELF_STATUS_LABELS = {
     pending: "未巡检", aligning: "对准中", scanning: "扫描中",
@@ -786,7 +791,15 @@ function renderShelves(data, events) {
     addDetail(details, "最近物品", shelf.latest_item || "-");
     addDetail(details, "异常", shelf.anomaly_count || 0);
     card.append(title, details);
-    root.appendChild(card);
+
+    const isA = shelf.shelf_id.toUpperCase().startsWith("A");
+    if (isA && shelvesA) {
+      shelvesA.appendChild(card);
+    } else if (!isA && shelvesB) {
+      shelvesB.appendChild(card);
+    } else if (fallbackRoot) {
+      fallbackRoot.appendChild(card);
+    }
   }
 }
 
