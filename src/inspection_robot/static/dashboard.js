@@ -775,24 +775,37 @@ function renderShelves(data, events) {
     pending: "未巡检", aligning: "对准中", scanning: "扫描中",
     normal: "正常", abnormal: "变化", waiting_confirm: "异常",
   };
+  renderShelfSummary(shelves);
   for (const shelf of shelves) {
+    const presentCount = asArray(shelf.items).filter((item) => item.status !== "missing").length;
+    const anomalyCount = Number(shelf.anomaly_count || 0);
     const card = document.createElement("article");
     card.className = `shelf-card ${shelf.status}`;
     if (shelf.changed) card.classList.add("changed");
+
     const title = document.createElement("div");
     title.className = "shelf-title";
+    const titleText = document.createElement("div");
+    titleText.className = "shelf-title-text";
     const h = document.createElement("h3");
     h.textContent = shelf.shelf_id;
+    const statusHint = document.createElement("p");
+    statusHint.textContent = shelfStatusHint(shelf, SHELF_STATUS_LABELS);
+    titleText.append(h, statusHint);
     const badge = document.createElement("span");
     badge.className = `state-badge ${shelf.status}`;
     badge.textContent = SHELF_STATUS_LABELS[shelf.status] || shelf.status;
-    title.append(h, badge);
-    const details = document.createElement("dl");
-    details.className = "shelf-details";
-    addDetail(details, "AprilTag", shelf.tag_id || "-");
-    addDetail(details, "OCR", shelf.ocr_text || shelf.shelf_id);
-    addDetail(details, "物品数", asArray(shelf.items).filter((item) => item.status !== "missing").length);
-    addDetail(details, "异常", shelf.anomaly_count || 0);
+    title.append(titleText, badge);
+
+    const details = document.createElement("div");
+    details.className = "shelf-kpis";
+    details.append(
+      shelfKpi("物品", presentCount),
+      shelfKpi("异常", anomalyCount),
+      shelfKpi("AprilTag", shelf.tag_id || "-"),
+      shelfKpi("OCR", shelf.ocr_text || shelf.shelf_id),
+    );
+
     const items = renderShelfItems(shelf);
     card.append(title, details, items);
 
@@ -805,6 +818,49 @@ function renderShelves(data, events) {
       fallbackRoot.appendChild(card);
     }
   }
+}
+
+function renderShelfSummary(shelves) {
+  const root = byId("shelf-summary");
+  if (!root) return;
+  root.innerHTML = "";
+  const total = shelves.length;
+  const normal = shelves.filter((shelf) => shelf.status === "normal").length;
+  const active = shelves.filter((shelf) => ["aligning", "scanning"].includes(shelf.status)).length;
+  const alerts = shelves.filter((shelf) => shelf.status === "waiting_confirm" || shelf.status === "abnormal").length;
+  root.append(
+    summaryPill("总数", total, "neutral"),
+    summaryPill("正常", normal, "normal"),
+    summaryPill("进行中", active, "active"),
+    summaryPill("待处理", alerts, alerts > 0 ? "alert" : "neutral"),
+  );
+}
+
+function summaryPill(label, value, tone) {
+  const pill = document.createElement("span");
+  pill.className = `summary-pill ${tone}`;
+  pill.innerHTML = `<b>${value}</b><span>${label}</span>`;
+  return pill;
+}
+
+function shelfKpi(label, value) {
+  const item = document.createElement("div");
+  item.className = "shelf-kpi";
+  const dt = document.createElement("span");
+  dt.textContent = label;
+  const dd = document.createElement("strong");
+  dd.textContent = textOrDash(value);
+  item.append(dt, dd);
+  return item;
+}
+
+function shelfStatusHint(shelf, labels) {
+  if (shelf.status === "waiting_confirm") return `${shelf.anomaly_count || 1} 项异常待确认`;
+  if (shelf.status === "abnormal") return "库存变化需复核";
+  if (shelf.status === "normal") return "本轮扫描通过";
+  if (shelf.status === "scanning") return "正在侧向扫描";
+  if (shelf.status === "aligning") return "小车正在对准";
+  return labels[shelf.status] || "等待巡检";
 }
 
 function normalizeShelves(data, events) {
@@ -827,10 +883,10 @@ function normalizeShelves(data, events) {
     if (INVENTORY_CHANGE_TYPES.has(event.type)) shelf.changed = true;
     if (event.status === "waiting_confirm") {
       shelf.status = "waiting_confirm";
-      shelf.anomaly_count = (shelf.anomaly_count || 0) + 1;
+      shelf.anomaly_count = Math.max(Number(shelf.anomaly_count || 0), 1);
     } else if (event.status === "warning" && shelf.status !== "waiting_confirm") {
       shelf.status = "abnormal";
-      shelf.anomaly_count = (shelf.anomaly_count || 0) + 1;
+      shelf.anomaly_count = Math.max(Number(shelf.anomaly_count || 0), 1);
     } else if (event.status === "normal" && shelf.status !== "waiting_confirm") {
       shelf.status = "normal";
     }
@@ -845,7 +901,7 @@ function mergeShelfEventItem(shelf, event) {
   const itemId = evidence.item_id || event.item_id || event.tag_id || event.item;
   const key = textOrDash(itemId);
   const status = event.type === "missing_item" ? "missing" : event.type === "added_item" ? "added" : "present";
-  const existing = items.find((item) => textOrDash(item.item_id || item.tag_id || item.name) === key);
+  const existing = items.find((item) => shelfItemMatchesEvent(item, event, key));
   const next = {
     item_id: key,
     tag_id: event.tag_id,
@@ -860,6 +916,28 @@ function mergeShelfEventItem(shelf, event) {
   shelf.items = items;
 }
 
+function shelfItemMatchesEvent(item, event, key) {
+  const candidates = new Set(
+    [key, event.item_id, event.tag_id, event.item]
+      .map(matchToken)
+      .filter(Boolean)
+  );
+  const itemCandidates = [
+    item.item_id,
+    item.tag_id,
+    item.name,
+    item.item,
+  ].map(matchToken).filter(Boolean);
+  return itemCandidates.some((candidate) => candidates.has(candidate));
+}
+
+function matchToken(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const token = String(value).trim();
+  if (!token || token === "-") return null;
+  return token;
+}
+
 function renderShelfItems(shelf) {
   const root = document.createElement("div");
   root.className = "shelf-items";
@@ -872,14 +950,18 @@ function renderShelfItems(shelf) {
     return root;
   }
   for (const item of items) {
-    const chip = document.createElement("article");
-    chip.className = `shelf-item-card ${item.status || "present"}`;
+    const chip = document.createElement("div");
+    chip.className = `shelf-item-row ${item.status || "present"}`;
+    const dot = document.createElement("span");
+    dot.className = "shelf-item-dot";
     const name = document.createElement("strong");
     name.textContent = textOrDash(item.name || item.item || item.item_id);
     const meta = document.createElement("span");
     const labels = { present: "在架", added: "新增", missing: "缺失" };
-    meta.textContent = `${labels[item.status] || "在架"} / ${textOrDash(item.tag_id || item.item_id)}`;
-    chip.append(name, meta);
+    meta.textContent = `${labels[item.status] || "在架"} · ${textOrDash(item.tag_id || item.item_id)}`;
+    const text = document.createElement("div");
+    text.append(name, meta);
+    chip.append(dot, text);
     root.appendChild(chip);
   }
   return root;

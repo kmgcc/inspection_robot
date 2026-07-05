@@ -651,12 +651,14 @@ def create_app(root: Path | None = None) -> Flask:
             ),
             "item_46",
         )
-        if not expected:
-            return [wrong_item, wrong_item]
-        first = expected[0]
-        if len(expected) == 1:
-            return [wrong_item, wrong_item]
-        return [first, first, wrong_item]
+        unknown_item = f"unknown_{shelf_id.lower()}"
+        items: list[str] = []
+        if expected:
+            items.append(expected[0])
+        if wrong_item not in items:
+            items.append(wrong_item)
+        items.append(unknown_item)
+        return items
 
     def _tag_for_item(item_id: str):
         for tag_id, info in store.tag_map.items():

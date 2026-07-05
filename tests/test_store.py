@@ -119,6 +119,47 @@ class StoreTest(unittest.TestCase):
         reloaded = self.make_store()
         self.assertEqual(reloaded.snapshot()["events"][0]["type"], "shelf_scanned")
 
+    def test_record_scan_result_deduplicates_repeated_item_reads(self) -> None:
+        store = InspectionStore(
+            sample_tag_map(),
+            warehouse_map=DEFAULT_WAREHOUSE_MAP,
+            shelf_manifest={"A1": {"expected_items": ["item_01"]}},
+            root=self.root,
+        )
+        store.start()
+
+        events = store.record_scan_result("A1", ["item_01", "item_01"], frame_id="repeat-item")
+        snapshot = store.snapshot()
+        shelf = next(item for item in snapshot["shelves"] if item["shelf_id"] == "A1")
+
+        self.assertEqual(snapshot["scan"]["detected_items"], ["item_01"])
+        self.assertEqual([item["item_id"] for item in shelf["items"]], ["item_01"])
+        self.assertNotIn("duplicate_item", [event["type"] for event in events])
+
+    def test_record_detection_evidence_deduplicates_repeated_item_frames(self) -> None:
+        store = InspectionStore(
+            sample_tag_map(),
+            warehouse_map=DEFAULT_WAREHOUSE_MAP,
+            shelf_manifest={"A1": {"expected_items": ["item_01"]}},
+            root=self.root,
+        )
+        store.start()
+
+        events = store.record_detection_evidence(
+            "A1",
+            [
+                {"tag_id": "1", "kind": "item", "item_id": "item_01", "confidence": 0.72},
+                {"tag_id": "1", "kind": "item", "item_id": "item_01", "ocr_text": "ITEM-01", "confidence": 0.91},
+            ],
+            frame_id="repeat-frame",
+        )
+        snapshot = store.snapshot()
+
+        self.assertEqual(snapshot["scan"]["detected_items"], ["item_01"])
+        self.assertEqual(len(snapshot["scan"]["detections"]), 1)
+        self.assertEqual(snapshot["scan"]["detections"][0]["ocr_text"], "ITEM-01")
+        self.assertNotIn("duplicate_item", [event["type"] for event in events])
+
     def test_detection_evidence_and_confirm_close_one_waiting_event(self) -> None:
         store = self.make_store()
         store.start()

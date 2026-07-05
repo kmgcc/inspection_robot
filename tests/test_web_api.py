@@ -149,7 +149,8 @@ class WebApiTest(unittest.TestCase):
         payload = self.client.get("/api/status").get_json()
         event_types = {event["type"] for event in payload["events"]}
         self.assertIn("shelf_aligned", event_types)
-        self.assertIn("duplicate_item", event_types)
+        self.assertIn("unknown_item", event_types)
+        self.assertNotIn("duplicate_item", event_types)
         self.assertIn("normal_item", event_types)
         self.assertTrue(any(event["status"] == "waiting_confirm" for event in payload["events"]))
 

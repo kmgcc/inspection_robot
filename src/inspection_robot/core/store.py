@@ -295,32 +295,33 @@ class InspectionStore:
 
     def record_scan_result(self, shelf_id: str, detected_items: list[str], frame_id: str | None = None) -> list[EventRecord]:
         with self.lock:
-            self.state.scan = {"active": False, "shelf_id": shelf_id, "detected_items": list(detected_items), "frame_id": frame_id, "detections": []}
+            unique_items = self._unique_item_ids(detected_items)
+            self.state.scan = {"active": False, "shelf_id": shelf_id, "detected_items": unique_items, "frame_id": frame_id, "detections": []}
             self.state.current_shelf = shelf_id
             previous_items = self._shelf_item_ids_locked(shelf_id)
             events = rules.evaluate_shelf_scan(
                 shelf_id,
-                detected_items,
+                unique_items,
                 self.shelf_manifest,
                 self.tag_map,
                 frame_id=frame_id,
                 skip_missing=self.state.skip_shortage_detection,
             )
-            events.extend(self._inventory_change_events_locked(shelf_id, previous_items, detected_items, frame_id))
-            self._update_shelf_items_locked(shelf_id, detected_items, events)
+            events.extend(self._inventory_change_events_locked(shelf_id, previous_items, unique_items, frame_id))
+            self._update_shelf_items_locked(shelf_id, unique_items, events)
             self._append_scan_events_locked(events)
             return events
 
     def record_detection_evidence(self, shelf_id: str, detections: list[Mapping[str, JsonValue]], frame_id: str | None = None) -> list[EventRecord]:
         with self.lock:
-            normalized = [dict(detection) for detection in detections]
+            normalized = self._unique_detections([dict(detection) for detection in detections])
             detected_items = self._item_ids_from_detections(normalized)
             self.state.scan = {"active": False, "shelf_id": shelf_id, "detected_items": detected_items, "frame_id": frame_id, "detections": normalized}
             self.state.current_shelf = shelf_id
             previous_items = self._shelf_item_ids_locked(shelf_id)
             events = rules.evaluate_detection_evidence(
                 shelf_id,
-                detections,
+                normalized,
                 self.shelf_manifest,
                 self.tag_map,
                 frame_id=frame_id,
@@ -625,7 +626,61 @@ class InspectionStore:
             info = self.tag_map.get(str(tag_id))
             if info is not None and str(info.get("kind", "item")) == "item" and info.get("item_id") is not None:
                 item_ids.append(str(info["item_id"]))
-        return item_ids
+        return self._unique_item_ids(item_ids)
+
+    def _unique_item_ids(self, item_ids: list[str]) -> list[str]:
+        seen: set[str] = set()
+        unique: list[str] = []
+        for item_id in item_ids:
+            key = str(item_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(key)
+        return unique
+
+    def _unique_detections(self, detections: list[dict[str, JsonValue]]) -> list[dict[str, JsonValue]]:
+        positions: dict[tuple[str, str], int] = {}
+        unique: list[dict[str, JsonValue]] = []
+        for detection in detections:
+            key = self._detection_identity(detection)
+            if key is None:
+                unique.append(detection)
+                continue
+            position = positions.get(key)
+            if position is None:
+                positions[key] = len(unique)
+                unique.append(detection)
+                continue
+            unique[position] = self._merge_detection(unique[position], detection)
+        return unique
+
+    def _detection_identity(self, detection: Mapping[str, JsonValue]) -> tuple[str, str] | None:
+        item_id = detection.get("item_id")
+        if item_id is not None:
+            return ("item", str(item_id))
+        tag_id = detection.get("tag_id")
+        if tag_id is not None:
+            info = self.tag_map.get(str(tag_id))
+            if info is not None:
+                if str(info.get("kind", "item")) == "item" and info.get("item_id") is not None:
+                    return ("item", str(info["item_id"]))
+                if str(info.get("kind")) == "shelf" and info.get("shelf_id") is not None:
+                    return ("shelf", str(info["shelf_id"]))
+            return ("tag", str(tag_id))
+        ocr_text = detection.get("ocr_text")
+        if ocr_text is not None and str(ocr_text).strip():
+            return ("ocr", str(ocr_text).strip().casefold())
+        return None
+
+    def _merge_detection(self, current: dict[str, JsonValue], incoming: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+        merged = dict(current)
+        for key, value in incoming.items():
+            if value is None or value == "":
+                continue
+            if merged.get(key) is None or merged.get(key) == "":
+                merged[key] = value
+        return merged
 
     def _inventory_change_events_locked(
         self,
