@@ -110,18 +110,20 @@ class RobotRuntimeConfig:
     object_slow_speed: int = field(default_factory=lambda: _env_int(12, "OBJECT_SLOW_SPEED"))
     object_settle_seconds: float = field(default_factory=lambda: _env_float(0.2, "OBJECT_SETTLE_SECONDS"))
     heading_hold_enabled: bool = field(default_factory=lambda: _env_bool("HEADING_HOLD_ENABLED", True))
-    heading_hold_tolerance_deg: float = field(default_factory=lambda: _env_float(0.6, "HEADING_HOLD_TOLERANCE_DEG"))
+    heading_hold_tolerance_deg: float = field(default_factory=lambda: _env_float(0.25, "HEADING_HOLD_TOLERANCE_DEG"))
     heading_hold_gain: float = field(default_factory=lambda: _env_float(0.012, "HEADING_HOLD_GAIN"))
     heading_hold_min_pulse_seconds: float = field(default_factory=lambda: _env_float(0.025, "HEADING_HOLD_MIN_PULSE_SECONDS"))
     heading_hold_max_pulse_seconds: float = field(default_factory=lambda: _env_float(0.10, "HEADING_HOLD_MAX_PULSE_SECONDS"))
-    heading_hold_correction_speed: int = field(default_factory=lambda: _env_int(24, "HEADING_HOLD_CORRECTION_SPEED"))
+    heading_hold_correction_speed: int = field(default_factory=lambda: _env_int(35, "HEADING_HOLD_CORRECTION_SPEED"))
     heading_hold_invert: bool = field(default_factory=lambda: _env_bool("HEADING_HOLD_INVERT", False))
-    heading_hold_rate_damping: float = field(default_factory=lambda: _env_float(0.05, "HEADING_HOLD_KD", "HEADING_HOLD_RATE_DAMPING"))
-    heading_hold_speed_gain: float = field(default_factory=lambda: _env_float(2.0, "HEADING_HOLD_SPEED_GAIN"))
+    heading_hold_rate_damping: float = field(default_factory=lambda: _env_float(0.08, "HEADING_HOLD_KD", "HEADING_HOLD_RATE_DAMPING"))
+    heading_hold_speed_gain: float = field(default_factory=lambda: _env_float(5.0, "HEADING_HOLD_SPEED_GAIN"))
+    heading_hold_min_correction_speed: int = field(default_factory=lambda: _env_int(6, "HEADING_HOLD_MIN_CORRECTION_SPEED"))
     heading_hold_min_sample_interval_seconds: float = field(default_factory=lambda: _env_float(0.0, "HEADING_HOLD_MIN_SAMPLE_INTERVAL_SECONDS"))
-    heading_hold_min_interval_seconds: float = field(default_factory=lambda: _env_float(0.25, "HEADING_HOLD_MIN_INTERVAL_SECONDS"))
-    heading_hold_max_consecutive: int = field(default_factory=lambda: _env_int(2, "HEADING_HOLD_MAX_CONSECUTIVE"))
+    heading_hold_min_interval_seconds: float = field(default_factory=lambda: _env_float(0.0, "HEADING_HOLD_MIN_INTERVAL_SECONDS"))
+    heading_hold_max_consecutive: int = field(default_factory=lambda: _env_int(999, "HEADING_HOLD_MAX_CONSECUTIVE"))
     heading_hold_confirm_samples: int = field(default_factory=lambda: _env_int(1, "HEADING_HOLD_CONFIRM_SAMPLES"))
+    heading_hold_trace_interval_seconds: float = field(default_factory=lambda: _env_float(0.5, "HEADING_HOLD_TRACE_INTERVAL_SECONDS"))
     heading_zupt_enabled: bool = field(default_factory=lambda: _env_bool("HEADING_ZUPT_ENABLED", True))
     heading_zupt_samples: int = field(default_factory=lambda: _env_int(15, "HEADING_ZUPT_SAMPLES"))
     heading_zupt_sample_seconds: float = field(default_factory=lambda: _env_float(0.005, "HEADING_ZUPT_SAMPLE_SECONDS"))
@@ -233,8 +235,10 @@ class RobotRuntime:
         self._cruise_scanner: _CruiseVisionScanner | None = None
         self._manual_override = threading.Event()
         self._last_heading_correction_at = 0.0
+        self._last_heading_sample_log_at = 0.0
         self._heading_consecutive_count = 0
         self._heading_over_tolerance_count = 0
+        self._cruise_vision_suppressed_until_boundary = False
 
     def start(self, shelf_order: Iterable[str] | None = None) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -301,6 +305,7 @@ class RobotRuntime:
         self._heading_consecutive_count = 0
         self._heading_over_tolerance_count = 0
         self._last_heading_correction_at = 0.0
+        self._last_heading_sample_log_at = 0.0
 
     def release_manual_override(self) -> None:
         """Manual control finished. The patrol thread has already exited, so to
@@ -362,6 +367,8 @@ class RobotRuntime:
         self._recognition_last_at = {}
         self._cruise_active_shelf = None
         self._cruise_segment_items = {}
+        self._cruise_vision_suppressed_until_boundary = False
+        self._last_heading_sample_log_at = 0.0
         self._show_normal()
         self._initialize_gimbal()
         self.refresh_motion_sensor(force=True)
@@ -553,6 +560,7 @@ class RobotRuntime:
         self._zupt_recalibrate("post_boundary_turn")
         self.store.record_forbidden_zone(zone_id, False)
         self._advance_boundary_event()
+        self._cruise_vision_suppressed_until_boundary = False
         self.store.record_motion_debug(
             "boundary_action_done",
             f"转向完成，当前阶段：{self._patrol_phase_label()}。",
@@ -600,6 +608,7 @@ class RobotRuntime:
         self._reset_boundary_window()
         self._reset_heading_guard()
         self._advance_boundary_event()
+        self._cruise_vision_suppressed_until_boundary = False
         self.store.record_motion_debug(
             "forbidden_bypass_done",
             f"禁区绕行完成，继续阶段：{self._patrol_phase_label()}。",
@@ -916,10 +925,14 @@ class RobotRuntime:
         # a caller can chain motion slices into a continuous, jerk-free cruise
         # instead of the stop-start cadence a per-step stop would produce.
         duration = max(0.0, float(duration_seconds))
-        guard_interval = max(0.0, float(self.config.motion_guard_poll_seconds)) if watch_boundary else 0.0
+        guard_interval = (
+            max(0.0, float(self.config.motion_guard_poll_seconds))
+            if watch_boundary or heading_hold
+            else 0.0
+        )
         if duration <= 0.0 or guard_interval <= 0.0 or duration <= guard_interval:
             correction = None
-            if heading_hold and watch_boundary:
+            if heading_hold:
                 correction = self._heading_hold_correction()
             self._call_mover_with_correction(mover, speed=speed, duration_seconds=duration, correction=correction)
             if correction is not None:
@@ -935,7 +948,7 @@ class RobotRuntime:
         while remaining > 0 and not self._stop_event.is_set() and not self._manual_override.is_set():
             chunk = min(remaining, guard_interval)
             correction = None
-            if heading_hold and watch_boundary:
+            if heading_hold:
                 correction = self._heading_hold_correction()
                 if self._stop_event.is_set() or self._manual_override.is_set():
                     break
@@ -1153,6 +1166,19 @@ class RobotRuntime:
             return
         previous_anchor = self._last_shelf_anchor
         self._last_shelf_anchor = normalized
+        if normalized in {"A4", "B1"}:
+            self._cruise_vision_suppressed_until_boundary = True
+            self._stop_cruise_scanner()
+            self.store.record_motion_debug(
+                "cruise_vision_suppressed",
+                f"识别到 {normalized} 后进入跨列转场，移动视觉暂时关闭，直到下一次边界转向完成。",
+                evidence={
+                    "shelf_id": normalized,
+                    "phase": self._patrol_phase_label(),
+                },
+            )
+        else:
+            self._cruise_vision_suppressed_until_boundary = False
         if normalized == "B3" and previous_anchor != "B3":
             self._bypassed_for_shelf_anchors.discard(normalized)
         if self._observed_shelf_sequence and self._observed_shelf_sequence[-1] == normalized:
@@ -1346,6 +1372,7 @@ class RobotRuntime:
             speed=self.config.avoidance_speed,
             duration_seconds=duration_seconds,
             watch_boundary=False,
+            heading_hold=False,
             source="obstacle",
         )
         return self._avoidance_path_clear(f"after_{step}")
@@ -1470,6 +1497,7 @@ class RobotRuntime:
         speed: int,
         duration_seconds: float,
         watch_boundary: bool = True,
+        heading_hold: bool = True,
         settle_seconds: float | None = None,
         source: str = "patrol",
     ) -> None:
@@ -1484,7 +1512,7 @@ class RobotRuntime:
             speed=speed,
             duration_seconds=duration_seconds,
             watch_boundary=watch_boundary,
-            heading_hold=watch_boundary,
+            heading_hold=heading_hold,
         )
         self._settle(settle_seconds)
 
@@ -1689,34 +1717,59 @@ class RobotRuntime:
             invert=self.config.heading_hold_invert,
             rate_damping=self.config.heading_hold_rate_damping,
             speed_gain=self.config.heading_hold_speed_gain,
+            min_correction_speed=self.config.heading_hold_min_correction_speed,
         )
 
     def _heading_hold_correction(self) -> HeadingHoldCorrection | None:
         guard = self._heading_guard_instance()
-        if guard is None or self._stop_event.is_set() or self._manual_override.is_set():
+        if self._stop_event.is_set() or self._manual_override.is_set():
+            return None
+        if guard is None:
+            self._record_heading_hold_sample("guard_unavailable")
             return None
         now = time.monotonic()
         last_sample = getattr(guard, "last_sample_at", None)
         if last_sample is not None:
             min_sample_interval = max(0.0, float(self.config.heading_hold_min_sample_interval_seconds))
             if now - float(last_sample) < min_sample_interval:
+                self._record_heading_hold_sample("sample_too_fresh")
                 return None
         updater = getattr(guard, "update", None)
         if not callable(updater):
+            self._record_heading_hold_sample("guard_missing_update")
             return None
         try:
             deviation = float(updater())
         except (RobotHardwareError, OSError, AttributeError, TypeError, ValueError):
             self._heading_guard = None
+            self._record_heading_hold_sample("sample_error")
             return None
         tolerance = max(0.0, float(self.config.heading_hold_tolerance_deg))
+        try:
+            rate = float(getattr(guard, "last_rate_dps", 0.0))
+        except (TypeError, ValueError):
+            rate = 0.0
         if abs(deviation) <= tolerance:
             self._heading_consecutive_count = 0
             self._heading_over_tolerance_count = 0
+            self._record_heading_hold_sample(
+                "within_deadband",
+                deviation_degrees=deviation,
+                rate_dps=rate,
+                tolerance_degrees=tolerance,
+            )
             return None
         self._heading_over_tolerance_count += 1
         confirm_samples = max(1, int(self.config.heading_hold_confirm_samples))
         if self._heading_over_tolerance_count < confirm_samples:
+            self._record_heading_hold_sample(
+                "waiting_confirm",
+                deviation_degrees=deviation,
+                rate_dps=rate,
+                tolerance_degrees=tolerance,
+                confirm_count=self._heading_over_tolerance_count,
+                confirm_samples=confirm_samples,
+            )
             return None
         try:
             correction = compute_heading_hold_correction(
@@ -1727,13 +1780,38 @@ class RobotRuntime:
             )
         except (RobotHardwareError, OSError, AttributeError, TypeError, ValueError):
             self._heading_guard = None
+            self._record_heading_hold_sample("controller_error")
             return None
         if correction is None:
+            self._record_heading_hold_sample(
+                "controller_rejected",
+                deviation_degrees=deviation,
+                rate_dps=rate,
+                tolerance_degrees=tolerance,
+            )
             return None
         self._last_heading_correction_at = now
         self._heading_consecutive_count += 1
         self._heading_over_tolerance_count = 0
         return correction
+
+    def _record_heading_hold_sample(self, reason: str, **evidence: object) -> None:
+        interval = max(0.0, float(self.config.heading_hold_trace_interval_seconds))
+        now = time.monotonic()
+        if interval > 0 and now - self._last_heading_sample_log_at < interval:
+            return
+        self._last_heading_sample_log_at = now
+        self.store.record_motion_debug(
+            "heading_hold_sample",
+            f"直行纠偏采样：{reason}。",
+            evidence={
+                "reason": reason,
+                "enabled": self.config.heading_hold_enabled,
+                "phase": self._patrol_phase_label(),
+                "consecutive_count": self._heading_consecutive_count,
+                **evidence,
+            },
+        )
 
     def _forward_mover_for_correction(self, correction: HeadingHoldCorrection | None) -> Callable[..., None]:
         if correction is None:
@@ -1882,7 +1960,7 @@ class RobotRuntime:
     def _cruise_scanner_allowed_for_phase(self) -> bool:
         if not self.config.cruise_vision_enabled:
             return False
-        return self._patrol_phase_label() not in {"A列末端到B列转场", "B列起点到A列转场"}
+        return not self._cruise_vision_suppressed_until_boundary
 
     def _sync_cruise_scanner_for_phase(self) -> None:
         if self._cruise_scanner_allowed_for_phase():
@@ -1902,6 +1980,18 @@ class RobotRuntime:
         scanner = self._cruise_scanner
         if scanner is None:
             return
+        if self._cruise_vision_suppressed_until_boundary:
+            suppressed = len(scanner.poll_new())
+            if suppressed:
+                self.store.record_motion_debug(
+                    "cruise_recognition_suppressed",
+                    "跨列转场期间已丢弃移动识别结果，保持连续直行直到边界。",
+                    evidence={
+                        "suppressed_count": suppressed,
+                        "phase": self._patrol_phase_label(),
+                    },
+                )
+            return
         for recognition in scanner.poll_new():
             self._handle_moving_recognition(recognition)
 
@@ -1914,6 +2004,18 @@ class RobotRuntime:
         buffered after a shelf tag and committed to that shelf only when the next
         shelf tag appears.
         """
+
+        if self._cruise_vision_suppressed_until_boundary:
+            self.store.record_motion_debug(
+                "cruise_recognition_suppressed",
+                "跨列转场期间忽略移动识别结果，避免视觉流程打断直行。",
+                evidence={
+                    "phase": self._patrol_phase_label(),
+                    "shelf_id": _optional_text(recognition.get("shelf_id")),
+                    "item_id": _optional_text(recognition.get("item_id")),
+                },
+            )
+            return
 
         shelf_id = _optional_text(recognition.get("shelf_id"))
         item_id = _optional_text(recognition.get("item_id"))

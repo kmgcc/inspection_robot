@@ -417,6 +417,72 @@ class CruiseRuntimeTest(unittest.TestCase):
         runtime._record_observed_shelf("B3")
         self.assertTrue(runtime._cruise_scanner_allowed_for_phase())
 
+    def test_row_transfer_suppresses_vision_until_next_boundary_turn(self) -> None:
+        runtime, _, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                smooth_cruise_enabled=True,
+                cruise_vision_enabled=True,
+                action_settle_seconds=0,
+            )
+        )
+
+        runtime._record_observed_shelf("A4")
+        runtime._handle_moving_recognition({"shelf_id": "B3", "tag_id": "103"})
+        self.assertEqual(runtime._last_shelf_anchor, "A4")
+        self.assertFalse(runtime._cruise_scanner_allowed_for_phase())
+
+        runtime._handle_planned_boundary_turn((0, 1, 1, 1), "turn_patrol")
+
+        self.assertTrue(runtime._cruise_scanner_allowed_for_phase())
+
+    def test_heading_hold_runs_even_when_boundary_watch_is_disabled(self) -> None:
+        guard = FakeGuard(deviation=2.0, rate=0.0)
+        runtime, motion, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                heading_hold_enabled=True,
+                heading_hold_tolerance_deg=0.25,
+                heading_hold_trace_interval_seconds=0,
+                action_settle_seconds=0,
+            ),
+            imu=FakeImu(guard),
+        )
+
+        runtime._run_timed_motion(
+            motion.move_forward_slow,
+            speed=30,
+            duration_seconds=0,
+            watch_boundary=False,
+            heading_hold=True,
+        )
+
+        self.assertIn("move_forward_corrected:right", motion.calls)
+
+    def test_heading_hold_logs_sample_when_inside_deadband(self) -> None:
+        guard = FakeGuard(deviation=0.0, rate=0.0)
+        runtime, _, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                smooth_cruise_enabled=True,
+                heading_hold_enabled=True,
+                heading_hold_tolerance_deg=0.25,
+                heading_hold_trace_interval_seconds=0,
+                cruise_tick_seconds=0,
+                action_settle_seconds=0,
+            ),
+            imu=FakeImu(guard),
+        )
+
+        runtime._drive_cruise_step((1, 1, 1, 1))
+
+        snapshot = runtime.store.snapshot()
+        self.assertTrue(
+            any(
+                event["type"] == "motion_debug"
+                and event.get("evidence", {}).get("stage") == "heading_hold_sample"
+                and event.get("evidence", {}).get("reason") == "within_deadband"
+                for event in snapshot["events"]
+            )
+        )
+
     # --- R1/R3/R4/R5 regression tests ------------------------------------ #
 
     def test_cruise_deadband_pure_forward(self) -> None:
