@@ -106,7 +106,7 @@ class RobotRuntimeConfig:
     boundary_retreat_speed: int = field(default_factory=lambda: _env_int(12, "BOUNDARY_RETREAT_SPEED"))
     boundary_retreat_seconds: float = field(default_factory=lambda: _env_float(0.14, "BOUNDARY_RETREAT_SECONDS"))
     boundary_retreat_command: str = field(default_factory=lambda: _env_text("backward", "BOUNDARY_RETREAT_COMMAND"))
-    motion_guard_poll_seconds: float = field(default_factory=lambda: _env_float(0.01, "MOTION_GUARD_POLL_SECONDS"))
+    motion_guard_poll_seconds: float = field(default_factory=lambda: _env_float(0.004, "MOTION_GUARD_POLL_SECONDS"))
     motion_slice_seconds: float = field(default_factory=lambda: _env_float(0.03, "ROBOT_MOTION_SLICE_SECONDS"))
     object_trigger_enabled: bool = field(default_factory=lambda: _env_bool("OBJECT_TRIGGER_ENABLED", True))
     object_detector: str = field(default_factory=lambda: _env_text("opencv", "OBJECT_DETECTOR"))
@@ -181,7 +181,7 @@ class RobotRuntimeConfig:
     transfer_line_error_alpha: float = field(default_factory=lambda: _env_float(0.45, "TRANSFER_LINE_ERROR_ALPHA"))
     transfer_line_rate_alpha: float = field(default_factory=lambda: _env_float(0.35, "TRANSFER_LINE_RATE_ALPHA"))
     transfer_line_debounce_frames: int = field(default_factory=lambda: _env_int(1, "TRANSFER_LINE_DEBOUNCE_FRAMES"))
-    transfer_line_exit_confirm_frames: int = field(default_factory=lambda: _env_int(2, "TRANSFER_LINE_EXIT_CONFIRM_FRAMES"))
+    transfer_line_exit_confirm_frames: int = field(default_factory=lambda: _env_int(1, "TRANSFER_LINE_EXIT_CONFIRM_FRAMES"))
     transfer_endpoint_window_seconds: float = field(default_factory=lambda: _env_float(0.04, "TRANSFER_ENDPOINT_WINDOW_SECONDS"))
     transfer_endpoint_min_black_sensors: int = field(default_factory=lambda: _env_int(3, "TRANSFER_ENDPOINT_MIN_BLACK_SENSORS"))
     transfer_endpoint_confirm_frames: int = field(default_factory=lambda: _env_int(2, "TRANSFER_ENDPOINT_CONFIRM_FRAMES"))
@@ -1487,6 +1487,16 @@ class RobotRuntime:
             if watch_boundary or heading_hold
             else 0.0
         )
+        if watch_boundary and guard_interval > 0.0:
+            self._run_guarded_motion_loop(
+                mover,
+                speed=speed,
+                duration_seconds=duration,
+                heading_hold=heading_hold,
+                keep_running=keep_running,
+                guard_interval=guard_interval,
+            )
+            return
         if duration <= 0.0 or guard_interval <= 0.0 or duration <= guard_interval:
             correction = None
             if heading_hold:
@@ -1525,11 +1535,72 @@ class RobotRuntime:
         if not keep_running or latched or self._stop_event.is_set():
             self.motion.stop()
 
+    def _run_guarded_motion_loop(
+        self,
+        mover: Callable[..., None],
+        *,
+        speed: int,
+        duration_seconds: float,
+        heading_hold: bool,
+        keep_running: bool,
+        guard_interval: float,
+    ) -> None:
+        duration = max(0.0, float(duration_seconds))
+        poll_seconds = max(0.001, float(guard_interval))
+        deadline = time.monotonic() + duration
+        elapsed = 0.0
+        latched = False
+        while not self._stop_event.is_set() and not self._manual_override.is_set():
+            correction = None
+            if heading_hold:
+                correction = self._heading_hold_correction(speed)
+                if self._stop_event.is_set() or self._manual_override.is_set():
+                    break
+            self._start_guarded_motion(mover, speed=speed, correction=correction)
+            if correction is not None:
+                self._record_heading_hold_correction(correction, speed=speed)
+            latched = self._poll_boundary_during_motion(elapsed)
+            if latched or duration <= 0.0:
+                break
+            now = time.monotonic()
+            if now >= deadline:
+                break
+            sleep_for = min(poll_seconds, max(0.0, deadline - now))
+            if sleep_for > 0.0:
+                time.sleep(sleep_for)
+            elapsed = max(0.0, duration - max(0.0, deadline - time.monotonic()))
+        if self._manual_override.is_set():
+            self.motion.stop()
+            return
+        if not keep_running or latched or self._stop_event.is_set():
+            self.motion.stop()
+
+    def _start_guarded_motion(
+        self,
+        mover: Callable[..., None],
+        *,
+        speed: int,
+        correction: HeadingHoldCorrection | None,
+    ) -> None:
+        if correction is not None:
+            corrected = getattr(self.motion, "start_forward_corrected_slow", None)
+            if callable(corrected):
+                corrected(speed=speed, correction=correction.correction_speed, direction=correction.direction)
+                return
+        if getattr(mover, "__name__", "") == "move_forward_slow":
+            starter = getattr(self.motion, "start_forward_slow", None)
+            if callable(starter):
+                starter(speed=speed)
+                return
+        self._call_mover_with_correction(mover, speed=speed, duration_seconds=0.0, correction=correction)
+
     def _poll_boundary_during_motion(self, elapsed_seconds: float) -> bool:
         try:
             tape_state = self.sensors.read_tape_boundary()
         except RobotHardwareError:
             return False
+        if sensors.full_tape_boundary_detected(tape_state):
+            return self._latch_full_black_boundary(tape_state, elapsed_seconds)
         context = self._transfer_line_context
         if context is not None:
             if not context.endpoint_unlocked:
@@ -1574,6 +1645,42 @@ class RobotRuntime:
                 "guard_poll_seconds": self.config.motion_guard_poll_seconds,
                 "boundary_window_seconds": self.config.boundary_window_seconds,
             },
+        )
+        return True
+
+    def _latch_full_black_boundary(self, tape_state: tuple[int, int, int, int], elapsed_seconds: float) -> bool:
+        context = self._transfer_line_context
+        if context is not None and not context.endpoint_unlocked:
+            self._observe_transfer_line_exit(tape_state)
+            return False
+        if context is not None:
+            context.endpoint_latched = True
+            for index in range(4):
+                context.endpoint_black_seen_at[index] = time.monotonic()
+            self._pending_boundary_state = tape_state
+            stage = "transfer_motion_guard_full_black_latched"
+            message = "转场巡线运动中四路传感器同时压黑，已立即停车并锁存终点边界。"
+            evidence = {
+                **self._transfer_line_context_evidence(context),
+                "tape_state": _json_tape_state(tape_state),
+                "elapsed_seconds": round(max(0.0, float(elapsed_seconds)), 3),
+                "guard_poll_seconds": self.config.transfer_line_guard_poll_seconds,
+            }
+        else:
+            self._pending_boundary_state = tape_state
+            stage = "motion_guard_full_black_latched"
+            message = "运动过程中四路传感器同时压黑，已立即停车并锁存边界。"
+            evidence = {
+                "tape_state": _json_tape_state(tape_state),
+                "elapsed_seconds": round(max(0.0, float(elapsed_seconds)), 3),
+                "guard_poll_seconds": self.config.motion_guard_poll_seconds,
+            }
+        self.motion.stop()
+        self.store.record_motion_debug(
+            stage,
+            f"{message} 下一轮控制循环将执行转向/边界动作。",
+            status="TURNING_AT_BOUNDARY",
+            evidence=evidence,
         )
         return True
 

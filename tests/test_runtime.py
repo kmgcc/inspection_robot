@@ -45,6 +45,12 @@ class RuntimeTest(unittest.TestCase):
             root=self.root,
         )
 
+    def assert_forward_called(self, fake_motion: "FakeMotion") -> None:
+        self.assertTrue(
+            "move_forward" in fake_motion.calls or "start_forward" in fake_motion.calls,
+            f"expected a forward command, got {fake_motion.calls}",
+        )
+
     def test_runtime_config_defaults_match_demo_calibration(self) -> None:
         with temporary_env_cleared(
             "ROBOT_PATROL_SPEED",
@@ -168,7 +174,7 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(config.boundary_retreat_speed, 12)
         self.assertEqual(config.boundary_retreat_seconds, 0.14)
         self.assertEqual(config.boundary_retreat_command, "backward")
-        self.assertEqual(config.motion_guard_poll_seconds, 0.01)
+        self.assertEqual(config.motion_guard_poll_seconds, 0.004)
         self.assertEqual(config.object_detector, "opencv")
         self.assertEqual(config.object_presence_min_area_ratio, 0.008)
         self.assertEqual(config.object_presence_confirm_frames, 1)
@@ -205,7 +211,7 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(config.transfer_line_min_speed, 10)
         self.assertEqual(config.transfer_line_tick_seconds, 0.04)
         self.assertEqual(config.transfer_line_guard_poll_seconds, 0.004)
-        self.assertEqual(config.transfer_line_exit_confirm_frames, 2)
+        self.assertEqual(config.transfer_line_exit_confirm_frames, 1)
         self.assertEqual(config.transfer_endpoint_window_seconds, 0.04)
         self.assertEqual(config.transfer_endpoint_min_black_sensors, 3)
         self.assertEqual(config.transfer_endpoint_confirm_frames, 2)
@@ -299,7 +305,7 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(snapshot["current_shelf"], "A1")
         self.assertGreater(len(snapshot["path"]["waypoints"]), 0)
         self.assertTrue(any(event["type"] in {"shelf_scanned", "normal_item"} for event in snapshot["events"]))
-        self.assertIn("move_forward", fake_motion.calls)
+        self.assert_forward_called(fake_motion)
         self.assertIn("strafe_right", fake_motion.calls)
         self.assertNotIn("move_backward", fake_motion.calls)
         self.assertGreaterEqual(fake_motion.calls.count("rotate_right"), 2)
@@ -419,7 +425,7 @@ class RuntimeTest(unittest.TestCase):
 
         runtime.run_continuous_patrol(max_iterations=2)
 
-        self.assertIn("move_forward", fake_motion.calls)
+        self.assert_forward_called(fake_motion)
         self.assertNotIn("rotate_right", fake_motion.calls)
         self.assertNotIn("rotate_left", fake_motion.calls)
 
@@ -792,7 +798,7 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(fake_motion.calls.count("start_forward_corrected:right"), 1)
         self.assertNotIn("move_forward_corrected:right", fake_motion.calls)
         self.assertEqual(runtime._pending_boundary_state, (0, 0, 0, 0))
-        self.assertIn("transfer_motion_guard_endpoint_latched", stages)
+        self.assertIn("transfer_motion_guard_full_black_latched", stages)
 
     def test_post_motion_boundary_latch_skips_cruise_recognition_same_tick(self) -> None:
         store = self.make_store()
@@ -870,7 +876,7 @@ class RuntimeTest(unittest.TestCase):
 
         runtime._forward_step(speed=20, duration_seconds=0)
 
-        self.assertIn("move_forward_corrected:right", fake_motion.calls)
+        self.assertIn("start_forward_corrected:right", fake_motion.calls)
         self.assertNotIn("rotate_left", fake_motion.calls)
         self.assertNotIn("rotate_right", fake_motion.calls)
 
@@ -906,8 +912,11 @@ class RuntimeTest(unittest.TestCase):
         ]
 
         self.assertIn("rotate_right", fake_motion.calls)
-        self.assertIn("move_forward", fake_motion.calls)
-        self.assertLess(fake_motion.calls.index("rotate_right"), fake_motion.calls.index("move_forward"))
+        self.assert_forward_called(fake_motion)
+        first_forward = min(
+            index for index, command in enumerate(fake_motion.calls) if command in {"move_forward", "start_forward"}
+        )
+        self.assertLess(fake_motion.calls.index("rotate_right"), first_forward)
         self.assertIn("boundary_action", event_stages)
 
     def test_motion_guard_latches_fast_full_black_boundary_during_line_follow(self) -> None:
@@ -953,7 +962,7 @@ class RuntimeTest(unittest.TestCase):
         ]
 
         self.assertGreaterEqual(fake_motion.calls.count("rotate_right"), 2)
-        self.assertIn("motion_guard_boundary_latched", event_stages)
+        self.assertIn("motion_guard_full_black_latched", event_stages)
 
     def test_continuous_patrol_safety_wrapper_records_unexpected_exception(self) -> None:
         store = self.make_store()
@@ -1061,7 +1070,7 @@ class RuntimeTest(unittest.TestCase):
         self.assertIn("obstacle_avoidance_step", event_types)
         self.assertIn("obstacle_clear", event_types)
         self.assertLess(fake_motion.calls.index("rotate_right"), fake_motion.calls.index("rotate_left"))
-        self.assertGreaterEqual(fake_motion.calls.count("move_forward"), 4)
+        self.assertGreaterEqual(fake_motion.calls.count("move_forward") + fake_motion.calls.count("start_forward"), 4)
 
     def test_continuous_patrol_skips_first_cycle_then_scans_visible_shelf(self) -> None:
         store = self.make_store()
@@ -1095,7 +1104,7 @@ class RuntimeTest(unittest.TestCase):
         snapshot = store.snapshot()
 
         self.assertIn("rotate_right", fake_motion.calls)
-        self.assertIn("move_forward", fake_motion.calls)
+        self.assert_forward_called(fake_motion)
         self.assertEqual(snapshot["current_shelf"], "A1")
         self.assertTrue(any(event["type"] in {"shelf_scanned", "normal_item"} for event in snapshot["events"]))
 
