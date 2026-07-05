@@ -21,6 +21,7 @@ if str(SRC) not in sys.path:
 from inspection_robot.vision import tag_detector
 from inspection_robot.vision.stability import DetectionStabilityTracker, StabilityConfig
 from inspection_robot.vision.state_machine import VisionState, VisionStateMachine
+from inspection_robot.vision.video_stream import _draw_detections
 
 
 class VisionDetectorTest(unittest.TestCase):
@@ -166,7 +167,54 @@ class VisionDetectorTest(unittest.TestCase):
         self.assertIsNone(detections[0]["tag_id"])
         self.assertEqual(detections[0]["source"], "synthetic_untagged")
         self.assertEqual(detections[0]["ocr_text"], "A1-中文")
+        bbox = detections[0]["bbox"]
+        self.assertLessEqual(bbox[0], 50)
+        self.assertLessEqual(bbox[1], 35)
+        self.assertGreaterEqual(bbox[0] + bbox[2], 110)
+        self.assertGreaterEqual(bbox[1] + bbox[3], 85)
+        self.assertAlmostEqual(detections[0]["center"][0], bbox[0] + bbox[2] / 2.0)
+        self.assertAlmostEqual(detections[0]["center"][1], bbox[1] + bbox[3] / 2.0)
+        self.assertIsNotNone(detections[0]["corners"])
         self.assertIsNotNone(detections[0]["image_class"])
+
+    def test_detect_frame_keeps_untagged_card_when_apriltag_is_present(self) -> None:
+        frame = np.zeros((140, 220, 3), dtype=np.uint8)
+        cv2.rectangle(frame, (20, 35), (105, 105), (255, 255, 255), -1)
+        cv2.rectangle(frame, (25, 40), (42, 100), (0, 190, 0), -1)
+        raw = FakeRawDetection(
+            tag_id=101,
+            center=(170.0, 70.0),
+            corners=((145.0, 45.0), (195.0, 45.0), (195.0, 95.0), (145.0, 95.0)),
+            decision_margin=82.0,
+            hamming=0,
+            goodness=0.91,
+        )
+        original = tag_detector._try_ocr_text
+        tag_detector._try_ocr_text = lambda *_args, **_kwargs: tag_detector.OcrResult("水杯物品20", 0.92, True)  # type: ignore[assignment]
+        try:
+            detections = tag_detector._detect_frame(frame, FakeDetector([raw]), cv2, image_classifier_enabled=True)
+        finally:
+            tag_detector._try_ocr_text = original  # type: ignore[assignment]
+
+        synthetic = [item for item in detections if item.get("source") == "synthetic_untagged"]
+        self.assertGreaterEqual(len(synthetic), 1)
+        self.assertEqual(synthetic[0]["ocr_text"], "水杯物品20")
+        self.assertEqual(synthetic[0]["image_class"], "CUP")
+        self.assertEqual(synthetic[0]["color"], "GREEN")
+
+    def test_video_overlay_draws_bbox_and_multimodal_labels(self) -> None:
+        frame = np.zeros((120, 160, 3), dtype=np.uint8)
+        detection = {
+            "bbox": [30, 25, 70, 45],
+            "ocr_text": "水杯物品20",
+            "color": "BLUE",
+            "image_class": "CUP",
+            "source": "synthetic_untagged",
+        }
+
+        rendered = _draw_detections(frame, [detection], cv2)
+
+        self.assertGreater(int(rendered.sum()), int(frame.sum()))
 
     def test_ocr_cleaning_keeps_chinese_letters_digits_and_dashes(self) -> None:
         self.assertEqual(tag_detector._clean_ocr_text(" 库位-a1_02! "), "库位-A1_02")

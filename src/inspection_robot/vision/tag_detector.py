@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import math
 import re
+import threading
 import time
 from collections import Counter
 from collections.abc import Iterator, Mapping
@@ -19,6 +20,7 @@ Point = tuple[float, float]
 Corners = tuple[Point, Point, Point, Point]
 _PADDLE_OCR: Any | None = None
 _PADDLE_OCR_UNAVAILABLE = False
+_PADDLE_OCR_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +43,28 @@ class ImageClassResult:
     class_name: str
     confidence: float
     source: str = "opencv_shape"
+
+
+@dataclass(frozen=True, slots=True)
+class ObjectPresenceResult:
+    bbox: tuple[int, int, int, int]
+    center: Point
+    confidence: float
+
+
+_SEMANTIC_IMAGE_KEYWORDS: tuple[tuple[str, str], ...] = (
+    ("水杯", "CUP"),
+    ("杯", "CUP"),
+    ("CUP", "CUP"),
+    ("瓶", "BOTTLE"),
+    ("BOTTLE", "BOTTLE"),
+    ("盒", "BOX"),
+    ("箱", "BOX"),
+    ("BOX", "BOX"),
+    ("药", "MEDICINE_BOX"),
+    ("电池", "BATTERY"),
+    ("BATTERY", "BATTERY"),
+)
 
 
 def iter_tag_ids(device: int = 0, cooldown_seconds: float = 1.5) -> Iterator[str]:
@@ -168,13 +192,18 @@ def _detect_frame(
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     raw_detections = detector.detect(gray)
     detections: list[dict[str, object]] = []
+    excluded_bboxes: list[tuple[int, int, int, int]] = []
     for raw in raw_detections:
         tag_id = str(getattr(raw, "tag_id"))
         center = _normalize_center(getattr(raw, "center", None))
         corners = _normalize_corners(getattr(raw, "corners", None))
+        bbox = _corners_to_bbox(corners)
+        if bbox is not None:
+            excluded_bboxes.append(bbox)
         angle_deg = _angle_degrees(corners)
         ocr = _try_ocr_text(frame, cv2, center=center, corners=corners)
         image_class = _classify_image_region(frame, center, corners, cv2) if image_classifier_enabled else None
+        image_class = _class_with_ocr_semantics(image_class, ocr)
         detections.append(
             {
                 "tag_id": tag_id,
@@ -194,33 +223,47 @@ def _detect_frame(
                 "processed": False,
             }
         )
-    if detections:
+    object_regions = _detect_object_presence_regions(frame, cv2, exclude_bboxes=excluded_bboxes, max_results=2)
+    if not object_regions:
         return detections
-    if not detect_object_presence(frame, cv2):
-        return []
-    ocr = _try_ocr_text(frame, cv2)
-    image_class = _classify_image_region(frame, None, None, cv2) if image_classifier_enabled else None
-    detections.append(
-        {
-            "tag_id": None,
-            "marker_family": None,
-            "ocr_text": ocr.text,
-            "color": _dominant_color_name(frame, None, cv2),
-            "image_class": image_class.class_name if image_class is not None else None,
-            "image_class_confidence": image_class.confidence if image_class is not None else None,
-            "image_class_source": image_class.source if image_class is not None else None,
-            "confidence": 0.5,
-            "center": None,
-            "corners": None,
-            "angle_deg": None,
-            "hamming": None,
-            "goodness": None,
-            "ocr_confidence": ocr.confidence,
-            "processed": False,
-            "source": "synthetic_untagged",
-        }
-    )
-    return detections
+    synthetic_detections = [
+        _synthetic_detection_from_object(frame, cv2, object_presence, image_classifier_enabled=image_classifier_enabled)
+        for object_presence in object_regions
+    ]
+    return detections + synthetic_detections
+
+
+def _synthetic_detection_from_object(
+    frame: Any,
+    cv2: Any,
+    object_presence: ObjectPresenceResult,
+    *,
+    image_classifier_enabled: bool,
+) -> dict[str, object]:
+    box_corners = _bbox_to_corners(object_presence.bbox)
+    ocr = _try_ocr_text(frame, cv2, center=object_presence.center, corners=box_corners)
+    image_class = _classify_image_region(frame, object_presence.center, box_corners, cv2) if image_classifier_enabled else None
+    image_class = _class_with_ocr_semantics(image_class, ocr)
+    color = _dominant_color_name_for_region(frame, box_corners, cv2) or _dominant_color_name(frame, object_presence.center, cv2)
+    return {
+        "tag_id": None,
+        "marker_family": None,
+        "ocr_text": ocr.text,
+        "color": color,
+        "image_class": image_class.class_name if image_class is not None else None,
+        "image_class_confidence": image_class.confidence if image_class is not None else None,
+        "image_class_source": image_class.source if image_class is not None else None,
+        "confidence": object_presence.confidence,
+        "center": _points_to_json(object_presence.center),
+        "corners": _corners_to_json(box_corners),
+        "bbox": [object_presence.bbox[0], object_presence.bbox[1], object_presence.bbox[2], object_presence.bbox[3]],
+        "angle_deg": None,
+        "hamming": None,
+        "goodness": None,
+        "ocr_confidence": ocr.confidence,
+        "processed": False,
+        "source": "synthetic_untagged",
+    }
 
 
 def detect_object_presence(
@@ -232,16 +275,59 @@ def detect_object_presence(
     model_path: str = "",
     min_area_ratio: float = 0.015,
 ) -> bool:
+    return _detect_object_presence_region(
+        frame,
+        cv2,
+        roi,
+        detector=detector,
+        model_path=model_path,
+        min_area_ratio=min_area_ratio,
+    ) is not None
+
+
+def _detect_object_presence_region(
+    frame: Any,
+    cv2: Any,
+    roi: object = None,
+    *,
+    detector: str = "opencv",
+    model_path: str = "",
+    min_area_ratio: float = 0.015,
+) -> ObjectPresenceResult | None:
+    regions = _detect_object_presence_regions(
+        frame,
+        cv2,
+        roi,
+        detector=detector,
+        model_path=model_path,
+        min_area_ratio=min_area_ratio,
+        max_results=1,
+    )
+    return regions[0] if regions else None
+
+
+def _detect_object_presence_regions(
+    frame: Any,
+    cv2: Any,
+    roi: object = None,
+    *,
+    detector: str = "opencv",
+    model_path: str = "",
+    min_area_ratio: float = 0.015,
+    exclude_bboxes: list[tuple[int, int, int, int]] | None = None,
+    max_results: int = 3,
+) -> list[ObjectPresenceResult]:
     normalized = str(detector or "opencv").strip().lower()
     if normalized in {"yolov5_lite_cpu", "hailo_yolo"} and not str(model_path or "").strip():
         normalized = "opencv"
     if normalized not in {"opencv", "yolov5_lite_cpu", "hailo_yolo"}:
         normalized = "opencv"
-    crop = _presence_roi(frame, roi)
+    crop, offset_x, offset_y = _presence_roi_with_offset(frame, roi)
+    regions: list[ObjectPresenceResult] = []
     try:
         height, width = crop.shape[:2]
         if height <= 0 or width <= 0:
-            return False
+            return []
         gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
         edges = cv2.Canny(blurred, 45, 145)
@@ -251,20 +337,33 @@ def detect_object_presence(
         contours.extend(cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[-2])
         frame_area = float(width * height)
         min_area = max(80.0, frame_area * max(0.0, float(min_area_ratio)))
-        for contour in contours:
+        for contour in sorted(contours, key=cv2.contourArea, reverse=True):
             area = float(cv2.contourArea(contour))
             if area < min_area or area > frame_area * 0.92:
                 continue
             x, y, box_w, box_h = cv2.boundingRect(contour)
             if box_w <= 2 or box_h <= 2:
                 continue
+            box_area = float(box_w * box_h)
+            if box_area > frame_area * 0.58:
+                continue
             aspect = box_w / max(1.0, float(box_h))
             extent = area / max(1.0, float(box_w * box_h))
             if 0.2 <= aspect <= 5.0 and extent >= 0.18:
-                return True
+                x0 = int(x + offset_x)
+                y0 = int(y + offset_y)
+                candidate_bbox = (x0, y0, int(box_w), int(box_h))
+                if _bbox_overlaps_any(candidate_bbox, exclude_bboxes or [], min_iou=0.12):
+                    continue
+                if _bbox_overlaps_any(candidate_bbox, [item.bbox for item in regions], min_iou=0.45):
+                    continue
+                confidence = round(min(0.95, max(0.35, area / max(1.0, min_area * 4.0))), 3)
+                regions.append(ObjectPresenceResult(candidate_bbox, (x0 + box_w / 2.0, y0 + box_h / 2.0), confidence))
+                if len(regions) >= max(1, max_results):
+                    break
     except Exception:
-        return False
-    return False
+        return []
+    return regions
 
 
 def detect_object_presence_from_camera(
@@ -291,8 +390,12 @@ def detect_object_presence_from_camera(
 
 
 def _presence_roi(frame: Any, roi: object = None) -> Any:
+    return _presence_roi_with_offset(frame, roi)[0]
+
+
+def _presence_roi_with_offset(frame: Any, roi: object = None) -> tuple[Any, int, int]:
     if roi is None or roi == "":
-        return frame
+        return frame, 0, 0
     try:
         height, width = frame.shape[:2]
         if isinstance(roi, str):
@@ -302,7 +405,7 @@ def _presence_roi(frame: Any, roi: object = None) -> Any:
         else:
             parts = [float(value) for value in roi]  # type: ignore[operator]
         if len(parts) != 4:
-            return frame
+            return frame, 0, 0
         x, y, w, h = parts
         if all(0.0 <= value <= 1.0 for value in parts):
             x0 = int(x * width)
@@ -317,11 +420,11 @@ def _presence_roi(frame: Any, roi: object = None) -> Any:
         x0, x1 = max(0, min(x0, width)), max(0, min(x1, width))
         y0, y1 = max(0, min(y0, height)), max(0, min(y1, height))
         if x1 <= x0 or y1 <= y0:
-            return frame
+            return frame, 0, 0
         crop = frame[y0:y1, x0:x1]
-        return crop if getattr(crop, "size", 0) else frame
+        return (crop, x0, y0) if getattr(crop, "size", 0) else (frame, 0, 0)
     except Exception:
-        return frame
+        return frame, 0, 0
 
 
 def _detection_group_key(detection: Mapping[str, object]) -> str:
@@ -356,6 +459,36 @@ def _dominant_color_name(frame: Any, center: Any, cv2: Any | None = None) -> str
     except (AttributeError, TypeError, ValueError, IndexError):
         return None
 
+    return _hsv_to_color_name(h, s, v)
+
+
+def _dominant_color_name_for_region(frame: Any, corners: Corners | None, cv2: Any) -> str | None:
+    bbox = _corners_to_bbox(corners)
+    if bbox is None:
+        return None
+    x, y, width, height = bbox
+    try:
+        frame_height, frame_width = frame.shape[:2]
+        x0 = max(0, min(x, frame_width))
+        y0 = max(0, min(y, frame_height))
+        x1 = max(0, min(x + width, frame_width))
+        y1 = max(0, min(y + height, frame_height))
+        if x1 <= x0 or y1 <= y0:
+            return None
+        crop = frame[y0:y1, x0:x1]
+        if getattr(crop, "size", 0) == 0:
+            return None
+        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+        saturated = hsv[(hsv[:, :, 1] >= 90) & (hsv[:, :, 2] >= 55)]
+        if len(saturated) < 12:
+            return None
+        h, s, v = [float(value) for value in saturated.mean(axis=0)]
+    except Exception:
+        return None
+    return _hsv_to_color_name(h, s, v)
+
+
+def _hsv_to_color_name(h: float, s: float, v: float) -> str | None:
     if v < 45:
         return "BLACK"
     if s < 24:
@@ -368,15 +501,27 @@ def _dominant_color_name(frame: Any, center: Any, cv2: Any | None = None) -> str
         return "RED"
     if 18 <= h <= 38:
         return "YELLOW"
-    if 39 <= h <= 88:
+    if 39 <= h <= 96:
         return "GREEN"
-    if 90 <= h <= 130:
+    if 97 <= h <= 130:
         return "BLUE"
     if 131 <= h <= 165:
         return "PURPLE"
     if 11 <= h < 18:
         return "ORANGE"
     return None
+
+
+def _class_with_ocr_semantics(image_class: ImageClassResult | None, ocr: OcrResult) -> ImageClassResult | None:
+    text = ocr.text or ""
+    normalized = text.upper()
+    for keyword, class_name in _SEMANTIC_IMAGE_KEYWORDS:
+        if keyword.upper() in normalized:
+            confidence = ocr.confidence if ocr.confidence is not None else 0.72
+            if confidence > 1.0:
+                confidence = confidence / 100.0
+            return ImageClassResult(class_name, round(max(0.4, min(float(confidence), 0.95)), 3), "ocr_keyword")
+    return image_class
 
 
 def _try_ocr_text(
@@ -421,23 +566,28 @@ def _try_paddle_ocr_text(frame: Any, cv2: Any, *, center: Any = None, corners: A
     if _PADDLE_OCR_UNAVAILABLE:
         return OcrResult(None, None, False)
     try:
-        if _PADDLE_OCR is None:
-            module = importlib.import_module("paddleocr")
-            paddle_ocr = getattr(module, "PaddleOCR")
-            try:
-                _PADDLE_OCR = paddle_ocr(lang="ch", use_angle_cls=False, show_log=False)
-            except TypeError:
-                _PADDLE_OCR = paddle_ocr(lang="ch")
-        roi = _ocr_roi(frame, center=center, corners=corners)
-        roi = _rectify_card_roi(roi, cv2)
-        rgb = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
-        try:
-            result = _PADDLE_OCR.ocr(rgb, cls=False)  # type: ignore[union-attr]
-        except TypeError:
-            result = _PADDLE_OCR.ocr(rgb)  # type: ignore[union-attr]
+        module = importlib.import_module("paddleocr")
+        paddle_ocr = getattr(module, "PaddleOCR")
     except ImportError:
         _PADDLE_OCR_UNAVAILABLE = True
         return OcrResult(None, None, False)
+    try:
+        roi = _ocr_roi(frame, center=center, corners=corners)
+        roi = _rectify_card_roi(roi, cv2)
+        rgb = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
+    except Exception:
+        return OcrResult(None, None, False)
+    try:
+        with _PADDLE_OCR_LOCK:
+            if _PADDLE_OCR is None:
+                try:
+                    _PADDLE_OCR = paddle_ocr(lang="ch", use_angle_cls=False, show_log=False)
+                except TypeError:
+                    _PADDLE_OCR = paddle_ocr(lang="ch")
+            try:
+                result = _PADDLE_OCR.ocr(rgb, cls=False)  # type: ignore[union-attr]
+            except TypeError:
+                result = _PADDLE_OCR.ocr(rgb)  # type: ignore[union-attr]
     except Exception:
         return OcrResult(None, None, False)
     text, confidence = _best_paddle_text(result)
@@ -680,6 +830,55 @@ def _corners_to_json(corners: Corners | None) -> list[list[float]] | None:
     if corners is None:
         return None
     return [[point[0], point[1]] for point in corners]
+
+
+def _bbox_to_corners(bbox: tuple[int, int, int, int]) -> Corners:
+    x, y, width, height = bbox
+    return (
+        (float(x), float(y)),
+        (float(x + width), float(y)),
+        (float(x + width), float(y + height)),
+        (float(x), float(y + height)),
+    )
+
+
+def _corners_to_bbox(corners: Corners | None) -> tuple[int, int, int, int] | None:
+    if corners is None:
+        return None
+    xs = [point[0] for point in corners]
+    ys = [point[1] for point in corners]
+    x0 = int(min(xs))
+    y0 = int(min(ys))
+    x1 = int(max(xs))
+    y1 = int(max(ys))
+    width = x1 - x0
+    height = y1 - y0
+    if width <= 0 or height <= 0:
+        return None
+    return x0, y0, width, height
+
+
+def _bbox_overlaps_any(
+    bbox: tuple[int, int, int, int],
+    others: list[tuple[int, int, int, int]],
+    *,
+    min_iou: float,
+) -> bool:
+    return any(_bbox_iou(bbox, other) >= min_iou for other in others)
+
+
+def _bbox_iou(first: tuple[int, int, int, int], second: tuple[int, int, int, int]) -> float:
+    ax, ay, aw, ah = first
+    bx, by, bw, bh = second
+    ax1, ay1 = ax + aw, ay + ah
+    bx1, by1 = bx + bw, by + bh
+    inter_w = max(0, min(ax1, bx1) - max(ax, bx))
+    inter_h = max(0, min(ay1, by1) - max(ay, by))
+    inter_area = float(inter_w * inter_h)
+    if inter_area <= 0:
+        return 0.0
+    union_area = float(aw * ah + bw * bh) - inter_area
+    return 0.0 if union_area <= 0 else inter_area / union_area
 
 
 def _angle_degrees(corners: Corners | None) -> float | None:

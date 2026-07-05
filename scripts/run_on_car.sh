@@ -23,15 +23,29 @@ esac
 
 ssh "$CAR_HOST" "
 cd '$CAR_DIR'
-PYTHON_CMD=\$(for candidate in .venv/bin/python python3.13 python3.12 python3.11 python3.10 python3 python; do
-  if command -v \"\$candidate\" >/dev/null 2>&1 && \"\$candidate\" -c 'import sys; raise SystemExit(sys.version_info < (3, 10))' >/dev/null 2>&1; then
-    printf '%s' \"\$candidate\"
-    exit 0
-  fi
-done)
+if [ -x .venv/bin/python ] && .venv/bin/python -c 'import sys; raise SystemExit(sys.version_info < (3, 10))' >/dev/null 2>&1; then
+  PYTHON_CMD=\"\$PWD/.venv/bin/python\"
+else
+  PYTHON_CMD=\$(for candidate in python3.13 python3.12 python3.11 python3.10 python3 python; do
+    if command -v \"\$candidate\" >/dev/null 2>&1 && \"\$candidate\" -c 'import sys; raise SystemExit(sys.version_info < (3, 10))' >/dev/null 2>&1; then
+      printf '%s' \"\$candidate\"
+      exit 0
+    fi
+  done)
+fi
 if [ -z \"\$PYTHON_CMD\" ]; then
   echo '未找到可用的 Python 3.10+ 解释器。' >&2
   exit 1
+fi
+if command -v fuser >/dev/null 2>&1; then
+  fuser -k '$PORT'/tcp >/dev/null 2>&1 || true
+  sleep 0.5
+fi
+PYTHON_REAL=\$(\"\$PYTHON_CMD\" -c 'import sys; print(sys.executable)')
+echo \"Using Python: \$PYTHON_REAL\"
+if [ \"\$PYTHON_CMD\" = \"\$PWD/.venv/bin/python\" ]; then
+  export VIRTUAL_ENV=\"\$PWD/.venv\"
+  export PATH=\"\$VIRTUAL_ENV/bin:\$PATH\"
 fi
 if [ '$RUN_MODE' = 'robot' ] && [ -x /home/pi/project_demo/raspbot/killprocess.sh ]; then
   /bin/sh /home/pi/project_demo/raspbot/killprocess.sh || true

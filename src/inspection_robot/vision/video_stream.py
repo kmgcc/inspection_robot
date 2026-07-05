@@ -4,6 +4,7 @@ import base64
 import threading
 import time
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from . import tag_detector
@@ -24,6 +25,35 @@ _LATEST: dict[str, object] = {
     "fps": None,
     "latency_ms": None,
     "updated_at": None,
+}
+_PIL_FONT: Any | None = None
+_PIL_FONT_UNAVAILABLE = False
+_FONT_PATHS = (
+    "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+    "/System/Library/Fonts/PingFang.ttc",
+    "/System/Library/Fonts/STHeiti Light.ttc",
+)
+_COLOR_LABELS_CN = {
+    "BLACK": "黑色",
+    "WHITE": "白色",
+    "GRAY": "灰色",
+    "RED": "红色",
+    "YELLOW": "黄色",
+    "GREEN": "绿色",
+    "BLUE": "蓝色",
+    "PURPLE": "紫色",
+    "ORANGE": "橙色",
+}
+_IMAGE_CLASS_LABELS_CN = {
+    "CUP": "水杯",
+    "BOTTLE": "瓶",
+    "BOX": "盒",
+    "CARD": "卡片",
+    "CYLINDER": "圆柱",
+    "MEDICINE_BOX": "药盒",
+    "BATTERY": "电池",
 }
 
 
@@ -128,17 +158,23 @@ def _draw_detections(frame: Any, detections: list[Mapping[str, object]], cv2: An
                 cv2.line(rendered, point, points[(index + 1) % len(points)], (0, 255, 255), 2)
             label_origin = points[0]
         else:
-            center = detection.get("center")
-            if not isinstance(center, list) or len(center) < 2:
-                continue
-            label_origin = (int(float(center[0])), int(float(center[1])))
-            cv2.circle(rendered, label_origin, 8, (0, 255, 255), 2)
-        label = f"{detection.get('tag_id', '-')}"
-        if detection.get("ocr_text"):
-            label = f"{label} {detection['ocr_text']}"
-        label_y = max(18, label_origin[1] - 8)
-        cv2.putText(rendered, label, (label_origin[0], label_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (20, 20, 20), 3, cv2.LINE_AA)
-        cv2.putText(rendered, label, (label_origin[0], label_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
+            bbox = _detection_bbox(detection)
+            if bbox is not None:
+                x, y, width, height = bbox
+                cv2.rectangle(rendered, (x, y), (x + width, y + height), (0, 255, 255), 2)
+                label_origin = (x, y)
+            else:
+                center = detection.get("center")
+                if not isinstance(center, list) or len(center) < 2:
+                    continue
+                label_origin = (int(float(center[0])), int(float(center[1])))
+                cv2.circle(rendered, label_origin, 8, (0, 255, 255), 2)
+        label_lines = _detection_label_lines(detection)
+        if not label_lines:
+            continue
+        x = max(4, min(label_origin[0], rendered.shape[1] - 120))
+        y = max(18, label_origin[1] - 8)
+        rendered = _draw_label_lines(rendered, label_lines, (x, y), cv2)
     return rendered
 
 
@@ -155,6 +191,112 @@ def _detection_points(detection: Mapping[str, object]) -> list[tuple[int, int]]:
         except (TypeError, ValueError):
             return []
     return points
+
+
+def _detection_bbox(detection: Mapping[str, object]) -> tuple[int, int, int, int] | None:
+    bbox = detection.get("bbox")
+    if not isinstance(bbox, list) or len(bbox) != 4:
+        return None
+    try:
+        x, y, width, height = [int(float(value)) for value in bbox]
+    except (TypeError, ValueError):
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return x, y, width, height
+
+
+def _detection_label_lines(detection: Mapping[str, object]) -> list[str]:
+    tag_id = detection.get("tag_id")
+    source = detection.get("source")
+    first = f"TAG {tag_id}" if tag_id not in (None, "") else "OBJECT"
+    if source:
+        first = f"{first} {source}"
+    lines = [first]
+    ocr_text = detection.get("ocr_text")
+    color = detection.get("color")
+    image_class = detection.get("image_class")
+    if ocr_text:
+        prefix = "文字" if _contains_non_ascii(str(ocr_text)) else "OCR"
+        lines.append(f"{prefix} {ocr_text}")
+    if color or image_class:
+        use_chinese = _contains_non_ascii(str(ocr_text or ""))
+        parts = []
+        if color:
+            parts.append(f"颜色 {_COLOR_LABELS_CN.get(str(color), str(color))}" if use_chinese else f"COLOR {color}")
+        if image_class:
+            parts.append(
+                f"图像 {_IMAGE_CLASS_LABELS_CN.get(str(image_class), str(image_class))}"
+                if use_chinese
+                else f"IMG {image_class}"
+            )
+        lines.append(" ".join(parts))
+    return lines
+
+
+def _draw_label_lines(frame: Any, lines: list[str], origin: tuple[int, int], cv2: Any) -> Any:
+    x, y = origin
+    for line in lines:
+        if _contains_non_ascii(line):
+            rendered = _draw_label_lines_with_pil(frame, [line], (x, y), cv2)
+            if rendered is not None:
+                frame = rendered
+            else:
+                cv2.putText(frame, line, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (20, 20, 20), 3, cv2.LINE_AA)
+                cv2.putText(frame, line, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
+        else:
+            cv2.putText(frame, line, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (20, 20, 20), 3, cv2.LINE_AA)
+            cv2.putText(frame, line, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
+        y += 18
+    return frame
+
+
+def _draw_label_lines_with_pil(frame: Any, lines: list[str], origin: tuple[int, int], cv2: Any) -> Any | None:
+    font = _load_pil_font()
+    if font is None:
+        return None
+    try:
+        from PIL import Image, ImageDraw
+
+        image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        draw = ImageDraw.Draw(image)
+        x, y = origin
+        for line in lines:
+            draw.text((x, y - 14), line, font=font, fill=(255, 230, 0), stroke_width=2, stroke_fill=(20, 20, 20))
+            y += 19
+        return cv2.cvtColor(_pil_to_array(image), cv2.COLOR_RGB2BGR)
+    except Exception:
+        return None
+
+
+def _load_pil_font() -> Any | None:
+    global _PIL_FONT, _PIL_FONT_UNAVAILABLE
+    if _PIL_FONT is not None:
+        return _PIL_FONT
+    if _PIL_FONT_UNAVAILABLE:
+        return None
+    try:
+        from PIL import ImageFont
+
+        for font_path in _FONT_PATHS:
+            if Path(font_path).exists():
+                _PIL_FONT = ImageFont.truetype(font_path, 16)
+                return _PIL_FONT
+        _PIL_FONT = ImageFont.load_default()
+        return _PIL_FONT
+    except Exception:
+        _PIL_FONT_UNAVAILABLE = True
+        return None
+
+
+def _pil_to_array(image: Any) -> Any:
+    import numpy as np
+
+    return np.asarray(image)
+
+
+def _contains_non_ascii(value: str) -> bool:
+    return any(ord(char) > 127 for char in value)
 
 
 def _json_safe(value: object) -> object:
