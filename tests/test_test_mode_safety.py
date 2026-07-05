@@ -61,8 +61,9 @@ class TestModeSafetyTest(unittest.TestCase):
 
         self.assertEqual(guard.recalibrate_calls, 1)
         self.assertGreaterEqual(guard.reset_count, 1)
-        self.assertIn("rotate_right", motion.calls)
-        self.assertIn("move_forward", motion.calls)
+        self.assertIn("move_forward_corrected:right", motion.calls)
+        self.assertNotIn("rotate_left", motion.calls)
+        self.assertNotIn("rotate_right", motion.calls)
 
 
 class FakeMotion:
@@ -71,6 +72,16 @@ class FakeMotion:
 
     def move_forward_slow(self, *, speed: int, duration_seconds: float) -> None:
         self.calls.append("move_forward")
+
+    def move_forward_corrected_slow(
+        self,
+        *,
+        speed: int,
+        correction: int,
+        direction: str,
+        duration_seconds: float,
+    ) -> None:
+        self.calls.append(f"move_forward_corrected:{direction}")
 
     def strafe_left_slow(self, *, speed: int, duration_seconds: float) -> None:
         self.calls.append("strafe_left")

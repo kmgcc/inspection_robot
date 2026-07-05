@@ -86,6 +86,31 @@ class RobotAdapterTest(unittest.TestCase):
         self.assertEqual(fake.bot.calls.count(("muto", 0, 0)), 2)
         self.assertEqual(fake.bot.calls.count(("car", 3, 0, 0)), 2)
 
+    def test_motion_forward_corrected_steers_right_with_left_wheels_faster(self) -> None:
+        fake = FakeMotionModule()
+        fake.bot = FakeMotionBot()
+        original = motion._motion_module
+        original_repeat = motion.COMMAND_REPEAT
+        motion._motion_module = lambda: fake  # type: ignore[assignment]
+        motion.COMMAND_REPEAT = 1
+        motion.clear_stop()
+        try:
+            motion.move_forward_corrected_slow(speed=30, correction=4, direction="right", duration_seconds=0)
+        finally:
+            motion.clear_stop()
+            motion._motion_module = original
+            motion.COMMAND_REPEAT = original_repeat
+
+        self.assertEqual(
+            fake.bot.calls,
+            [
+                ("muto", 0, 34),
+                ("muto", 1, 34),
+                ("muto", 2, 26),
+                ("muto", 3, 26),
+            ],
+        )
+
     def test_sensors_normalize_tape_state_and_direction_flags(self) -> None:
         self.assertEqual(sensors.normalize_tape_state([1, 0, 1, 0]), (1, 0, 1, 0))
         self.assertEqual(sensors.normalize_tape_state([0b1010]), (0, 1, 1, 0))

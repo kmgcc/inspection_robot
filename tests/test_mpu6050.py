@@ -252,9 +252,9 @@ class MPU6050Test(unittest.TestCase):
         self.assertEqual(first["yaw"], 0.0)
         self.assertEqual(second["yaw"], 90.0)
 
-    def test_default_yaw_sign_treats_negative_z_as_left_turn(self) -> None:
+    def test_default_yaw_sign_treats_positive_z_as_left_turn(self) -> None:
         accel = {"x": 0.0, "y": 0.0, "z": mpu6050.GRAVITY_MPS2}
-        gyro = {"x": 0.0, "y": 0.0, "z": -45.0}
+        gyro = {"x": 0.0, "y": 0.0, "z": 45.0}
         original_sign = os.environ.get("MPU6050_YAW_SIGN")
         os.environ.pop("MPU6050_YAW_SIGN", None)
         mpu6050._reset_orientation_state()

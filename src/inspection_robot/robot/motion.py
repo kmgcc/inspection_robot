@@ -18,6 +18,7 @@ COMMAND_REPEAT_GAP_SECONDS = float(os.environ.get("ROBOT_COMMAND_REPEAT_GAP_SECO
 STOP_POLL_SECONDS = float(os.environ.get("ROBOT_STOP_POLL_SECONDS", "0.01"))
 STOP_REPEAT = max(1, int(os.environ.get("ROBOT_STOP_REPEAT", "8")))
 STOP_REPEAT_GAP_SECONDS = float(os.environ.get("ROBOT_STOP_REPEAT_GAP_SECONDS", "0.08"))
+FORWARD_MOTOR_SIGNS = os.environ.get("ROBOT_FORWARD_MOTOR_SIGNS", "1,1,1,1")
 VENDOR_MOTION_PATHS = (
     Path("/home/pi/project_demo/lib"),
     Path("/home/pi/project_demo/04.Car_motion_control"),
@@ -28,6 +29,16 @@ _MOTION_LOCK = threading.RLock()
 
 def move_forward_slow(speed: int | None = None, duration_seconds: float | None = None) -> None:
     _call_motion("move_forward", speed, duration_seconds)
+
+
+def move_forward_corrected_slow(
+    *,
+    speed: int | None = None,
+    correction: int = 0,
+    direction: str = "right",
+    duration_seconds: float | None = None,
+) -> None:
+    _call_forward_corrected(speed, correction, direction, duration_seconds)
 
 
 def move_backward_slow(speed: int | None = None, duration_seconds: float | None = None) -> None:
@@ -107,11 +118,79 @@ def _call_motion(name: str, speed: int | None, duration_seconds: float | None) -
             _stop_quietly()
 
 
+def _call_forward_corrected(
+    speed: int | None,
+    correction: int,
+    direction: str,
+    duration_seconds: float | None,
+) -> None:
+    if _ABORT.is_set():
+        _stop_quietly()
+        return
+    base_speed = _speed(speed)
+    correction_speed = max(0, min(int(correction), base_speed))
+    normalized_direction = str(direction).strip().lower()
+    if correction_speed <= 0 or normalized_direction not in {"left", "right"}:
+        _call_motion("move_forward", base_speed, duration_seconds)
+        return
+    with _MOTION_LOCK:
+        if _ABORT.is_set():
+            _stop_quietly()
+            return
+        module = _motion_module()
+        bot = getattr(module, "bot", None)
+        ctrl_muto = getattr(bot, "Ctrl_Muto", None)
+        if not callable(ctrl_muto):
+            _call_motion("move_forward", base_speed, duration_seconds)
+            return
+        left_speed = base_speed
+        right_speed = base_speed
+        if normalized_direction == "right":
+            left_speed = min(100, base_speed + correction_speed)
+            right_speed = max(0, base_speed - correction_speed)
+        else:
+            left_speed = max(0, base_speed - correction_speed)
+            right_speed = min(100, base_speed + correction_speed)
+        wheel_speeds = (left_speed, left_speed, right_speed, right_speed)
+        signs = _forward_motor_signs()
+        for index in range(COMMAND_REPEAT):
+            if _ABORT.is_set():
+                _stop_quietly()
+                return
+            for motor_id, wheel_speed in enumerate(wheel_speeds):
+                ctrl_muto(motor_id, _signed_speed(wheel_speed, signs[motor_id]))
+            if index < COMMAND_REPEAT - 1:
+                _interruptible_sleep(max(0.0, COMMAND_REPEAT_GAP_SECONDS))
+        _interruptible_sleep(_duration(duration_seconds))
+        if _ABORT.is_set():
+            _stop_quietly()
+
+
 def _speed(speed: int | None) -> int:
     value = DEFAULT_SPEED if speed is None else int(speed)
     if value <= 0:
         return 0
     return max(MIN_RUNNING_SPEED, min(value, 100))
+
+
+def _signed_speed(speed: int, sign: int) -> int:
+    value = _speed(speed)
+    if value == 0:
+        return 0
+    return value if sign >= 0 else -value
+
+
+def _forward_motor_signs() -> tuple[int, int, int, int]:
+    raw_values = [part.strip() for part in FORWARD_MOTOR_SIGNS.replace(";", ",").split(",")]
+    signs: list[int] = []
+    for raw in raw_values[:4]:
+        try:
+            signs.append(1 if int(raw) >= 0 else -1)
+        except ValueError:
+            signs.append(1)
+    while len(signs) < 4:
+        signs.append(1)
+    return tuple(signs)  # type: ignore[return-value]
 
 
 def _duration(duration_seconds: float | None) -> float:

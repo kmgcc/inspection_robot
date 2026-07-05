@@ -16,7 +16,7 @@ from .core.planner import PlanningError, RouteStep, plan_patrol_route
 from .core.events import EventRecord
 from .core.store import InspectionStore
 from .robot import alarm, gimbal, motion, mpu6050, sensors
-from .robot.heading_hold import HeadingHoldSettings, apply_heading_hold
+from .robot.heading_hold import HeadingHoldCorrection, HeadingHoldSettings, compute_heading_hold_correction
 from .robot.line_following import decide_line_follow_motion
 from .robot.sensors import RobotHardwareError
 from .vision import tag_detector
@@ -107,14 +107,15 @@ class RobotRuntimeConfig:
     object_slow_speed: int = field(default_factory=lambda: _env_int(12, "OBJECT_SLOW_SPEED"))
     object_settle_seconds: float = field(default_factory=lambda: _env_float(0.2, "OBJECT_SETTLE_SECONDS"))
     heading_hold_enabled: bool = field(default_factory=lambda: _env_bool("HEADING_HOLD_ENABLED", True))
-    heading_hold_tolerance_deg: float = field(default_factory=lambda: _env_float(3.0, "HEADING_HOLD_TOLERANCE_DEG"))
+    heading_hold_tolerance_deg: float = field(default_factory=lambda: _env_float(1.0, "HEADING_HOLD_TOLERANCE_DEG"))
     heading_hold_gain: float = field(default_factory=lambda: _env_float(0.012, "HEADING_HOLD_GAIN"))
     heading_hold_min_pulse_seconds: float = field(default_factory=lambda: _env_float(0.025, "HEADING_HOLD_MIN_PULSE_SECONDS"))
     heading_hold_max_pulse_seconds: float = field(default_factory=lambda: _env_float(0.10, "HEADING_HOLD_MAX_PULSE_SECONDS"))
     heading_hold_correction_speed: int = field(default_factory=lambda: _env_int(20, "HEADING_HOLD_CORRECTION_SPEED"))
-    heading_hold_invert: bool = field(default_factory=lambda: _env_bool("HEADING_HOLD_INVERT", True))
-    heading_hold_rate_damping: float = field(default_factory=lambda: _env_float(0.03, "HEADING_HOLD_KD", "HEADING_HOLD_RATE_DAMPING"))
-    heading_hold_min_sample_interval_seconds: float = field(default_factory=lambda: _env_float(0.08, "HEADING_HOLD_MIN_SAMPLE_INTERVAL_SECONDS"))
+    heading_hold_invert: bool = field(default_factory=lambda: _env_bool("HEADING_HOLD_INVERT", False))
+    heading_hold_rate_damping: float = field(default_factory=lambda: _env_float(0.08, "HEADING_HOLD_KD", "HEADING_HOLD_RATE_DAMPING"))
+    heading_hold_speed_gain: float = field(default_factory=lambda: _env_float(1.2, "HEADING_HOLD_SPEED_GAIN"))
+    heading_hold_min_sample_interval_seconds: float = field(default_factory=lambda: _env_float(0.03, "HEADING_HOLD_MIN_SAMPLE_INTERVAL_SECONDS"))
     heading_hold_min_interval_seconds: float = field(default_factory=lambda: _env_float(0.25, "HEADING_HOLD_MIN_INTERVAL_SECONDS"))
     heading_hold_max_consecutive: int = field(default_factory=lambda: _env_int(2, "HEADING_HOLD_MAX_CONSECUTIVE"))
     heading_hold_confirm_samples: int = field(default_factory=lambda: _env_int(1, "HEADING_HOLD_CONFIRM_SAMPLES"))
@@ -122,7 +123,7 @@ class RobotRuntimeConfig:
     heading_zupt_samples: int = field(default_factory=lambda: _env_int(15, "HEADING_ZUPT_SAMPLES"))
     heading_zupt_sample_seconds: float = field(default_factory=lambda: _env_float(0.005, "HEADING_ZUPT_SAMPLE_SECONDS"))
     smooth_cruise_enabled: bool = field(default_factory=lambda: _env_bool("SMOOTH_CRUISE_ENABLED", False))
-    cruise_speed: int = field(default_factory=lambda: _env_int(8, "CRUISE_SPEED", "SMOOTH_CRUISE_SPEED"))
+    cruise_speed: int = field(default_factory=lambda: _env_int(30, "CRUISE_SPEED", "SMOOTH_CRUISE_SPEED"))
     cruise_tick_seconds: float = field(default_factory=lambda: _env_float(0.05, "CRUISE_TICK_SECONDS"))
     cruise_log_interval_seconds: float = field(default_factory=lambda: _env_float(1.0, "CRUISE_LOG_INTERVAL_SECONDS"))
     cruise_vision_enabled: bool = field(default_factory=lambda: _env_bool("CRUISE_VISION_ENABLED", False))
@@ -685,23 +686,16 @@ class RobotRuntime:
         )
 
     def _drive_cruise_step(self, tape_state: tuple[int, int, int, int] | None) -> None:
-        """One tick of the low-speed constant-velocity cruise.
+        """One tick of constant-velocity cruise.
 
         Unlike the short-step patrol, the motor is never stopped between ticks:
-        we correct heading (a brief micro-pulse only when needed) and then keep
-        driving forward, so the car glides at the lowest stable speed instead of
-        lurching stop-go-stop. Boundary latching still runs inside the slice.
-
-        Heading hold is applied once at the top of the tick — if it fires, it
-        has already stop+rotate+stop+reset internally, so the subsequent
-        ``move_forward`` rewrites all four wheels cleanly. The deadband case
-        (deviation within tolerance) issues no ``rotate_*`` at all, which is
-        what keeps the car going straight on the straight stretches.
+        heading correction is folded into the forward wheel speeds, so the car
+        can pull back toward straight without stop-rotate-stop pulses.
         """
 
         if self._manual_override.is_set():
             return
-        self._apply_heading_hold()
+        correction = self._heading_hold_correction()
         if self._stop_event.is_set() or self._manual_override.is_set():
             self.motion.stop()
             return
@@ -725,18 +719,22 @@ class RobotRuntime:
                 },
             )
         self._run_timed_motion(
-            self.motion.move_forward_slow,
+            self._forward_mover_for_correction(correction),
             speed=self.config.cruise_speed,
             duration_seconds=self.config.cruise_tick_seconds,
             watch_boundary=True,
             heading_hold=False,
             keep_running=True,
         )
+        if correction is not None:
+            self._record_heading_hold_correction(correction, speed=self.config.cruise_speed)
         self._log_motion_command(
             "cruise",
-            "move_forward",
+            "move_forward_corrected" if correction is not None else "move_forward",
             speed=self.config.cruise_speed,
             duration_seconds=self.config.cruise_tick_seconds,
+            correction=correction.correction_speed if correction is not None else 0,
+            direction=correction.direction if correction is not None else None,
         )
 
     def _drive_line_follow_step(self, tape_state: tuple[int, int, int, int] | None) -> None:
@@ -912,9 +910,12 @@ class RobotRuntime:
         duration = max(0.0, float(duration_seconds))
         guard_interval = max(0.0, float(self.config.motion_guard_poll_seconds)) if watch_boundary else 0.0
         if duration <= 0.0 or guard_interval <= 0.0 or duration <= guard_interval:
+            correction = None
             if heading_hold and watch_boundary:
-                self._apply_heading_hold()
-            mover(speed=speed, duration_seconds=duration)
+                correction = self._heading_hold_correction()
+            self._call_mover_with_correction(mover, speed=speed, duration_seconds=duration, correction=correction)
+            if correction is not None:
+                self._record_heading_hold_correction(correction, speed=speed)
             latched = self._poll_boundary_during_motion(duration) if watch_boundary else False
             if not keep_running or latched:
                 self.motion.stop()
@@ -925,11 +926,14 @@ class RobotRuntime:
         latched = False
         while remaining > 0 and not self._stop_event.is_set() and not self._manual_override.is_set():
             chunk = min(remaining, guard_interval)
+            correction = None
             if heading_hold and watch_boundary:
-                self._apply_heading_hold()
+                correction = self._heading_hold_correction()
                 if self._stop_event.is_set() or self._manual_override.is_set():
                     break
-            mover(speed=speed, duration_seconds=chunk)
+            self._call_mover_with_correction(mover, speed=speed, duration_seconds=chunk, correction=correction)
+            if correction is not None:
+                self._record_heading_hold_correction(correction, speed=speed)
             elapsed += chunk
             remaining -= chunk
             if watch_boundary and self._poll_boundary_during_motion(elapsed):
@@ -1655,89 +1659,122 @@ class RobotRuntime:
             self._heading_guard = None
         return self._heading_guard
 
-    def _apply_heading_hold(self) -> None:
+    def _heading_hold_settings(self) -> HeadingHoldSettings:
+        return HeadingHoldSettings(
+            enabled=self.config.heading_hold_enabled,
+            tolerance_degrees=self.config.heading_hold_tolerance_deg,
+            gain=self.config.heading_hold_gain,
+            min_pulse_seconds=self.config.heading_hold_min_pulse_seconds,
+            max_pulse_seconds=self.config.heading_hold_max_pulse_seconds,
+            correction_speed=self.config.heading_hold_correction_speed,
+            fallback_speed=self.config.turn_speed,
+            invert=self.config.heading_hold_invert,
+            rate_damping=self.config.heading_hold_rate_damping,
+            speed_gain=self.config.heading_hold_speed_gain,
+        )
+
+    def _heading_hold_correction(self) -> HeadingHoldCorrection | None:
         guard = self._heading_guard_instance()
         if guard is None or self._stop_event.is_set() or self._manual_override.is_set():
-            return
-        # R4: sample freshness gate. If the guard hasn't produced a new sample
-        # since the last correction (I2C jitter returning the same rate, or a
-        # very fast tick), the integrator hasn't actually integrated anything
-        # new — issuing another pulse would be chasing a stale deviation.
+            return None
         now = time.monotonic()
         last_sample = getattr(guard, "last_sample_at", None)
         if last_sample is not None:
             min_sample_interval = max(0.0, float(self.config.heading_hold_min_sample_interval_seconds))
             if now - float(last_sample) < min_sample_interval:
-                return
+                return None
         updater = getattr(guard, "update", None)
         if not callable(updater):
-            return
+            return None
         try:
             deviation = float(updater())
         except (RobotHardwareError, OSError, AttributeError, TypeError, ValueError):
             self._heading_guard = None
-            return
+            return None
         tolerance = max(0.0, float(self.config.heading_hold_tolerance_deg))
         if abs(deviation) <= tolerance:
             self._heading_consecutive_count = 0
             self._heading_over_tolerance_count = 0
-            return
+            return None
         self._heading_over_tolerance_count += 1
         confirm_samples = max(1, int(self.config.heading_hold_confirm_samples))
         if self._heading_over_tolerance_count < confirm_samples:
-            return
-        min_interval = max(0.0, float(self.config.heading_hold_min_interval_seconds))
-        if now - self._last_heading_correction_at < min_interval:
-            return
-        max_consecutive = max(0, int(self.config.heading_hold_max_consecutive))
-        if max_consecutive > 0 and self._heading_consecutive_count >= max_consecutive:
-            return
+            return None
         try:
-            pulse = apply_heading_hold(
+            correction = compute_heading_hold_correction(
                 guard,
-                self.motion,
-                HeadingHoldSettings(
-                    enabled=self.config.heading_hold_enabled,
-                    tolerance_degrees=self.config.heading_hold_tolerance_deg,
-                    gain=self.config.heading_hold_gain,
-                    min_pulse_seconds=self.config.heading_hold_min_pulse_seconds,
-                    max_pulse_seconds=self.config.heading_hold_max_pulse_seconds,
-                    correction_speed=self.config.heading_hold_correction_speed,
-                    fallback_speed=self.config.turn_speed,
-                    invert=self.config.heading_hold_invert,
-                    rate_damping=self.config.heading_hold_rate_damping,
-                ),
+                self._heading_hold_settings(),
                 stop_requested=lambda: self._stop_event.is_set() or self._manual_override.is_set(),
                 deviation_degrees=deviation,
             )
         except (RobotHardwareError, OSError, AttributeError, TypeError, ValueError):
             self._heading_guard = None
-            return
-        if pulse is None:
-            return
-        self._log_motion_command(
-            "heading_hold",
-            f"rotate_{pulse.direction}",
-            speed=pulse.speed,
-            duration_seconds=pulse.pulse_seconds,
-            deviation=round(pulse.deviation_degrees, 3),
-            rate=round(pulse.rate_dps, 3),
-            effective=round(pulse.effective_degrees, 3),
-            fresh_sample=True,
-        )
+            return None
+        if correction is None:
+            return None
         self._last_heading_correction_at = now
         self._heading_consecutive_count += 1
         self._heading_over_tolerance_count = 0
+        return correction
+
+    def _forward_mover_for_correction(self, correction: HeadingHoldCorrection | None) -> Callable[..., None]:
+        if correction is None:
+            return self.motion.move_forward_slow
+        corrected = getattr(self.motion, "move_forward_corrected_slow", None)
+        if not callable(corrected):
+            return self.motion.move_forward_slow
+
+        def mover(*, speed: int, duration_seconds: float) -> None:
+            corrected(
+                speed=speed,
+                correction=correction.correction_speed,
+                direction=correction.direction,
+                duration_seconds=duration_seconds,
+            )
+
+        return mover
+
+    def _call_mover_with_correction(
+        self,
+        mover: Callable[..., None],
+        *,
+        speed: int,
+        duration_seconds: float,
+        correction: HeadingHoldCorrection | None,
+    ) -> None:
+        if correction is not None and getattr(mover, "__name__", "") == "move_forward_slow":
+            self._forward_mover_for_correction(correction)(speed=speed, duration_seconds=duration_seconds)
+            return
+        mover(speed=speed, duration_seconds=duration_seconds)
+
+    def _apply_heading_hold(self) -> None:
+        correction = self._heading_hold_correction()
+        if correction is None:
+            return
+        self._forward_mover_for_correction(correction)(speed=self.config.cruise_speed, duration_seconds=0.0)
+        self._record_heading_hold_correction(correction, speed=self.config.cruise_speed)
+
+    def _record_heading_hold_correction(self, correction: HeadingHoldCorrection, *, speed: int) -> None:
+        self._log_motion_command(
+            "heading_hold",
+            "move_forward_corrected",
+            speed=speed,
+            correction=correction.correction_speed,
+            direction=correction.direction,
+            deviation=round(correction.deviation_degrees, 3),
+            rate=round(correction.rate_dps, 3),
+            effective=round(correction.effective_degrees, 3),
+            fresh_sample=True,
+        )
         self.store.record_motion_debug(
             "heading_hold_correction",
-            "heading hold correction pulse applied.",
+            "heading hold forward wheel-speed correction applied.",
             evidence={
-                "deviation_degrees": round(pulse.deviation_degrees, 3),
-                "rate_dps": round(pulse.rate_dps, 3),
-                "effective_degrees": round(pulse.effective_degrees, 3),
-                "direction": pulse.direction,
-                "pulse_seconds": round(pulse.pulse_seconds, 3),
-                "speed": pulse.speed,
+                "deviation_degrees": round(correction.deviation_degrees, 3),
+                "rate_dps": round(correction.rate_dps, 3),
+                "effective_degrees": round(correction.effective_degrees, 3),
+                "direction": correction.direction,
+                "correction_speed": correction.correction_speed,
                 "consecutive_count": self._heading_consecutive_count,
             },
         )

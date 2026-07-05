@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from .robot import motion, mpu6050, sensors
-from .robot.heading_hold import HeadingHoldSettings, apply_heading_hold
+from .robot.heading_hold import HeadingHoldSettings, compute_heading_hold_correction
 from .robot.line_following import decide_line_follow_motion, describe_tape
 from .robot.sensors import RobotHardwareError
 
@@ -387,17 +387,17 @@ class TestSessionManager:
         duration = max(0.0, float(duration_seconds))
         slice_seconds = max(0.0, _env_float("MOTION_GUARD_POLL_SECONDS", 0.02))
         if duration <= 0.0 or slice_seconds <= 0.0 or duration <= slice_seconds:
-            self._apply_heading_hold(speed)
-            mover(speed=speed, duration_seconds=duration)
+            current_mover = self._mover_with_heading_hold(mover, speed)
+            current_mover(speed=speed, duration_seconds=duration)
             return
 
         remaining = duration
         while remaining > 0 and not self._stop_event.is_set():
             chunk = min(remaining, slice_seconds)
-            self._apply_heading_hold(speed)
+            current_mover = self._mover_with_heading_hold(mover, speed)
             if self._stop_event.is_set():
                 break
-            mover(speed=speed, duration_seconds=chunk)
+            current_mover(speed=speed, duration_seconds=chunk)
             remaining -= chunk
 
     def _prepare_heading_guard_for_straight(self) -> None:
@@ -432,29 +432,48 @@ class TestSessionManager:
             self._heading_guard = None
         return self._heading_guard
 
-    def _apply_heading_hold(self, speed: int) -> None:
+    def _mover_with_heading_hold(self, mover: Any, speed: int) -> Any:
+        correction = self._heading_hold_correction(speed)
+        if correction is None or getattr(mover, "__name__", "") != "move_forward_slow":
+            return mover
+        corrected = getattr(self._motion, "move_forward_corrected_slow", None)
+        if not callable(corrected):
+            return mover
+
+        def corrected_mover(*, speed: int, duration_seconds: float) -> None:
+            corrected(
+                speed=speed,
+                correction=correction.correction_speed,
+                direction=correction.direction,
+                duration_seconds=duration_seconds,
+            )
+
+        return corrected_mover
+
+    def _heading_hold_correction(self, speed: int) -> Any | None:
         guard = self._heading_guard_instance()
         if guard is None:
-            return
+            return None
         try:
-            apply_heading_hold(
+            return compute_heading_hold_correction(
                 guard,
-                self._motion,
                 HeadingHoldSettings(
                     enabled=_env_bool("HEADING_HOLD_ENABLED", True),
-                    tolerance_degrees=_env_float("HEADING_HOLD_TOLERANCE_DEG", 3.0),
+                    tolerance_degrees=_env_float("HEADING_HOLD_TOLERANCE_DEG", 1.0),
                     gain=_env_float("HEADING_HOLD_GAIN", 0.02),
                     min_pulse_seconds=_env_float("HEADING_HOLD_MIN_PULSE_SECONDS", 0.03),
                     max_pulse_seconds=_env_float("HEADING_HOLD_MAX_PULSE_SECONDS", 0.12),
                     correction_speed=_env_optional_int("HEADING_HOLD_CORRECTION_SPEED"),
                     fallback_speed=speed,
                     invert=_env_bool("HEADING_HOLD_INVERT", False),
-                    rate_damping=_env_float("HEADING_HOLD_KD", _env_float("HEADING_HOLD_RATE_DAMPING", 0.02)),
+                    rate_damping=_env_float("HEADING_HOLD_KD", _env_float("HEADING_HOLD_RATE_DAMPING", 0.08)),
+                    speed_gain=_env_float("HEADING_HOLD_SPEED_GAIN", 1.2),
                 ),
                 stop_requested=self._stop_event.is_set,
             )
         except (RobotHardwareError, OSError, AttributeError, TypeError, ValueError):
             self._heading_guard = None
+            return None
 
     def _turn_worker(self, direction: str, speed: int, duration_seconds: float) -> None:
         try:

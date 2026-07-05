@@ -111,17 +111,18 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(config.object_detector, "opencv")
         self.assertEqual(config.object_presence_confirm_frames, 1)
         self.assertTrue(config.heading_hold_enabled)
-        self.assertEqual(config.heading_hold_tolerance_deg, 3.0)
+        self.assertEqual(config.heading_hold_tolerance_deg, 1.0)
         self.assertEqual(config.heading_hold_gain, 0.012)
         self.assertEqual(config.heading_hold_min_pulse_seconds, 0.025)
         self.assertEqual(config.heading_hold_max_pulse_seconds, 0.10)
         self.assertEqual(config.heading_hold_correction_speed, 20)
-        self.assertTrue(config.heading_hold_invert)
+        self.assertFalse(config.heading_hold_invert)
+        self.assertEqual(config.heading_hold_speed_gain, 1.2)
         self.assertEqual(config.heading_hold_min_interval_seconds, 0.25)
         self.assertEqual(config.heading_hold_max_consecutive, 2)
         self.assertEqual(config.heading_hold_confirm_samples, 1)
         self.assertFalse(config.cruise_vision_enabled)
-        self.assertEqual(config.cruise_speed, 8)
+        self.assertEqual(config.cruise_speed, 30)
         self.assertFalse(config.line_follow_enabled)
         self.assertFalse(config.line_follow_auto_enter)
         self.assertEqual(config.line_follow_speed, 30)
@@ -411,7 +412,7 @@ class RuntimeTest(unittest.TestCase):
 
         self.assertFalse(runtime._feed_boundary_window((1, 1, 1, 1)))
 
-    def test_heading_hold_inserts_reverse_correction_pulse(self) -> None:
+    def test_heading_hold_inserts_forward_speed_correction(self) -> None:
         store = self.make_store()
         fake_motion = FakeMotion()
         runtime = RobotRuntime(
@@ -437,8 +438,9 @@ class RuntimeTest(unittest.TestCase):
 
         runtime._forward_step(speed=20, duration_seconds=0)
 
-        self.assertIn("rotate_left", fake_motion.calls)
-        self.assertIn("move_forward", fake_motion.calls)
+        self.assertIn("move_forward_corrected:right", fake_motion.calls)
+        self.assertNotIn("rotate_left", fake_motion.calls)
+        self.assertNotIn("rotate_right", fake_motion.calls)
 
     def test_continuous_patrol_ignores_three_black_boundary_by_default(self) -> None:
         store = self.make_store()
@@ -839,6 +841,9 @@ class FakeMotion:
 
     def move_forward_slow(self, **_: object) -> None:
         self.calls.append("move_forward")
+
+    def move_forward_corrected_slow(self, **kwargs: object) -> None:
+        self.calls.append(f"move_forward_corrected:{kwargs.get('direction')}")
 
     def move_backward_slow(self, **_: object) -> None:
         self.calls.append("move_backward")
