@@ -41,7 +41,7 @@
 - [ ] 记录树莓派真实可接受的视频分辨率、FPS、延迟和 CPU 占用。
 - [ ] 开启 `VISION_STABILITY_ENABLED=1` 后，低速移动不会频繁误判为新目标。
 - [ ] 开启 `IMAGE_CLASSIFIER_ENABLED=1` 后，用现场卡片/物品照片确认不会误触发大量 `evidence_mismatch`。
-- [ ] 缺货时红灯和 TTS 均触发；若车上没有 TTS 命令，按日志安装 `espeak-ng`、`espeak` 或 `spd-say` 后复测。
+- [ ] 缺货时红灯和 TTS 均触发；小车无外网时先在电脑下载并拷贝离线中文 TTS 到车上，优先用 `ekho`，或安装 `piper` 并配置中文模型路径 `ROBOT_PIPER_MODEL` 后复测。不要用 `espeak`/`spd-say` 验证中文，它们会把中文读成不可懂音素。
 - [ ] 连续扫描无货架时网页出现待确认事件，调用 `/api/cycle/confirm` 后轮次进入下一轮。
 - [ ] 高速压到四路全黑时立即停车并执行列端转向，不再越过边界。
 - [ ] 禁区/障碍绕行每段距离比旧参数更短，仍能绕过并回到巡逻方向。

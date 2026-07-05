@@ -242,6 +242,27 @@ aplay /home/pi/temp/inspection_robot/src/inspection_robot/static/audio/following
 
 能在 VNC 终端出声后，网页按钮也应能正常触发同一份音频。
 
+### 离线中文语音播报
+
+小车运行时默认没有外网，动态中文播报不能依赖在线 TTS。代码会优先使用离线 `ekho`，其次使用已配置中文模型的 `piper`。`edge-tts` 只适合电脑本地调试或预生成音频，除非显式设置 `ROBOT_ALLOW_ONLINE_TTS=1`，否则小车端不会自动调用它。
+
+推荐优先安装 `ekho`，流程是先在有网络的电脑上下载 ARM64/Raspberry Pi OS 可用的 `.deb` 包及依赖，再传到小车：
+
+```bash
+scp ekho*.deb pi@192.168.1.11:/home/pi/temp/
+ssh pi@192.168.1.11
+sudo apt install /home/pi/temp/ekho*.deb
+```
+
+如果选择 `piper`，需要同时拷贝 `piper` 可执行文件和中文模型文件到小车，并在启动前设置模型路径：
+
+```bash
+export ROBOT_PIPER_MODEL=/home/pi/temp/piper/zh_CN-model.onnx
+RUN_MODE=robot scripts/run_on_car.sh
+```
+
+安装或配置完成后，打开看板“音频与云台”区域，先点“刷新音频状态”，确认 `tts_players` 里出现 `ekho` 或 `piper`，再点“语音播报”。不要用 `espeak`、`espeak-ng` 或 `spd-say` 验证中文播报；它们常把中文当音素硬读，听起来不像普通话。
+
 ## 八、编译与基础检查
 
 本项目主体是 Python，不需要传统 C/C++ 编译。每次推送前，建议在电脑本地做语法检查和测试：

@@ -308,7 +308,7 @@ path_planned/path_step/path_replanned -> 仅软件兜底或旧演示使用
 | `obstacle` | `src/inspection_robot/static/audio/obstacle.wav` | 障碍物或非预期禁区 |
 | `first` | `src/inspection_robot/static/audio/first.wav` | 检测到货架 |
 | `following` | `src/inspection_robot/static/audio/following.wav` | 检测到货架上的物品，每个物品一次 |
-| `missing_item` | 本地 TTS | 缺货或高优先级异常语音报警；无 TTS 命令时记录失败但不阻塞巡逻 |
+| `missing_item` | 离线中文 TTS | 缺货或高优先级异常语音报警；优先使用 `ekho` 或配置中文模型的 `piper`，无可用 TTS 时记录失败但不阻塞巡逻 |
 
 音频播放必须由小车端进程异步触发，通过树莓派默认音频设备输出；HTTP 请求不能等待音频完整播放结束。
 
