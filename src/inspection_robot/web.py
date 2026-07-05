@@ -361,6 +361,40 @@ def create_app(root: Path | None = None) -> Flask:
         store.record_robot_status("MANUAL_CONTROL", f"90 degree calibration: {direction}, speed={speed}, duration={duration}")
         return jsonify({"ok": True, "direction": direction, "speed": speed, "duration_seconds": duration})
 
+    @app.post("/api/calibration/heading_polarity")
+    def api_calibration_heading_polarity():
+        """On-car heading-hold polarity self-check (requires RUN_MODE=robot).
+
+        Briefly rotates the car and differential-steers it, then reports whether
+        the straight-line correction is corrective and the recommended
+        MPU6050_YAW_SIGN / HEADING_HOLD_INVERT to lock in. Needs clear floor.
+        """
+        if not _robot_mode_enabled():
+            store.record_robot_status("IDLE", "极性自检需要 RUN_MODE=robot。")
+            return jsonify({"ok": False, "error": "RUN_MODE=robot required for heading polarity self-check"}), 409
+        runtime = _ensure_runtime()
+        checker = getattr(runtime, "run_heading_polarity_selfcheck", None)
+        if not callable(checker):
+            return jsonify({"ok": False, "error": "runtime does not support heading polarity self-check"}), 500
+        payload = request.get_json(silent=True) or {}
+        kwargs: dict[str, object] = {}
+        if "turn_speed" in payload:
+            kwargs["turn_speed"] = _int_payload(payload, "turn_speed", 0)
+        if "forward_speed" in payload:
+            kwargs["forward_speed"] = _int_payload(payload, "forward_speed", 0)
+        if "seconds" in payload:
+            kwargs["seconds"] = _float_payload(payload, "seconds", 0.6)
+        try:
+            result = checker(**kwargs)
+        except RobotHardwareError as exc:
+            store.record_run_mode("robot", False)
+            store.record_robot_status("ERROR", str(exc))
+            return jsonify({"ok": False, "error": str(exc)}), 500
+        store.record_run_mode("robot", True)
+        # A failed polarity verdict is a diagnostic result, not an HTTP error;
+        # the ``ok`` field in the body conveys pass/fail.
+        return jsonify(result)
+
     @app.get("/api/export.csv")
     def api_export_csv():
         prefix = "\ufeff" if str(request.args.get("bom", "")).strip().lower() in {"1", "true", "yes"} else ""

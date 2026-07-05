@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import math
+import os
 import re
 import threading
 import time
@@ -36,6 +37,34 @@ class OcrResult:
     text: str | None
     confidence: float | None = None
     processed: bool = False
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+# Only AprilTag identity is kept by default. OCR (heavy on the Pi, contends for
+# the GIL with the control loop) and colour attribute labelling are disabled
+# unless explicitly re-enabled with ENABLE_OCR=1 / ENABLE_COLOR=1. Identity is
+# 100% tag-driven, so turning these off does not affect shelf/item recognition.
+_OCR_ENABLED = _env_flag("ENABLE_OCR", False)
+_COLOR_ENABLED = _env_flag("ENABLE_COLOR", False)
+_EMPTY_OCR = OcrResult(None)
+
+
+def ocr_enabled() -> bool:
+    """Whether OCR text extraction is active (ENABLE_OCR)."""
+
+    return _OCR_ENABLED
+
+
+def color_enabled() -> bool:
+    """Whether colour attribute labelling is active (ENABLE_COLOR)."""
+
+    return _COLOR_ENABLED
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,7 +217,11 @@ def _detect_frame(
     cv2: Any,
     *,
     image_classifier_enabled: bool = False,
+    ocr_enabled: bool | None = None,
+    color_enabled: bool | None = None,
 ) -> list[dict[str, object]]:
+    ocr_on = _OCR_ENABLED if ocr_enabled is None else bool(ocr_enabled)
+    color_on = _COLOR_ENABLED if color_enabled is None else bool(color_enabled)
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     raw_detections = detector.detect(gray)
     detections: list[dict[str, object]] = []
@@ -201,7 +234,7 @@ def _detect_frame(
         if bbox is not None:
             excluded_bboxes.append(bbox)
         angle_deg = _angle_degrees(corners)
-        ocr = _try_ocr_text(frame, cv2, center=center, corners=corners)
+        ocr = _try_ocr_text(frame, cv2, center=center, corners=corners) if ocr_on else _EMPTY_OCR
         image_class = _classify_image_region(frame, center, corners, cv2) if image_classifier_enabled else None
         image_class = _class_with_ocr_semantics(image_class, ocr)
         detections.append(
@@ -209,7 +242,7 @@ def _detect_frame(
                 "tag_id": tag_id,
                 "marker_family": TAG_FAMILY,
                 "ocr_text": ocr.text,
-                "color": _dominant_color_name(frame, center, cv2),
+                "color": _dominant_color_name(frame, center, cv2) if color_on else None,
                 "image_class": image_class.class_name if image_class is not None else None,
                 "image_class_confidence": image_class.confidence if image_class is not None else None,
                 "image_class_source": image_class.source if image_class is not None else None,
@@ -227,7 +260,14 @@ def _detect_frame(
     if not object_regions:
         return detections
     synthetic_detections = [
-        _synthetic_detection_from_object(frame, cv2, object_presence, image_classifier_enabled=image_classifier_enabled)
+        _synthetic_detection_from_object(
+            frame,
+            cv2,
+            object_presence,
+            image_classifier_enabled=image_classifier_enabled,
+            ocr_enabled=ocr_on,
+            color_enabled=color_on,
+        )
         for object_presence in object_regions
     ]
     return detections + synthetic_detections
@@ -239,12 +279,24 @@ def _synthetic_detection_from_object(
     object_presence: ObjectPresenceResult,
     *,
     image_classifier_enabled: bool,
+    ocr_enabled: bool | None = None,
+    color_enabled: bool | None = None,
 ) -> dict[str, object]:
+    ocr_on = _OCR_ENABLED if ocr_enabled is None else bool(ocr_enabled)
+    color_on = _COLOR_ENABLED if color_enabled is None else bool(color_enabled)
     box_corners = _bbox_to_corners(object_presence.bbox)
-    ocr = _try_ocr_text(frame, cv2, center=object_presence.center, corners=box_corners)
+    ocr = (
+        _try_ocr_text(frame, cv2, center=object_presence.center, corners=box_corners)
+        if ocr_on
+        else _EMPTY_OCR
+    )
     image_class = _classify_image_region(frame, object_presence.center, box_corners, cv2) if image_classifier_enabled else None
     image_class = _class_with_ocr_semantics(image_class, ocr)
-    color = _dominant_color_name_for_region(frame, box_corners, cv2) or _dominant_color_name(frame, object_presence.center, cv2)
+    color = (
+        _dominant_color_name_for_region(frame, box_corners, cv2) or _dominant_color_name(frame, object_presence.center, cv2)
+        if color_on
+        else None
+    )
     return {
         "tag_id": None,
         "marker_family": None,

@@ -899,5 +899,50 @@ class CruiseRuntimeTest(unittest.TestCase):
             )
 
 
+    # --- heading polarity self-check ------------------------------------ #
+
+    def test_heading_polarity_selfcheck_passes_and_logs(self) -> None:
+        runtime, _, _ = self.make_runtime(
+            config=RobotRuntimeConfig(heading_hold_enabled=True, action_settle_seconds=0),
+            imu=FakeImu(FakeGuard(deviation=0.0)),
+        )
+        # Left rotation → +12° (gyro ok), right differential → -9° (corrective).
+        with mock.patch.object(runtime, "_integrate_guard_yaw", side_effect=[12.0, -9.0]):
+            result = runtime.run_heading_polarity_selfcheck(seconds=0)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["recommended_yaw_sign"], 1)
+        self.assertFalse(result["recommended_invert"])
+        self.assertTrue(
+            any(
+                event["type"] == "motion_debug"
+                and event.get("evidence", {}).get("stage") == "heading_polarity_selfcheck"
+                for event in runtime.store.snapshot()["events"]
+            )
+        )
+
+    def test_heading_polarity_selfcheck_flags_inverted_differential(self) -> None:
+        runtime, _, _ = self.make_runtime(
+            config=RobotRuntimeConfig(heading_hold_enabled=True, action_settle_seconds=0),
+            imu=FakeImu(FakeGuard(deviation=0.0)),
+        )
+        # Left rotation → +12° (gyro ok), but right differential → +9° (car went
+        # left when told right) ⇒ divergent ⇒ recommend HEADING_HOLD_INVERT.
+        with mock.patch.object(runtime, "_integrate_guard_yaw", side_effect=[12.0, 9.0]):
+            result = runtime.run_heading_polarity_selfcheck(seconds=0)
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["recommended_invert"])
+
+    def test_heading_polarity_selfcheck_requires_heading_hold(self) -> None:
+        runtime, _, _ = self.make_runtime(
+            config=RobotRuntimeConfig(heading_hold_enabled=False),
+            imu=FakeImu(FakeGuard(deviation=0.0)),
+        )
+        result = runtime.run_heading_polarity_selfcheck()
+        self.assertFalse(result["ok"])
+        self.assertIn("error", result)
+
+
 if __name__ == "__main__":
     unittest.main()

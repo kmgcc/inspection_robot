@@ -855,17 +855,17 @@ def _yaw_sign() -> float:
 
 def _yaw_deadband_dps() -> float:
     try:
-        return max(0.0, float(os.environ.get("MPU6050_YAW_DEADBAND_DPS", "0.45")))
+        return max(0.0, float(os.environ.get("MPU6050_YAW_DEADBAND_DPS", "0.7")))
     except ValueError:
-        return 0.45
+        return 0.7
 
 
 def _yaw_leak_per_second() -> float:
     """Leak rate (1/s) for the straight-heading integrator; 0 disables leaking."""
     try:
-        return max(0.0, float(os.environ.get("MPU6050_YAW_LEAK_PER_SECOND", "0.02")))
+        return max(0.0, float(os.environ.get("MPU6050_YAW_LEAK_PER_SECOND", "0.15")))
     except ValueError:
-        return 0.02
+        return 0.15
 
 
 def _zupt_alpha() -> float:
@@ -903,3 +903,125 @@ def _signed_word(high: int, low: int) -> int:
     if value & 0x8000:
         return value - 0x10000
     return value
+
+
+@dataclass(frozen=True, slots=True)
+class HeadingPolarityCheck:
+    """Result of the on-car heading-hold polarity self-check.
+
+    Two integrated-yaw measurements are taken through the same
+    ``StraightHeadingGuard`` the controller uses (so ``yaw_sign``/deadband are
+    already applied):
+
+    * ``left_turn_yaw_deg`` — commanded an in-place LEFT rotation. With the
+      measured mounting (left turn = +gyro_z) and ``yaw_sign=+1`` this must be
+      POSITIVE. If negative, the gyro sign is flipped for this chassis.
+    * ``forward_right_yaw_deg`` — commanded a forward differential steer to the
+      RIGHT (what the controller does for a positive/left deviation). A real
+      right turn reads −gyro_z, so this must be NEGATIVE. If positive, the
+      wheel-side differential is inverted and the correction is divergent.
+    """
+
+    left_turn_yaw_deg: float
+    forward_right_yaw_deg: float
+    gyro_sign_ok: bool
+    differential_sign_ok: bool
+    ok: bool
+    recommended_yaw_sign: int
+    recommended_invert: bool
+    message: str
+
+
+def evaluate_heading_polarity(
+    left_turn_yaw_deg: float,
+    forward_right_yaw_deg: float,
+    *,
+    current_yaw_sign: float = 1.0,
+    current_invert: bool = False,
+    min_magnitude_deg: float = 3.0,
+) -> HeadingPolarityCheck:
+    """Decide whether heading-hold correction is corrective or divergent.
+
+    Pure function (no hardware) so the decision logic is unit-testable. The
+    caller supplies the two integrated-yaw measurements plus the currently
+    configured ``yaw_sign``/``invert`` and gets back a PASS/FAIL plus the
+    recommended ``MPU6050_YAW_SIGN`` / ``HEADING_HOLD_INVERT`` to lock in.
+    """
+
+    current_sign = 1 if float(current_yaw_sign) >= 0 else -1
+    threshold = max(0.0, float(min_magnitude_deg))
+
+    # Step 1: gyro sign — a commanded left rotation must integrate positive.
+    if abs(left_turn_yaw_deg) < threshold:
+        return HeadingPolarityCheck(
+            left_turn_yaw_deg=left_turn_yaw_deg,
+            forward_right_yaw_deg=forward_right_yaw_deg,
+            gyro_sign_ok=False,
+            differential_sign_ok=False,
+            ok=False,
+            recommended_yaw_sign=current_sign,
+            recommended_invert=current_invert,
+            message=(
+                "左转积分角过小（|{:.1f}|°<{:.1f}°）——转向未产生足够偏航，"
+                "无法判定极性。请加大自检转速/时长，或检查陀螺仪是否有数据。"
+            ).format(left_turn_yaw_deg, threshold),
+        )
+    gyro_sign_ok = left_turn_yaw_deg > 0.0
+    if not gyro_sign_ok:
+        return HeadingPolarityCheck(
+            left_turn_yaw_deg=left_turn_yaw_deg,
+            forward_right_yaw_deg=forward_right_yaw_deg,
+            gyro_sign_ok=False,
+            differential_sign_ok=False,
+            ok=False,
+            recommended_yaw_sign=-current_sign,
+            recommended_invert=current_invert,
+            message=(
+                "陀螺仪极性反了：左转应得正偏航，实测 {:.1f}°。"
+                "请设 MPU6050_YAW_SIGN={} 后重跑自检。"
+            ).format(left_turn_yaw_deg, -current_sign),
+        )
+
+    # Step 2: differential sign — a commanded right steer must integrate negative.
+    if abs(forward_right_yaw_deg) < threshold:
+        return HeadingPolarityCheck(
+            left_turn_yaw_deg=left_turn_yaw_deg,
+            forward_right_yaw_deg=forward_right_yaw_deg,
+            gyro_sign_ok=True,
+            differential_sign_ok=False,
+            ok=False,
+            recommended_yaw_sign=current_sign,
+            recommended_invert=current_invert,
+            message=(
+                "差速右转积分角过小（|{:.1f}|°<{:.1f}°）——差速纠偏几乎没让车转向，"
+                "可能低速憋轮。请提高巡航/自检速度或检查左右轮。"
+            ).format(forward_right_yaw_deg, threshold),
+        )
+    differential_sign_ok = forward_right_yaw_deg < 0.0
+    if differential_sign_ok:
+        return HeadingPolarityCheck(
+            left_turn_yaw_deg=left_turn_yaw_deg,
+            forward_right_yaw_deg=forward_right_yaw_deg,
+            gyro_sign_ok=True,
+            differential_sign_ok=True,
+            ok=True,
+            recommended_yaw_sign=current_sign,
+            recommended_invert=current_invert,
+            message=(
+                "极性正确：左转+{:.1f}°、差速右转{:.1f}°，纠偏为负反馈。"
+                "可锁定 MPU6050_YAW_SIGN={}、HEADING_HOLD_INVERT={}。"
+            ).format(left_turn_yaw_deg, forward_right_yaw_deg, current_sign, int(current_invert)),
+        )
+    return HeadingPolarityCheck(
+        left_turn_yaw_deg=left_turn_yaw_deg,
+        forward_right_yaw_deg=forward_right_yaw_deg,
+        gyro_sign_ok=True,
+        differential_sign_ok=False,
+        ok=False,
+        recommended_yaw_sign=current_sign,
+        recommended_invert=not current_invert,
+        message=(
+            "差速方向反了：命令右转却得正偏航 {:.1f}°（车实际左转），纠偏会发散。"
+            "请设 HEADING_HOLD_INVERT={} 后重跑自检。"
+        ).format(forward_right_yaw_deg, int(not current_invert)),
+    )

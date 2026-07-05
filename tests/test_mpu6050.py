@@ -457,5 +457,46 @@ class FakeMotion:
         self.calls.append(("stop", None, None))
 
 
+class HeadingPolarityEvaluationTest(unittest.TestCase):
+    def test_correct_polarity_passes_without_changes(self) -> None:
+        check = mpu6050.evaluate_heading_polarity(12.0, -9.0, current_yaw_sign=1.0, current_invert=False)
+        self.assertTrue(check.ok)
+        self.assertTrue(check.gyro_sign_ok)
+        self.assertTrue(check.differential_sign_ok)
+        self.assertEqual(check.recommended_yaw_sign, 1)
+        self.assertFalse(check.recommended_invert)
+
+    def test_inverted_gyro_sign_recommends_flipping_yaw_sign(self) -> None:
+        check = mpu6050.evaluate_heading_polarity(-12.0, -9.0, current_yaw_sign=1.0)
+        self.assertFalse(check.ok)
+        self.assertFalse(check.gyro_sign_ok)
+        self.assertEqual(check.recommended_yaw_sign, -1)
+
+    def test_inverted_differential_recommends_invert(self) -> None:
+        # Gyro sign fine (left positive) but the "right" steer turned the car
+        # left (positive yaw) → divergent → recommend HEADING_HOLD_INVERT.
+        check = mpu6050.evaluate_heading_polarity(12.0, 9.0, current_yaw_sign=1.0, current_invert=False)
+        self.assertFalse(check.ok)
+        self.assertTrue(check.gyro_sign_ok)
+        self.assertFalse(check.differential_sign_ok)
+        self.assertTrue(check.recommended_invert)
+
+    def test_inverted_differential_toggles_existing_invert(self) -> None:
+        check = mpu6050.evaluate_heading_polarity(12.0, 9.0, current_yaw_sign=1.0, current_invert=True)
+        self.assertFalse(check.recommended_invert)
+
+    def test_small_turn_is_inconclusive(self) -> None:
+        check = mpu6050.evaluate_heading_polarity(1.0, -9.0, min_magnitude_deg=3.0)
+        self.assertFalse(check.ok)
+        self.assertFalse(check.gyro_sign_ok)
+
+    def test_small_differential_is_inconclusive_but_keeps_invert(self) -> None:
+        check = mpu6050.evaluate_heading_polarity(12.0, 1.0, current_invert=False, min_magnitude_deg=3.0)
+        self.assertFalse(check.ok)
+        self.assertTrue(check.gyro_sign_ok)
+        self.assertFalse(check.differential_sign_ok)
+        self.assertFalse(check.recommended_invert)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -159,7 +159,14 @@ class VisionDetectorTest(unittest.TestCase):
         original = tag_detector._try_ocr_text
         tag_detector._try_ocr_text = lambda *_args, **_kwargs: tag_detector.OcrResult("A1-中文", 91.0, True)  # type: ignore[assignment]
         try:
-            detections = tag_detector._detect_frame(frame, FakeDetector([]), cv2, image_classifier_enabled=True)
+            detections = tag_detector._detect_frame(
+                frame,
+                FakeDetector([]),
+                cv2,
+                image_classifier_enabled=True,
+                ocr_enabled=True,
+                color_enabled=True,
+            )
         finally:
             tag_detector._try_ocr_text = original  # type: ignore[assignment]
 
@@ -192,7 +199,14 @@ class VisionDetectorTest(unittest.TestCase):
         original = tag_detector._try_ocr_text
         tag_detector._try_ocr_text = lambda *_args, **_kwargs: tag_detector.OcrResult("水杯物品20", 0.92, True)  # type: ignore[assignment]
         try:
-            detections = tag_detector._detect_frame(frame, FakeDetector([raw]), cv2, image_classifier_enabled=True)
+            detections = tag_detector._detect_frame(
+                frame,
+                FakeDetector([raw]),
+                cv2,
+                image_classifier_enabled=True,
+                ocr_enabled=True,
+                color_enabled=True,
+            )
         finally:
             tag_detector._try_ocr_text = original  # type: ignore[assignment]
 
