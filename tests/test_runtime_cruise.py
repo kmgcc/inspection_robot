@@ -186,6 +186,35 @@ class CruiseRuntimeTest(unittest.TestCase):
         )
         return runtime, fake_motion, fake_alarm
 
+    def make_full_manifest_runtime(
+        self,
+        *,
+        config: RobotRuntimeConfig,
+        motion: FakeMotion | None = None,
+        alarm: FakeAlarm | None = None,
+        imu: FakeImu | None = None,
+    ) -> tuple[RobotRuntime, FakeMotion, FakeAlarm]:
+        store = InspectionStore(
+            DEFAULT_TAG_MAP,
+            warehouse_map=DEFAULT_WAREHOUSE_MAP,
+            shelf_manifest=DEFAULT_SHELF_MANIFEST,
+            root=self.root,
+        )
+        fake_motion = motion or FakeMotion()
+        fake_alarm = alarm or FakeAlarm()
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            DEFAULT_SHELF_MANIFEST,
+            config=config,
+            motion_adapter=fake_motion,
+            sensor_adapter=FakeSensors(),
+            alarm_adapter=fake_alarm,
+            imu_adapter=imu or FakeImu(None),
+            detection_provider=no_detection_provider,
+        )
+        return runtime, fake_motion, fake_alarm
+
     # --- constant-velocity cruise ---------------------------------------- #
 
     def test_cruise_step_keeps_motor_running_without_per_step_stop(self) -> None:
@@ -725,6 +754,29 @@ class CruiseRuntimeTest(unittest.TestCase):
         self.assertFalse(captured["vision_state_machine_enabled"])
         self.assertEqual(captured["cooldown_seconds"], 0.05)
 
+    def test_video_preview_detections_are_ingested_into_cruise_logic(self) -> None:
+        runtime, _, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                smooth_cruise_enabled=True,
+                cruise_recognition_cooldown_seconds=0,
+                action_settle_seconds=0,
+            ),
+        )
+        payload = {
+            "ok": True,
+            "source": "camera",
+            "frame_id": "video-42",
+            "updated_at": time.time(),
+            "detections": [{"tag_id": "118"}, {"tag_id": "7"}],
+        }
+
+        with mock.patch("inspection_robot.runtime.latest_video_detections", return_value=payload):
+            self.assertTrue(runtime._handle_cruise_recognitions())
+            self.assertFalse(runtime._handle_cruise_recognitions())
+
+        self.assertEqual(runtime._cruise_active_shelf, "A1")
+        self.assertIn("item_07", runtime._cruise_segment_items)
+
     def test_unassigned_moving_items_attach_to_first_seen_shelf(self) -> None:
         runtime, _, _ = self.make_runtime(
             config=RobotRuntimeConfig(
@@ -744,13 +796,53 @@ class CruiseRuntimeTest(unittest.TestCase):
         self.assertEqual([item["item_id"] for item in shelf_a1["items"]], ["item_07"])
         self.assertEqual(runtime._cruise_unassigned_items, {})
 
+    def test_a4_cruise_segment_commits_at_boundary_turn(self) -> None:
+        runtime, _, _ = self.make_full_manifest_runtime(
+            config=RobotRuntimeConfig(
+                smooth_cruise_enabled=True,
+                cruise_recognition_cooldown_seconds=0,
+                action_settle_seconds=0,
+                turn_90_seconds=0,
+            ),
+        )
+
+        runtime._handle_moving_recognition({"tag_id": "107"})
+        runtime._handle_moving_recognition({"tag_id": "7"})
+        runtime._handle_planned_boundary_turn((0, 1, 1, 1), "turn_patrol")
+
+        snapshot = runtime.store.snapshot()
+        shelf_a4 = next(item for item in snapshot["shelves"] if item["shelf_id"] == "A4")
+
+        self.assertEqual(snapshot["scan"]["shelf_id"], "A4")
+        self.assertIn("item_07", {item["item_id"] for item in shelf_a4["items"]})
+        self.assertIsNone(runtime._cruise_active_shelf)
+
+    def test_b1_boundary_turn_completes_cruise_cycle(self) -> None:
+        runtime, _, _ = self.make_full_manifest_runtime(
+            config=RobotRuntimeConfig(
+                smooth_cruise_enabled=True,
+                cruise_recognition_cooldown_seconds=0,
+                action_settle_seconds=0,
+                turn_90_seconds=0,
+            ),
+        )
+        runtime._observed_shelf_sequence = ["A1", "A2", "A3", "A4", "B3", "B2", "B1"]
+        runtime._last_shelf_anchor = "B1"
+        runtime._cruise_active_shelf = "B1"
+
+        runtime._handle_planned_boundary_turn((0, 1, 1, 1), "turn_patrol")
+
+        snapshot = runtime.store.snapshot()
+        self.assertEqual(snapshot["patrol_cycle"], 2)
+        self.assertTrue(any(event["type"] == "cycle_completed" for event in snapshot["events"]))
+
     def test_cruise_scanner_pauses_during_row_transfer(self) -> None:
         runtime, _, _ = self.make_runtime(
             config=RobotRuntimeConfig(smooth_cruise_enabled=True, cruise_vision_enabled=True, object_trigger_enabled=False)
         )
 
         runtime._record_observed_shelf("A4")
-        self.assertFalse(runtime._cruise_scanner_allowed_for_phase())
+        self.assertTrue(runtime._cruise_scanner_allowed_for_phase())
 
         runtime._record_observed_shelf("B3")
         self.assertTrue(runtime._cruise_scanner_allowed_for_phase())
@@ -768,10 +860,10 @@ class CruiseRuntimeTest(unittest.TestCase):
             )
         )
 
-        runtime._record_observed_shelf("A4")
+        runtime._handle_moving_recognition({"tag_id": "107"})
         runtime._handle_moving_recognition({"shelf_id": "B3", "tag_id": "103"})
         self.assertEqual(runtime._last_shelf_anchor, "A4")
-        self.assertFalse(runtime._cruise_scanner_allowed_for_phase())
+        self.assertTrue(runtime._cruise_scanner_allowed_for_phase())
 
         runtime._handle_planned_boundary_turn((0, 1, 1, 1), "turn_patrol")
 

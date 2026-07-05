@@ -27,6 +27,7 @@ from .robot.line_following import (
 from .robot.sensors import RobotHardwareError
 from .vision import tag_detector
 from .vision.tag_detector import VisionDependencyError
+from .vision.video_stream import latest_video_detections
 
 
 Cell = tuple[int, int]
@@ -295,6 +296,7 @@ class RobotRuntime:
         self._cruise_segment_items: dict[str, dict[str, object]] = {}
         self._cruise_unassigned_items: dict[str, dict[str, object]] = {}
         self._cruise_scanner: _CruiseVisionScanner | None = None
+        self._last_video_detection_frame_id: str | None = None
         self._manual_override = threading.Event()
         self._last_heading_correction_at = 0.0
         self._last_heading_sample_log_at = 0.0
@@ -452,6 +454,7 @@ class RobotRuntime:
         self._cruise_active_shelf = None
         self._cruise_segment_items = {}
         self._cruise_unassigned_items = {}
+        self._last_video_detection_frame_id = None
         self._cruise_vision_suppressed_until_boundary = False
         self._last_heading_sample_log_at = 0.0
         self._show_normal()
@@ -673,6 +676,7 @@ class RobotRuntime:
         self._reset_heading_guard()
         self._zupt_recalibrate("post_boundary_turn")
         self.store.record_forbidden_zone(zone_id, False)
+        self._commit_cruise_segment_at_boundary(action)
         transfer_started = self._maybe_start_transfer_line_after_boundary_turn()
         self._advance_boundary_event()
         self._cruise_vision_suppressed_until_boundary = transfer_started
@@ -1956,19 +1960,7 @@ class RobotRuntime:
             return
         previous_anchor = self._last_shelf_anchor
         self._last_shelf_anchor = normalized
-        if normalized in {"A4", "B1"}:
-            self._cruise_vision_suppressed_until_boundary = True
-            self._stop_cruise_scanner()
-            self.store.record_motion_debug(
-                "cruise_vision_suppressed",
-                f"识别到 {normalized} 后进入跨列转场，移动视觉暂时关闭，直到下一次边界转向完成。",
-                evidence={
-                    "shelf_id": normalized,
-                    "phase": self._patrol_phase_label(),
-                },
-            )
-        else:
-            self._cruise_vision_suppressed_until_boundary = False
+        self._cruise_vision_suppressed_until_boundary = False
         if normalized == "B3" and previous_anchor != "B3":
             self._bypassed_for_shelf_anchors.discard(normalized)
         if self._observed_shelf_sequence and self._observed_shelf_sequence[-1] == normalized:
@@ -2933,10 +2925,10 @@ class RobotRuntime:
 
     def _handle_cruise_recognitions(self) -> bool:
         scanner = self._cruise_scanner
-        if scanner is None:
-            return False
+        handled = False
         if self._cruise_vision_suppressed_until_boundary:
-            suppressed = len(scanner.poll_new())
+            suppressed = len(scanner.poll_new()) if scanner is not None else 0
+            suppressed += len(self._poll_video_preview_detections(mark_consumed=True))
             if suppressed:
                 self.store.record_motion_debug(
                     "cruise_recognition_suppressed",
@@ -2947,11 +2939,59 @@ class RobotRuntime:
                     },
                 )
             return False
-        handled = False
-        for recognition in scanner.poll_new():
+        if scanner is not None:
+            for recognition in scanner.poll_new():
+                self._handle_moving_recognition(recognition)
+                handled = True
+        for recognition in self._poll_video_preview_detections():
             self._handle_moving_recognition(recognition)
             handled = True
         return handled
+
+    def _poll_video_preview_detections(self, *, mark_consumed: bool = False) -> list[dict[str, object]]:
+        try:
+            payload = latest_video_detections(simulate=False)
+        except Exception:
+            return []
+        if not payload.get("ok"):
+            return []
+        frame_id = _optional_text(payload.get("frame_id"))
+        if frame_id is None or frame_id == self._last_video_detection_frame_id:
+            return []
+        updated_at = payload.get("updated_at")
+        try:
+            age_seconds = time.time() - float(updated_at)
+        except (TypeError, ValueError):
+            age_seconds = 0.0
+        if age_seconds > 1.2:
+            return []
+        self._last_video_detection_frame_id = frame_id
+        if mark_consumed:
+            return list(payload.get("detections") or []) if isinstance(payload.get("detections"), list) else []
+        detections = payload.get("detections")
+        if not isinstance(detections, list):
+            return []
+        recognitions: list[dict[str, object]] = []
+        for detection in detections:
+            if not isinstance(detection, Mapping):
+                continue
+            enriched = self._enrich_detection(detection)
+            if _optional_text(enriched.get("shelf_id")) is None and _optional_text(enriched.get("item_id")) is None:
+                continue
+            enriched["source"] = "video_preview"
+            enriched["frame_id"] = frame_id
+            recognitions.append(enriched)
+        if recognitions:
+            self.store.record_motion_debug(
+                "cruise_preview_detections_ingested",
+                "网页预览帧中的 AprilTag 识别结果已并入巡航处理。",
+                evidence={
+                    "frame_id": frame_id,
+                    "count": len(recognitions),
+                    "tag_ids": [_optional_text(item.get("tag_id")) for item in recognitions],
+                },
+            )
+        return recognitions
 
     def _stop_for_cruise_recognition(self, recognition: Mapping[str, object]) -> None:
         recognition = self._enrich_detection(recognition)
@@ -3014,6 +3054,17 @@ class RobotRuntime:
         if item_id is not None:
             self._buffer_cruise_item(recognition, item_id)
         if shelf_id is not None:
+            if self._cruise_active_shelf in {"A4", "B1"} and shelf_id != self._cruise_active_shelf:
+                self.store.record_motion_debug(
+                    "cruise_shelf_deferred_until_boundary",
+                    f"{self._cruise_active_shelf} 尚未到边界转弯，暂不切换到 {shelf_id}。",
+                    evidence={
+                        "active_shelf": self._cruise_active_shelf,
+                        "deferred_shelf": shelf_id,
+                        "tag_id": _optional_text(recognition.get("tag_id")),
+                    },
+                )
+                return
             self._advance_cruise_shelf_segment(shelf_id)
         key = shelf_id or item_id
         if key is None:
@@ -3143,6 +3194,26 @@ class RobotRuntime:
         self._signal_scan_events(events)
         self._cruise_segment_items = {}
         self._cruise_active_shelf = None
+
+    def _commit_cruise_segment_at_boundary(self, action: str) -> None:
+        anchor = self._last_shelf_anchor
+        if anchor not in {"A4", "B1"}:
+            return
+        if self._cruise_active_shelf == anchor:
+            self._flush_cruise_shelf_segment("boundary_turn")
+        if anchor == "B1":
+            order = [str(item).strip().upper() for item in self.config.patrol_order if str(item).strip()]
+            if self._observed_shelf_sequence and self._observed_shelf_sequence[-1] == "B1":
+                self._complete_observed_cycle(order)
+        self.store.record_motion_debug(
+            "cruise_segment_boundary_committed",
+            f"{anchor} 货架以边界转弯作为结束标记，已结算当前移动识别段。",
+            evidence={
+                "shelf_id": anchor,
+                "action": action,
+                "phase": self._patrol_phase_label(),
+            },
+        )
 
     def _scan_shelf(self, step: RouteStep, heading: str) -> str:
         shelf_id = str(step["shelf_id"])
