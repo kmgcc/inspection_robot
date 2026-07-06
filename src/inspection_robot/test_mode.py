@@ -74,9 +74,9 @@ CALIBRATION_DEFAULTS: dict[str, Any] = {
     "patrol_step_seconds": 0.18,
     "patrol_settle_seconds": 0.05,
     "action_settle_seconds": 0.7,
-    "turn_speed": 22,               # 转向测试默认速度
-    "turn_cw90_seconds": 0.85,       # 顺时针约90°所需时间(s)
-    "turn_ccw90_seconds": 0.85,      # 逆时针约90°所需时间(s)
+    "turn_speed": 30,               # 转向测试默认速度
+    "turn_cw90_seconds": 0.62,       # 顺时针约90°所需时间(s)
+    "turn_ccw90_seconds": 0.62,      # 逆时针约90°所需时间(s)
     "cw_compensation": 1.0,          # 顺时针左右轮补偿系数
     "ccw_compensation": 1.0,         # 逆时针左右轮补偿系数
     "line_follow_speed": 30,         # 寻线测试速度

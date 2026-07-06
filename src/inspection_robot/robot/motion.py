@@ -21,7 +21,7 @@ STOP_REPEAT_GAP_SECONDS = float(os.environ.get("ROBOT_STOP_REPEAT_GAP_SECONDS", 
 FORWARD_MOTOR_SIGNS = os.environ.get("ROBOT_FORWARD_MOTOR_SIGNS", "1,1,1,1")
 FORWARD_LEFT_TRIM = int(os.environ.get("ROBOT_FORWARD_LEFT_TRIM", "0"))
 FORWARD_RIGHT_TRIM = int(os.environ.get("ROBOT_FORWARD_RIGHT_TRIM", "0"))
-FORWARD_CORRECTION_SPLIT = float(os.environ.get("ROBOT_FORWARD_CORRECTION_SPLIT", "0.5"))
+FORWARD_CORRECTION_SPLIT = float(os.environ.get("ROBOT_FORWARD_CORRECTION_SPLIT", "0.0"))
 VENDOR_MOTION_PATHS = (
     Path("/home/pi/project_demo/lib"),
     Path("/home/pi/project_demo/04.Car_motion_control"),

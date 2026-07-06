@@ -211,7 +211,7 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
         event_types = [event["type"] for event in store.snapshot()["events"]]
 
         self.assertIn("obstacle_avoidance_step", event_types)
-        self.assertIn(("move_forward", 20, 0.0), fake_motion.calls)
+        self.assertIn(("move_forward", 24, 0.0), fake_motion.calls)
 
     def test_forbidden_bypass_uses_shorter_default_body_distances(self) -> None:
         store = self.make_store()
@@ -239,8 +239,8 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
 
         runtime.run_patrol(shelf_order=["A1"], max_steps=1)
 
-        self.assertEqual(fake_motion.calls.count(("move_forward", 20, 1.25)), 2)
-        self.assertEqual(fake_motion.calls.count(("move_forward", 20, 2.0)), 1)
+        self.assertEqual(fake_motion.calls.count(("move_forward", 24, 1.25)), 2)
+        self.assertEqual(fake_motion.calls.count(("move_forward", 24, 2.0)), 1)
 
     def test_b3_forbidden_bypass_uses_extended_clearance_distances(self) -> None:
         store = self.make_store()
@@ -269,8 +269,8 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
 
         self.assertEqual(runtime._handle_tape_boundary((0, 0, 0, 0)), "bypass")
 
-        self.assertEqual(fake_motion.calls.count(("move_forward", 20, 1.5)), 2)
-        self.assertEqual(fake_motion.calls.count(("move_forward", 20, 1.2)), 1)
+        self.assertEqual(fake_motion.calls.count(("move_forward", 24, 1.5)), 2)
+        self.assertEqual(fake_motion.calls.count(("move_forward", 24, 1.2)), 1)
 
     def test_planned_boundary_turn_delegates_to_mpu6050_adapter_when_available(self) -> None:
         store = self.make_store()

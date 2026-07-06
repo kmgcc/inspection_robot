@@ -90,14 +90,14 @@ class RobotRuntimeConfig:
     turn_speed: int = field(default_factory=lambda: _env_int(30, "ROBOT_TURN_SPEED"))
     action_settle_seconds: float = field(default_factory=lambda: _env_float(0.12, "ROBOT_ACTION_SETTLE_SECONDS"))
     obstacle_wait_seconds: float = field(default_factory=lambda: _env_float(6.0, "OBSTACLE_WAIT_SECONDS"))
-    avoidance_speed: int = field(default_factory=lambda: _env_int(20, "AVOIDANCE_SPEED"))
-    avoidance_body_seconds: float = field(default_factory=lambda: _env_float(0.35, "AVOIDANCE_BODY_SECONDS"))
+    avoidance_speed: int = field(default_factory=lambda: _env_int(24, "AVOIDANCE_SPEED"))
+    avoidance_body_seconds: float = field(default_factory=lambda: _env_float(0.30, "AVOIDANCE_BODY_SECONDS"))
     avoidance_side_clearance_bodies: float = field(default_factory=lambda: _env_float(1.0, "AVOIDANCE_SIDE_CLEARANCE_BODIES"))
     avoidance_parallel_bodies: float = field(default_factory=lambda: _env_float(1.6, "AVOIDANCE_PARALLEL_BODIES"))
     avoidance_return_bodies: float = field(default_factory=lambda: _env_float(1.0, "AVOIDANCE_RETURN_BODIES"))
-    forbidden_avoidance_side_clearance_bodies: float = field(default_factory=lambda: _env_float(1.2, "FORBIDDEN_AVOIDANCE_SIDE_CLEARANCE_BODIES"))
-    forbidden_avoidance_parallel_bodies: float = field(default_factory=lambda: _env_float(1.6, "FORBIDDEN_AVOIDANCE_PARALLEL_BODIES"))
-    forbidden_avoidance_return_bodies: float = field(default_factory=lambda: _env_float(1.2, "FORBIDDEN_AVOIDANCE_RETURN_BODIES"))
+    forbidden_avoidance_side_clearance_bodies: float = field(default_factory=lambda: _env_float(1.4, "FORBIDDEN_AVOIDANCE_SIDE_CLEARANCE_BODIES"))
+    forbidden_avoidance_parallel_bodies: float = field(default_factory=lambda: _env_float(1.8, "FORBIDDEN_AVOIDANCE_PARALLEL_BODIES"))
+    forbidden_avoidance_return_bodies: float = field(default_factory=lambda: _env_float(1.4, "FORBIDDEN_AVOIDANCE_RETURN_BODIES"))
     avoidance_turn_direction: str = field(default_factory=lambda: _env_text("right", "AVOIDANCE_TURN_DIRECTION"))
     boundary_min_black_sensors: int = field(default_factory=lambda: _env_int(1, "BOUNDARY_MIN_BLACK_SENSORS"))
     boundary_confirm_samples: int = field(default_factory=lambda: _env_int(1, "BOUNDARY_CONFIRM_SAMPLES"))
@@ -120,25 +120,33 @@ class RobotRuntimeConfig:
     object_slow_speed: int = field(default_factory=lambda: _env_int(12, "OBJECT_SLOW_SPEED"))
     object_settle_seconds: float = field(default_factory=lambda: _env_float(0.2, "OBJECT_SETTLE_SECONDS"))
     heading_hold_enabled: bool = field(default_factory=lambda: _env_bool("HEADING_HOLD_ENABLED", True))
-    heading_hold_tolerance_deg: float = field(default_factory=lambda: _env_float(1.2, "HEADING_HOLD_TOLERANCE_DEG"))
+    heading_hold_tolerance_deg: float = field(default_factory=lambda: _env_float(0.35, "HEADING_HOLD_TOLERANCE_DEG"))
     heading_hold_gain: float = field(default_factory=lambda: _env_float(0.012, "HEADING_HOLD_GAIN"))
     heading_hold_min_pulse_seconds: float = field(default_factory=lambda: _env_float(0.025, "HEADING_HOLD_MIN_PULSE_SECONDS"))
     heading_hold_max_pulse_seconds: float = field(default_factory=lambda: _env_float(0.10, "HEADING_HOLD_MAX_PULSE_SECONDS"))
-    heading_hold_correction_speed: int = field(default_factory=lambda: _env_int(16, "HEADING_HOLD_CORRECTION_SPEED"))
+    heading_hold_correction_speed: int = field(default_factory=lambda: _env_int(22, "HEADING_HOLD_CORRECTION_SPEED"))
     heading_hold_invert: bool = field(default_factory=lambda: _env_bool("HEADING_HOLD_INVERT", False))
     heading_hold_rate_damping: float = field(default_factory=lambda: _env_float(0.18, "HEADING_HOLD_KD", "HEADING_HOLD_RATE_DAMPING"))
-    heading_hold_speed_gain: float = field(default_factory=lambda: _env_float(3.0, "HEADING_HOLD_SPEED_GAIN"))
-    heading_hold_min_correction_speed: int = field(default_factory=lambda: _env_int(6, "HEADING_HOLD_MIN_CORRECTION_SPEED"))
-    heading_hold_max_speed_fraction: float = field(default_factory=lambda: _env_float(0.8, "HEADING_HOLD_MAX_SPEED_FRACTION"))
+    heading_hold_speed_gain: float = field(default_factory=lambda: _env_float(5.0, "HEADING_HOLD_SPEED_GAIN"))
+    heading_hold_min_correction_speed: int = field(default_factory=lambda: _env_int(14, "HEADING_HOLD_MIN_CORRECTION_SPEED"))
+    heading_hold_max_speed_fraction: float = field(default_factory=lambda: _env_float(1.0, "HEADING_HOLD_MAX_SPEED_FRACTION"))
     heading_hold_integral_gain: float = field(default_factory=lambda: _env_float(0.45, "HEADING_HOLD_INTEGRAL_GAIN"))
     heading_hold_integral_alpha: float = field(default_factory=lambda: _env_float(0.15, "HEADING_HOLD_INTEGRAL_ALPHA"))
     heading_hold_integral_limit_deg: float = field(default_factory=lambda: _env_float(10.0, "HEADING_HOLD_INTEGRAL_LIMIT_DEG"))
-    heading_hold_max_correction_step: int = field(default_factory=lambda: _env_int(8, "HEADING_HOLD_MAX_CORRECTION_STEP"))
+    heading_hold_max_correction_step: int = field(default_factory=lambda: _env_int(0, "HEADING_HOLD_MAX_CORRECTION_STEP"))
     heading_hold_min_sample_interval_seconds: float = field(default_factory=lambda: _env_float(0.0, "HEADING_HOLD_MIN_SAMPLE_INTERVAL_SECONDS"))
-    heading_hold_min_interval_seconds: float = field(default_factory=lambda: _env_float(0.05, "HEADING_HOLD_MIN_INTERVAL_SECONDS"))
-    heading_hold_max_consecutive: int = field(default_factory=lambda: _env_int(5, "HEADING_HOLD_MAX_CONSECUTIVE"))
+    heading_hold_min_interval_seconds: float = field(default_factory=lambda: _env_float(0.0, "HEADING_HOLD_MIN_INTERVAL_SECONDS"))
+    heading_hold_max_consecutive: int = field(default_factory=lambda: _env_int(0, "HEADING_HOLD_MAX_CONSECUTIVE"))
     heading_hold_confirm_samples: int = field(default_factory=lambda: _env_int(1, "HEADING_HOLD_CONFIRM_SAMPLES"))
     heading_hold_trace_interval_seconds: float = field(default_factory=lambda: _env_float(0.5, "HEADING_HOLD_TRACE_INTERVAL_SECONDS"))
+    heading_hold_stationary_enabled: bool = field(default_factory=lambda: _env_bool("HEADING_HOLD_STATIONARY_ENABLED", True))
+    heading_hold_stationary_max_pulses: int = field(default_factory=lambda: _env_int(8, "HEADING_HOLD_STATIONARY_MAX_PULSES"))
+    heading_hold_stationary_settle_seconds: float = field(default_factory=lambda: _env_float(0.05, "HEADING_HOLD_STATIONARY_SETTLE_SECONDS"))
+    heading_hold_stationary_correction_speed: int = field(default_factory=lambda: _env_int(30, "HEADING_HOLD_STATIONARY_CORRECTION_SPEED"))
+    heading_hold_stationary_min_correction_speed: int = field(default_factory=lambda: _env_int(18, "HEADING_HOLD_STATIONARY_MIN_CORRECTION_SPEED"))
+    heading_hold_stationary_gain: float = field(default_factory=lambda: _env_float(0.035, "HEADING_HOLD_STATIONARY_GAIN"))
+    heading_hold_stationary_min_pulse_seconds: float = field(default_factory=lambda: _env_float(0.10, "HEADING_HOLD_STATIONARY_MIN_PULSE_SECONDS"))
+    heading_hold_stationary_max_pulse_seconds: float = field(default_factory=lambda: _env_float(0.24, "HEADING_HOLD_STATIONARY_MAX_PULSE_SECONDS"))
     heading_zupt_enabled: bool = field(default_factory=lambda: _env_bool("HEADING_ZUPT_ENABLED", True))
     heading_zupt_samples: int = field(default_factory=lambda: _env_int(15, "HEADING_ZUPT_SAMPLES"))
     heading_zupt_sample_seconds: float = field(default_factory=lambda: _env_float(0.005, "HEADING_ZUPT_SAMPLE_SECONDS"))
@@ -1362,6 +1370,10 @@ class RobotRuntime:
         if self._stop_event.is_set() or self._manual_override.is_set():
             self.motion.stop()
             return
+        self._correct_heading_while_stopped("timed_stop_scan_pre_scan", fallback_speed=speed)
+        if self._stop_event.is_set() or self._manual_override.is_set():
+            self.motion.stop()
+            return
         self._scan_visible_shelf()
         self.motion.stop()
         self._zupt_recalibrate("timed_stop_scan")
@@ -1963,9 +1975,12 @@ class RobotRuntime:
         self._interruptible_sleep(max(0.0, float(self.config.object_settle_seconds)))
         if self._stop_event.is_set():
             return True
+        self._correct_heading_while_stopped("object_presence_pre_scan", fallback_speed=self.config.object_slow_speed)
+        if self._stop_event.is_set() or self._manual_override.is_set():
+            self.motion.stop()
+            return True
         self._scan_visible_shelf()
         self.motion.stop()
-        self._reset_heading_guard()
         self._zupt_recalibrate("post_object_scan")
         self._last_object_presence_at = time.monotonic()
         self.store.record_motion_debug(
@@ -2858,6 +2873,55 @@ class RobotRuntime:
         self._forward_mover_for_correction(correction)(speed=self.config.cruise_speed, duration_seconds=0.0)
         self._record_heading_hold_correction(correction, speed=self.config.cruise_speed)
 
+    def _correct_heading_while_stopped(self, reason: str, *, fallback_speed: int | None = None) -> bool:
+        if not (self.config.heading_hold_enabled and self.config.heading_hold_stationary_enabled):
+            return False
+        if self._stop_event.is_set() or self._manual_override.is_set():
+            return False
+        max_pulses = max(0, int(self.config.heading_hold_stationary_max_pulses))
+        if max_pulses <= 0:
+            return False
+        if self._heading_guard_instance() is None:
+            return False
+        self.motion.stop()
+        applied = False
+        settings = self._heading_hold_settings(fallback_speed)
+        settings.correction_speed = self.config.heading_hold_stationary_correction_speed
+        settings.min_correction_speed = self.config.heading_hold_stationary_min_correction_speed
+        settings.gain = self.config.heading_hold_stationary_gain
+        settings.min_pulse_seconds = self.config.heading_hold_stationary_min_pulse_seconds
+        settings.max_pulse_seconds = self.config.heading_hold_stationary_max_pulse_seconds
+        settle_seconds = max(0.0, float(self.config.heading_hold_stationary_settle_seconds))
+        self._heading_consecutive_count = 0
+        for attempt in range(1, max_pulses + 1):
+            if self._stop_event.is_set() or self._manual_override.is_set():
+                break
+            # A scan stop is already a deliberate pause, so use it to clean up
+            # accumulated heading error even if a moving correction just ran.
+            self._last_heading_correction_at = 0.0
+            correction = self._heading_hold_correction(settings.fallback_speed)
+            if correction is None:
+                break
+            mover = self.motion.rotate_right_slow if correction.direction == "right" else self.motion.rotate_left_slow
+            pulse_seconds = min(
+                max(abs(correction.effective_degrees) * max(0.0, float(settings.gain)), float(settings.min_pulse_seconds)),
+                float(settings.max_pulse_seconds),
+            )
+            if pulse_seconds <= 0.0:
+                break
+            mover(speed=correction.correction_speed, duration_seconds=pulse_seconds)
+            self.motion.stop()
+            applied = True
+            self._record_stationary_heading_correction(
+                correction,
+                reason=reason,
+                pulse_seconds=pulse_seconds,
+                attempt=attempt,
+            )
+            if settle_seconds > 0.0 and not self._interruptible_sleep(settle_seconds):
+                break
+        return applied
+
     def _record_heading_hold_correction(self, correction: HeadingHoldCorrection, *, speed: int) -> None:
         self._log_motion_command(
             "heading_hold",
@@ -2880,6 +2944,41 @@ class RobotRuntime:
                 "direction": correction.direction,
                 "correction_speed": correction.correction_speed,
                 "consecutive_count": self._heading_consecutive_count,
+                "integral_degrees": round(self._heading_integral_degrees, 3),
+            },
+        )
+
+    def _record_stationary_heading_correction(
+        self,
+        correction: HeadingHoldCorrection,
+        *,
+        reason: str,
+        pulse_seconds: float,
+        attempt: int,
+    ) -> None:
+        self._log_motion_command(
+            "heading_hold_stationary",
+            f"rotate_{correction.direction}",
+            speed=correction.correction_speed,
+            duration_seconds=pulse_seconds,
+            deviation=round(correction.deviation_degrees, 3),
+            rate=round(correction.rate_dps, 3),
+            effective=round(correction.effective_degrees, 3),
+            reason=reason,
+            attempt=attempt,
+        )
+        self.store.record_motion_debug(
+            "heading_hold_stationary_correction",
+            "停车扫描前已原地微调航向。",
+            evidence={
+                "reason": reason,
+                "attempt": attempt,
+                "deviation_degrees": round(correction.deviation_degrees, 3),
+                "rate_dps": round(correction.rate_dps, 3),
+                "effective_degrees": round(correction.effective_degrees, 3),
+                "direction": correction.direction,
+                "correction_speed": correction.correction_speed,
+                "pulse_seconds": round(pulse_seconds, 3),
                 "integral_degrees": round(self._heading_integral_degrees, 3),
             },
         )
@@ -3620,6 +3719,8 @@ def _clamp_config_speeds(config: RobotRuntimeConfig) -> None:
         "avoidance_speed",
         "object_slow_speed",
         "heading_hold_correction_speed",
+        "heading_hold_stationary_correction_speed",
+        "heading_hold_stationary_min_correction_speed",
         "boundary_retreat_speed",
         "cruise_speed",
         "timed_stop_scan_speed",

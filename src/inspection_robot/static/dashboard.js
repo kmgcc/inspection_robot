@@ -591,9 +591,9 @@ function renderCalibration(cal) {
   const minSpeed = cal.straight_min_speed;
   setText("saved-min-speed", minSpeed != null ? minSpeed : "待标定");
   const cw90 = cal.turn_cw90_seconds;
-  setText("saved-cw90", cw90 != null ? `速度${cal.turn_speed || 18} / ${cw90}s` : "待标定");
+  setText("saved-cw90", cw90 != null ? `速度${cal.turn_speed || 30} / ${cw90}s` : "待标定");
   const ccw90 = cal.turn_ccw90_seconds;
-  setText("saved-ccw90", ccw90 != null ? `速度${cal.turn_speed || 18} / ${ccw90}s` : "待标定");
+  setText("saved-ccw90", ccw90 != null ? `速度${cal.turn_speed || 30} / ${ccw90}s` : "待标定");
 
   // 更新手动控制默认速度（时长保持短按默认值，避免误用直行测试的长时长）
   const manualSpeed = byId("manual-speed");

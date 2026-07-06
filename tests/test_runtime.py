@@ -114,6 +114,14 @@ class RuntimeTest(unittest.TestCase):
             "HEADING_HOLD_MAX_CONSECUTIVE",
             "HEADING_HOLD_CONFIRM_SAMPLES",
             "HEADING_HOLD_TRACE_INTERVAL_SECONDS",
+            "HEADING_HOLD_STATIONARY_ENABLED",
+            "HEADING_HOLD_STATIONARY_MAX_PULSES",
+            "HEADING_HOLD_STATIONARY_SETTLE_SECONDS",
+            "HEADING_HOLD_STATIONARY_CORRECTION_SPEED",
+            "HEADING_HOLD_STATIONARY_MIN_CORRECTION_SPEED",
+            "HEADING_HOLD_STATIONARY_GAIN",
+            "HEADING_HOLD_STATIONARY_MIN_PULSE_SECONDS",
+            "HEADING_HOLD_STATIONARY_MAX_PULSE_SECONDS",
             "LINE_FOLLOW_ENABLED",
             "LINE_FOLLOW_AUTO_ENTER",
             "LINE_FOLLOW_SPEED",
@@ -162,14 +170,14 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(config.turn_speed, 30)
         self.assertEqual(config.turn_90_seconds, 0.72)
         self.assertEqual(config.action_settle_seconds, 0.12)
-        self.assertEqual(config.avoidance_speed, 20)
-        self.assertEqual(config.avoidance_body_seconds, 0.35)
+        self.assertEqual(config.avoidance_speed, 24)
+        self.assertEqual(config.avoidance_body_seconds, 0.30)
         self.assertEqual(config.avoidance_side_clearance_bodies, 1.0)
         self.assertEqual(config.avoidance_parallel_bodies, 1.6)
         self.assertEqual(config.avoidance_return_bodies, 1.0)
-        self.assertEqual(config.forbidden_avoidance_side_clearance_bodies, 1.2)
-        self.assertEqual(config.forbidden_avoidance_parallel_bodies, 1.6)
-        self.assertEqual(config.forbidden_avoidance_return_bodies, 1.2)
+        self.assertEqual(config.forbidden_avoidance_side_clearance_bodies, 1.4)
+        self.assertEqual(config.forbidden_avoidance_parallel_bodies, 1.8)
+        self.assertEqual(config.forbidden_avoidance_return_bodies, 1.4)
         self.assertEqual(config.boundary_min_black_sensors, 1)
         self.assertEqual(config.boundary_confirm_samples, 1)
         self.assertEqual(config.boundary_confirm_gap_seconds, 0.0)
@@ -184,25 +192,33 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(config.object_presence_confirm_frames, 1)
         self.assertEqual(config.object_presence_cooldown_seconds, 1.5)
         self.assertTrue(config.heading_hold_enabled)
-        self.assertEqual(config.heading_hold_tolerance_deg, 1.2)
+        self.assertEqual(config.heading_hold_tolerance_deg, 0.35)
         self.assertEqual(config.heading_hold_gain, 0.012)
         self.assertEqual(config.heading_hold_min_pulse_seconds, 0.025)
         self.assertEqual(config.heading_hold_max_pulse_seconds, 0.10)
-        self.assertEqual(config.heading_hold_correction_speed, 16)
+        self.assertEqual(config.heading_hold_correction_speed, 22)
         self.assertFalse(config.heading_hold_invert)
         self.assertEqual(config.heading_hold_rate_damping, 0.18)
-        self.assertEqual(config.heading_hold_speed_gain, 3.0)
-        self.assertEqual(config.heading_hold_min_correction_speed, 6)
-        self.assertEqual(config.heading_hold_max_speed_fraction, 0.8)
+        self.assertEqual(config.heading_hold_speed_gain, 5.0)
+        self.assertEqual(config.heading_hold_min_correction_speed, 14)
+        self.assertEqual(config.heading_hold_max_speed_fraction, 1.0)
         self.assertEqual(config.heading_hold_integral_gain, 0.45)
         self.assertEqual(config.heading_hold_integral_alpha, 0.15)
         self.assertEqual(config.heading_hold_integral_limit_deg, 10.0)
-        self.assertEqual(config.heading_hold_max_correction_step, 8)
+        self.assertEqual(config.heading_hold_max_correction_step, 0)
         self.assertEqual(config.heading_hold_min_sample_interval_seconds, 0.0)
-        self.assertEqual(config.heading_hold_min_interval_seconds, 0.05)
-        self.assertEqual(config.heading_hold_max_consecutive, 5)
+        self.assertEqual(config.heading_hold_min_interval_seconds, 0.0)
+        self.assertEqual(config.heading_hold_max_consecutive, 0)
         self.assertEqual(config.heading_hold_confirm_samples, 1)
         self.assertEqual(config.heading_hold_trace_interval_seconds, 0.5)
+        self.assertTrue(config.heading_hold_stationary_enabled)
+        self.assertEqual(config.heading_hold_stationary_max_pulses, 8)
+        self.assertEqual(config.heading_hold_stationary_settle_seconds, 0.05)
+        self.assertEqual(config.heading_hold_stationary_correction_speed, 30)
+        self.assertEqual(config.heading_hold_stationary_min_correction_speed, 18)
+        self.assertEqual(config.heading_hold_stationary_gain, 0.035)
+        self.assertEqual(config.heading_hold_stationary_min_pulse_seconds, 0.10)
+        self.assertEqual(config.heading_hold_stationary_max_pulse_seconds, 0.24)
         self.assertTrue(config.cruise_vision_enabled)
         self.assertEqual(config.cruise_speed, 24)
         self.assertEqual(config.cruise_tick_seconds, 0.03)

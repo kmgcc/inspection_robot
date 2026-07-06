@@ -50,14 +50,23 @@ Environment=BOUNDARY_RETREAT_SECONDS=0.14
 Environment=LINE_FOLLOW_ENABLED=$LINE_FOLLOW_ENABLED
 Environment=TRANSFER_LINE_ENABLED=$TRANSFER_LINE_ENABLED
 Environment=LINE_FOLLOW_SPEED=16
-Environment=HEADING_HOLD_TOLERANCE_DEG=1.2
-Environment=MPU6050_YAW_DEADBAND_DPS=0.7
-Environment=MPU6050_YAW_LEAK_PER_SECOND=0.15
-Environment=HEADING_HOLD_CORRECTION_SPEED=16
-Environment=HEADING_HOLD_SPEED_GAIN=3.0
-Environment=HEADING_HOLD_MIN_CORRECTION_SPEED=6
-Environment=HEADING_HOLD_MAX_SPEED_FRACTION=0.8
-Environment=HEADING_HOLD_MIN_INTERVAL_SECONDS=0.05
+Environment=HEADING_HOLD_TOLERANCE_DEG=0.35
+Environment=MPU6050_YAW_DEADBAND_DPS=0.15
+Environment=MPU6050_YAW_LEAK_PER_SECOND=0.03
+Environment=HEADING_HOLD_CORRECTION_SPEED=22
+Environment=HEADING_HOLD_SPEED_GAIN=5.0
+Environment=HEADING_HOLD_MIN_CORRECTION_SPEED=14
+Environment=HEADING_HOLD_MAX_SPEED_FRACTION=1.0
+Environment=HEADING_HOLD_MIN_INTERVAL_SECONDS=0.0
+Environment=HEADING_HOLD_MAX_CONSECUTIVE=0
+Environment=HEADING_HOLD_MAX_CORRECTION_STEP=0
+Environment=HEADING_HOLD_STATIONARY_MAX_PULSES=8
+Environment=HEADING_HOLD_STATIONARY_CORRECTION_SPEED=30
+Environment=HEADING_HOLD_STATIONARY_MIN_CORRECTION_SPEED=18
+Environment=HEADING_HOLD_STATIONARY_GAIN=0.035
+Environment=HEADING_HOLD_STATIONARY_MIN_PULSE_SECONDS=0.10
+Environment=HEADING_HOLD_STATIONARY_MAX_PULSE_SECONDS=0.24
+Environment=ROBOT_FORWARD_CORRECTION_SPLIT=0.0
 Environment=OBJECT_PRESENCE_COOLDOWN_SECONDS=1.5
 Environment=OBJECT_PRESENCE_MIN_AREA_RATIO=0.008
 Environment=BLOCKED_DISTANCE_MM=120
@@ -67,8 +76,8 @@ Environment=ROBOT_PIPER_DIR=$ROBOT_PIPER_DIR
 Environment=ROBOT_PIPER_MODEL=$ROBOT_PIPER_MODEL
 Environment=PATH=$ROBOT_PIPER_DIR:/home/pi/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=AVOIDANCE_TURN_DIRECTION=right
-Environment=AVOIDANCE_SPEED=14
-Environment=AVOIDANCE_BODY_SECONDS=1.00
+Environment=AVOIDANCE_SPEED=16
+Environment=AVOIDANCE_BODY_SECONDS=0.85
 ExecStartPre=/bin/sh -c '/home/pi/project_demo/raspbot/killprocess.sh || true'
 ExecStart=/usr/bin/env bash -lc 'PYTHON_CMD=\$(for candidate in python3.13 python3.12 python3.11 python3.10 python3 python; do if command -v "\$candidate" >/dev/null 2>&1 && "\$candidate" -c "import sys; raise SystemExit(sys.version_info < (3, 10))" >/dev/null 2>&1; then echo -n "\$candidate"; exit 0; fi; done); test -n "\$PYTHON_CMD"; exec "\$PYTHON_CMD" app.py'
 Restart=on-failure

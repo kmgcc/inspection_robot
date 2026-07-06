@@ -327,11 +327,11 @@ def create_app(root: Path | None = None) -> Flask:
         config = getattr(runtime, "config", None)
         cal = app.config["CALIBRATION_STORE"].load()
         direction = str(payload.get("direction") or "right").strip().lower()
-        default_speed = cal.get("turn_speed") or getattr(config, "turn_speed", 18)
+        default_speed = cal.get("turn_speed") or getattr(config, "turn_speed", 30)
         if direction in {"left", "ccw"}:
-            default_dur = cal.get("turn_ccw90_seconds") or getattr(config, "turn_90_seconds", 0.75)
+            default_dur = cal.get("turn_ccw90_seconds") or getattr(config, "turn_90_seconds", 0.62)
         else:
-            default_dur = cal.get("turn_cw90_seconds") or getattr(config, "turn_90_seconds", 0.75)
+            default_dur = cal.get("turn_cw90_seconds") or getattr(config, "turn_90_seconds", 0.62)
         speed = _int_payload(payload, "speed", int(default_speed))
         duration = _float_payload(payload, "duration_seconds", float(default_dur))
         if direction not in {"left", "right", "cw", "ccw"}:
@@ -508,11 +508,11 @@ def create_app(root: Path | None = None) -> Flask:
         # 支持 cw/ccw/right/left
         if direction in {"right", "cw"}:
             direction = "cw"
-            default_dur = float(cal.get("turn_cw90_seconds", 0.75))
+            default_dur = float(cal.get("turn_cw90_seconds", 0.62))
         else:
             direction = "ccw"
-            default_dur = float(cal.get("turn_ccw90_seconds", 0.75))
-        speed = _int_payload(payload, "speed", int(cal.get("turn_speed", 18)))
+            default_dur = float(cal.get("turn_ccw90_seconds", 0.62))
+        speed = _int_payload(payload, "speed", int(cal.get("turn_speed", 30)))
         duration = _float_payload(payload, "duration_seconds", default_dur)
         session = _ensure_test_session()
         try:
@@ -590,16 +590,16 @@ def create_app(root: Path | None = None) -> Flask:
         elif command == "turn_left_90":
             turner = getattr(runtime, "turn_90_closed_loop", None)
             if callable(turner):
-                turner("left", speed=turn_speed, duration_seconds=cal.get("turn_ccw90_seconds", 0.75))
+                turner("left", speed=turn_speed, duration_seconds=cal.get("turn_ccw90_seconds", 0.62))
             else:
-                active_motion.rotate_left_slow(speed=turn_speed, duration_seconds=cal.get("turn_ccw90_seconds", 0.75))
+                active_motion.rotate_left_slow(speed=turn_speed, duration_seconds=cal.get("turn_ccw90_seconds", 0.62))
                 active_motion.stop()
         elif command == "turn_right_90":
             turner = getattr(runtime, "turn_90_closed_loop", None)
             if callable(turner):
-                turner("right", speed=turn_speed, duration_seconds=cal.get("turn_cw90_seconds", 0.75))
+                turner("right", speed=turn_speed, duration_seconds=cal.get("turn_cw90_seconds", 0.62))
             else:
-                active_motion.rotate_right_slow(speed=turn_speed, duration_seconds=cal.get("turn_cw90_seconds", 0.75))
+                active_motion.rotate_right_slow(speed=turn_speed, duration_seconds=cal.get("turn_cw90_seconds", 0.62))
                 active_motion.stop()
         else:
             raise ValueError(f"unknown manual command: {command}")

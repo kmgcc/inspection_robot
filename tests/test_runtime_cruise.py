@@ -107,6 +107,17 @@ class FakeGuard:
         self.last_sample_at = None
 
 
+class SequenceGuard(FakeGuard):
+    def __init__(self, deviations: list[float], rate: float = 0.0) -> None:
+        super().__init__(deviation=deviations[-1] if deviations else 0.0, rate=rate)
+        self.deviations = list(deviations)
+
+    def update(self) -> float:
+        if self.deviations:
+            self.deviation = self.deviations.pop(0)
+        return super().update()
+
+
 class FakeImu:
     def __init__(self, guard: FakeGuard | None) -> None:
         self.guard = guard
@@ -290,6 +301,82 @@ class CruiseRuntimeTest(unittest.TestCase):
         self.assertIn("vision_scan_start", stages)
         self.assertIn("timed_stop_scan_resume", stages)
 
+    def test_timed_stop_scan_corrects_heading_while_stopped_before_scan(self) -> None:
+        guard = FakeGuard(deviation=6.0, rate=0.0)
+        runtime, motion, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                smooth_cruise_enabled=True,
+                cruise_vision_enabled=False,
+                object_trigger_enabled=False,
+                timed_stop_scan_enabled=True,
+                timed_stop_scan_drive_seconds=0,
+                timed_stop_scan_settle_seconds=0,
+                scan_timeout_seconds=0,
+                heading_hold_enabled=True,
+                heading_hold_tolerance_deg=3.0,
+                heading_hold_min_interval_seconds=0.0,
+                heading_hold_confirm_samples=1,
+                heading_hold_stationary_max_pulses=1,
+                heading_hold_stationary_settle_seconds=0,
+                action_settle_seconds=0,
+                boundary_cooldown_seconds=0,
+            ),
+            imu=FakeImu(guard),
+        )
+
+        runtime.run_continuous_patrol(max_iterations=1)
+        stages = [
+            event.get("evidence", {}).get("stage")
+            for event in runtime.store.snapshot()["events"]
+            if event["type"] == "motion_debug" and isinstance(event.get("evidence"), dict)
+        ]
+
+        self.assertIn("move_forward_corrected:right", motion.calls)
+        self.assertIn("rotate_right", motion.calls)
+        self.assertIn("heading_hold_stationary_correction", stages)
+
+    def test_stationary_heading_correction_ignores_moving_consecutive_cooldown(self) -> None:
+        guard = FakeGuard(deviation=6.0, rate=0.0)
+        runtime, motion, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                heading_hold_enabled=True,
+                heading_hold_tolerance_deg=3.0,
+                heading_hold_min_interval_seconds=0.0,
+                heading_hold_max_consecutive=1,
+                heading_hold_confirm_samples=1,
+                heading_hold_stationary_max_pulses=1,
+                heading_hold_stationary_settle_seconds=0,
+                action_settle_seconds=0,
+            ),
+            imu=FakeImu(guard),
+        )
+
+        runtime._apply_heading_hold()
+        motion.calls.clear()
+        guard.last_sample_at = None
+        runtime._correct_heading_while_stopped("unit_test", fallback_speed=20)
+
+        self.assertIn("rotate_right", motion.calls)
+
+    def test_stationary_heading_correction_repeats_until_within_tolerance(self) -> None:
+        guard = SequenceGuard([4.0, 2.0, 0.1], rate=0.0)
+        runtime, motion, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                heading_hold_enabled=True,
+                heading_hold_tolerance_deg=0.35,
+                heading_hold_min_interval_seconds=0.0,
+                heading_hold_confirm_samples=1,
+                heading_hold_stationary_max_pulses=5,
+                heading_hold_stationary_settle_seconds=0,
+                action_settle_seconds=0,
+            ),
+            imu=FakeImu(guard),
+        )
+
+        runtime._correct_heading_while_stopped("unit_test", fallback_speed=20)
+
+        self.assertEqual(motion.calls.count("rotate_right"), 2)
+
     def test_cruise_stops_for_opencv_object_presence_scan(self) -> None:
         runtime, motion, _ = self.make_runtime(
             config=RobotRuntimeConfig(
@@ -463,6 +550,20 @@ class CruiseRuntimeTest(unittest.TestCase):
         self.assertNotIn("rotate_left", motion.calls)
         self.assertNotIn("rotate_right", motion.calls)
 
+    def test_heading_hold_default_detects_small_drift(self) -> None:
+        guard = FakeGuard(deviation=0.5, rate=0.0)
+        runtime, motion, _ = self.make_runtime(
+            config=RobotRuntimeConfig(
+                heading_hold_enabled=True,
+                action_settle_seconds=0,
+            ),
+            imu=FakeImu(guard),
+        )
+
+        runtime._apply_heading_hold()
+
+        self.assertIn("move_forward_corrected:right", motion.calls)
+
     def test_heading_hold_caps_correction_to_stronger_forward_speed_fraction(self) -> None:
         guard = FakeGuard(deviation=50.0, rate=0.0)
         runtime, motion, _ = self.make_runtime(
@@ -488,7 +589,7 @@ class CruiseRuntimeTest(unittest.TestCase):
             for event in runtime.store.snapshot()["events"]
             if event["type"] == "motion_debug" and event.get("evidence", {}).get("stage") == "heading_hold_correction"
         ]
-        self.assertEqual(correction_events[-1]["evidence"]["correction_speed"], 16)
+        self.assertEqual(correction_events[-1]["evidence"]["correction_speed"], 20)
 
     def test_heading_hold_ramps_large_correction_steps(self) -> None:
         guard = FakeGuard(deviation=50.0, rate=0.0)
@@ -515,8 +616,8 @@ class CruiseRuntimeTest(unittest.TestCase):
             for event in runtime.store.snapshot()["events"]
             if event["type"] == "motion_debug" and event.get("evidence", {}).get("stage") == "heading_hold_correction"
         ]
-        self.assertEqual(correction_events[-1]["evidence"]["correction_speed"], 8)
-        self.assertEqual(correction_events[-2]["evidence"]["correction_speed"], 16)
+        self.assertEqual(correction_events[-1]["evidence"]["correction_speed"], 14)
+        self.assertEqual(correction_events[-2]["evidence"]["correction_speed"], 20)
 
     def test_heading_hold_throttles_back_to_back_corrections(self) -> None:
         guard = FakeGuard(deviation=8.0, rate=0.0)
