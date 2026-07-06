@@ -298,11 +298,8 @@ def create_app(root: Path | None = None) -> Flask:
         duration = _float_payload(payload, "duration_seconds", float(default_dur))
         try:
             _stop_test_session()
-            # R1 fix: request_manual_override halts the patrol loop AND clears
-            # _stop_event afterwards, so the IMU closed-loop 90° turn (whose
-            # should_abort reads _stop_event) does not self-abort on its first
-            # check. The old runtime.stop() + _clear_motion_stop() path left
-            # _stop_event set, so turn_left_90/turn_right_90 never even pulsed.
+            # Manual override parks the chassis and clears the patrol stop flag,
+            # so closed-loop 90 degree turns can run without self-aborting.
             runtime.request_manual_override()
             try:
                 _run_manual_command(command, speed=speed, duration_seconds=duration, runtime=runtime)
@@ -337,9 +334,8 @@ def create_app(root: Path | None = None) -> Flask:
         if direction not in {"left", "right", "cw", "ccw"}:
             return jsonify({"ok": False, "error": f"unknown turn direction: {direction}"}), 400
         try:
-            # R1 fix: same manual-override handshake as /api/control, so the
-            # chassis is parked cleanly and the patrol loop can't race the
-            # calibration turn.
+            # Use the same manual-override handshake as /api/control so the
+            # patrol loop cannot race the calibration turn.
             runtime.request_manual_override()
             try:
                 active_motion = getattr(runtime, "motion", motion)

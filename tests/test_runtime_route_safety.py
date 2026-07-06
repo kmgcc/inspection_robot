@@ -362,7 +362,7 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
         self.assertIn("normal", fake_alarm.calls)
 
     def test_request_manual_override_clears_stop_event_for_manual_turn(self) -> None:
-        """R1 fix: request_manual_override clears _stop_event so the IMU
+        """request_manual_override clears _stop_event so the IMU
         closed-loop 90° turn's should_abort callback returns False. Without
         this, manual turn_left_90 / turn_right_90 abort before motion."""
 
@@ -381,7 +381,7 @@ class RuntimeRouteSafetyTest(unittest.TestCase):
             detection_provider=fake_detection_provider,
             imu_adapter=fake_imu,
         )
-        # Simulate the old broken state: stop() set _stop_event.
+        # A pending stop flag must be cleared before manual motion starts.
         runtime._stop_event.set()
 
         runtime.request_manual_override()

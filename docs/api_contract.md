@@ -232,7 +232,7 @@ path_planned/path_step/path_replanned -> 仅软件兜底或旧演示使用
 
 ### 5.1 货架清单
 
-`config/shelf_manifest.json` 表达每个货架预期物品。真实场地需要覆盖 A 列 `A1`、`A2`、`A3`、`A4` 和 B 列 `B1`、`B2`、`B3`、`B4`。需要注意，B 列从 A 列转过来后从末端开始巡检，实际经过顺序为 `B4`、`B3`、`B2`、`B1`。
+`config/shelf_manifest.json` 表达每个货架预期物品。真实场地覆盖 A 列 `A1`、`A2`、`A3`、`A4` 和 B 列 `B1`、`B2`、`B3`。需要注意，B 列从 A 列转过来后从末端开始巡检，实际经过顺序为 `B3`、`B2`、`B1`。
 
 ```json
 {
@@ -242,8 +242,7 @@ path_planned/path_step/path_replanned -> 仅软件兜底或旧演示使用
   "A4": {"expected_items": ["item_05"]},
   "B1": {"expected_items": ["item_06"]},
   "B2": {"expected_items": ["item_07"]},
-  "B3": {"expected_items": ["item_08"]},
-  "B4": {"expected_items": ["item_09"]}
+  "B3": {"expected_items": ["item_08"]}
 }
 ```
 
@@ -251,7 +250,7 @@ path_planned/path_step/path_replanned -> 仅软件兜底或旧演示使用
 
 ```json
 {
-  "patrol_order": ["A1", "A2", "A3", "A4", "B4", "B3", "B2", "B1"]
+  "patrol_order": ["A1", "A2", "A3", "A4", "B3", "B2", "B1"]
 }
 ```
 

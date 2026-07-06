@@ -4,7 +4,7 @@
 
 | 证据项 | 建议文件名 | 验收要点 | 状态 |
 |---|---|---|---|
-| 场地布置照片 | `field-layout.jpg` | A1-A4、B1-B4、列端“工字形”黑胶带、通道和小车初始位置清楚可见 | 待补 |
+| 场地布置照片 | `field-layout.jpg` | A1-A4、B1-B3、列端“工字形”黑胶带、通道和小车初始位置清楚可见 | 待补 |
 | Wi-Fi/网页/SSH/VNC 可用截图 | `network-access.png` | 树莓派联网，网页、SSH、VNC 均可访问 | 待补 |
 | 官方 App 禁用证据 | `official-app-disabled.png` | 官方主程序未占用摄像头、底盘、I2C 或端口 | 待补 |
 | 网页 robot mode 截图 | `robot-mode-dashboard.png` | 页面清楚显示真车模式和硬件连接状态 | 待补 |
@@ -12,7 +12,7 @@
 | 云台侧向初始化视频 | `gimbal-side-init.mp4` | 开机或网页触发后摄像头朝向货架侧面 | 待补 |
 | 四路全黑端点转向视频 | `boundary-turn-90.mp4` | 压到横向黑胶带后顺时针转 90 度并继续 | 待补 |
 | 第一轮跳过检测截图 | `first-pass-learning.png` | 第一轮识别货架但不产生缺货事件 | 待补 |
-| B 列反向巡检证据 | `b4-to-b1-patrol.mp4` | 小车转到 B 列后按 B4、B3、B2、B1 顺序巡检 | 待补 |
+| B 列反向巡检证据 | `b3-to-b1-patrol.mp4` | 小车转到 B 列后按 B3、B2、B1 顺序巡检 | 待补 |
 | 第二轮缺货截图 | `missing-item-second-cycle.png` | 第二轮出现 `missing_item`，货架和物品可见 | 待补 |
 | 红灯和语音警报视频 | `missing-alarm-audio-light.mp4` | 缺货时红灯和语音报警触发 | 待补 |
 | 货架提示音视频 | `shelf-audio-cue.mp4` | 扫描到货架时播放提示音 | 待补 |

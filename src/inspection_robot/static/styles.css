@@ -1,5 +1,5 @@
 /* =========================================================
-   仓库巡逻看板 — Material You & Expressive 样式表
+   仓库巡逻看板样式表
    ========================================================= */
 
 :root {
@@ -56,7 +56,7 @@
   --gap-md: 12px;
   --gap-lg: 16px;
 
-  /* Google Material You Big Rounded Radii */
+  /* Radius scale */
   --radius-xs: 6px;
   --radius-sm: 8px;
   --radius-md: 14px;
@@ -248,7 +248,7 @@ h1, h2, h3, p {
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: var(--radius-lg); /* Big Rounded Corners (20px) */
+  border-radius: var(--radius-lg);
   padding: 16px;
   box-shadow: var(--shadow-2);
   transition: box-shadow var(--transition-medium);
@@ -556,7 +556,7 @@ details[open] .collapsible-title::after {
 }
 
 /* =========================================================
-   Buttons & Inputs (Material You Pill Shape)
+   Buttons & Inputs
    ========================================================= */
 .btn {
   min-height: 32px;

@@ -1,7 +1,7 @@
 # MPU6050 加速度传感器接入文档
 
-**状态：** 新增硬件接入说明。  
-**前置依据：** `docs/REAL_REQUIREMENTS.md`、`docs/hardware_reference/README.md`  
+**状态：** 硬件接入说明。  
+**前置依据：** `docs/REAL_REQUIREMENTS.md`  
 **目标：** 将 MPU6050 模块接入 Raspberry Pi 5，通过 I2C 读取加速度和陀螺仪数据，用作小车运动状态与转向标定的辅助反馈。
 
 ## 一、接入边界
@@ -23,22 +23,9 @@ MPU6050 在本项目中只做辅助传感器：
 
 第一阶段只要求完成稳定读数、静止偏置估计和一次 90 度转向对比记录。
 
-## 二、本地资料位置
+## 二、模块关键信息
 
-已经整理好的资料在：
-
-```text
-docs/hardware_reference/
-```
-
-优先看：
-
-1. `docs/hardware_reference/mpu6050_module/README.md`
-2. `docs/hardware_reference/raspberry_pi_5/raspberry-pi-5-gpio-i2c-quick-reference.md`
-3. `docs/hardware_reference/raspberry_pi_5/raspberry-pi-5-gpio-software-stack.md`
-4. `docs/hardware_reference/mpu6050_module/RM-MPU-6000A.pdf`
-
-当前模块关键信息：
+原始硬件资料已移出提交仓库，归档在上层 `Archive/inspection_robot_submission_2026-07-06/reference_materials/`。提交版保留本项目直接需要的接线和验证信息：
 
 1. 模块排针顺序为 `VCC`、`GND`、`SCL`、`SDA`、`XDA`、`XCL`、`AD0`、`INT`。
 2. 模块带 3.3V LDO。
@@ -181,14 +168,13 @@ def estimate_gyro_bias(seconds: float = 5.0) -> dict | None: ...
 
 ## 八、验收清单
 
-1. 文档资料能在 `docs/hardware_reference/` 中找到。
-2. MPU6050 使用 3.3V、GND、SCL、SDA 正确接入。
-3. `sudo i2cdetect -y 1` 能看到 `0x68` 或 `0x69`。
-4. Python 最小脚本能连续读出 acceleration、gyro、temperature。
-5. 静止状态下能估计陀螺仪偏置。
-6. 手动转动车体或模块时，角速度读数有明显变化。
-7. 一次原地 90 度转向后，日志中能看到估计角度和实际观察备注。
-8. 传感器不可用时，系统降级运行，不影响急停、网页和基本巡逻。
+1. MPU6050 使用 3.3V、GND、SCL、SDA 正确接入。
+2. `sudo i2cdetect -y 1` 能看到 `0x68` 或 `0x69`。
+3. Python 最小脚本能连续读出 acceleration、gyro、temperature。
+4. 静止状态下能估计陀螺仪偏置。
+5. 手动转动车体或模块时，角速度读数有明显变化。
+6. 一次原地 90 度转向后，日志中能看到估计角度和实际观察备注。
+7. 传感器不可用时，系统降级运行，不影响急停、网页和基本巡逻。
 
 ## 九、后续任务
 

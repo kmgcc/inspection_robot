@@ -316,9 +316,9 @@ class TestSessionManager:
         target: Any,
         args: tuple,
     ) -> None:
-        # 先停止旧会话
+        # 先停止当前会话
         self.stop()
-        # 清除停止事件，启动新会话
+        # 清除停止事件，启动新的测试会话
         clearer = getattr(self._motion, "clear_stop", None)
         if callable(clearer):
             clearer()

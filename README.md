@@ -2,11 +2,11 @@
 
 这是一个 RASPBOT V2 麦克纳姆轮小车课程项目。真实目标不是循线，也不是按预设栅格地图跑 A* 路径，而是在固定货架通道中自动往返巡逻：侧向扫描货架和物品，检测缺货、重复、错放、未知物品和识别证据冲突，并通过灯光、声音、网页看板和日志进行上报。
 
-当前最重要的需求文档是：
+当前最完整的项目计划是：
 
-- [真实需求基准文档](docs/REAL_REQUIREMENTS.md)
+- [全局规划书](docs/PROJECT_PLAN.md)
 
-如果其他文档和它冲突，以 `REAL_REQUIREMENTS.md` 为准。
+如果其他文档和代码冲突，以当前代码和配置文件为准。
 
 ## 当前真实主链路
 
@@ -16,7 +16,7 @@
 4. 货架通过 AprilTag 识别。
 5. 物品通过 AprilTag、文字、图形识别；颜色可选，有则记录，没有不能报错。
 6. A 列当前明确为 `A1`、`A2`、`A3`、`A4`。
-7. B 列也确定为 `B1`、`B2`、`B3`、`B4`；从 A 列转到 B 列后，实际经过顺序是 `B4`、`B3`、`B2`、`B1`。
+7. B 列为 `B1`、`B2`、`B3`；从 A 列转到 B 列后，实际经过顺序是 `B3`、`B2`、`B1`。
 8. 小车到货架尽头或禁区边缘遇到黑胶带，任意一路传感器压黑即锁存边界、停车并按当前阶段顺时针转向或绕行。
 9. 第一轮只记录观察，不报缺货。
 10. 第二轮及之后开始检测并上报缺货等异常。
@@ -27,18 +27,14 @@
 
 ## 文档入口
 
-- [真实需求基准文档](docs/REAL_REQUIREMENTS.md)：当前最高优先级需求。
-- [全局规划书](docs/PROJECT_PLAN.md)：按真实需求同步后的总计划。
+- [全局规划书](docs/PROJECT_PLAN.md)：最精简的完整项目计划。
+- [真实需求基准文档](docs/REAL_REQUIREMENTS.md)：场地、运行逻辑和验收边界。
 - [共享 API 契约](docs/api_contract.md)：状态字段、事件、运行模式、动态拓扑和控制接口。
-- [0.1 基准计划](docs/plans/0.1-plan-shared-contract.md)：共享契约与配置格式。
-- [1.1 硬件计划](docs/plans/1.1-plan-robot-io.md)：底盘、云台、超声波、黑胶带、音频灯光和 runtime。
 - [MPU6050 接入文档](docs/mpu6050_integration.md)：加速度/陀螺仪模块接线、依赖、验证和 runtime 接入边界。
-- [2.1 核心计划](docs/plans/2.1-plan-core-contract.md)：轮次、货架清单、识别证据、异常规则和动态拓扑。
-- [3.1 看板计划](docs/plans/3.1-plan-dashboard-demo.md)：网页控制、运行模式、动态拓扑和演示兜底。
 - [SSH 连接与运维手册](docs/ssh_operations.md)：小车账号、SSH/VNC、部署和官方程序清理。
 - [演示运行手册](docs/demo_runbook.md)：真车演示、网页演示和兜底流程。
 - [答辩证据清单](docs/evidence_checklist.md)：需要录制或截图的证据。
-- [官方资料索引](docs/RASPBOT-V2_Clean_Docs/README.md)：保留的 RASPBOT V2 资料说明。
+- [AprilTag 打印材料](docs/print_materials/AprilTag/)：货架和物品标签打印文件。
 
 ## 本地运行
 

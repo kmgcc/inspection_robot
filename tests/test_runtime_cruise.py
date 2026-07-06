@@ -1023,7 +1023,7 @@ class CruiseRuntimeTest(unittest.TestCase):
             )
         )
 
-    # --- R1/R3/R4/R5 regression tests ------------------------------------ #
+    # --- cruise and heading-hold invariants ------------------------------- #
 
     def test_cruise_deadband_pure_forward(self) -> None:
         """Inside the heading-hold deadband the cruise tick must issue only
@@ -1055,7 +1055,7 @@ class CruiseRuntimeTest(unittest.TestCase):
 
     def test_cruise_no_new_imu_sample_no_repeat_correction(self) -> None:
         """If the guard's last_sample_at is too recent (no new I2C sample),
-        _apply_heading_hold must skip entirely — R4 freshness gate."""
+        _apply_heading_hold must skip entirely until a fresh sample arrives."""
 
         guard = FakeGuard(deviation=6.0, rate=0.0)
         runtime, motion, _ = self.make_runtime(
@@ -1219,11 +1219,11 @@ class CruiseRuntimeTest(unittest.TestCase):
         self.assertGreaterEqual(motion.calls.count("move_forward"), 3)
         self.assertNotIn("stop", motion.calls)
 
-    # --- R1 manual override regression ---------------------------------- #
+    # --- manual override behavior ---------------------------------------- #
 
     def test_manual_override_takes_over_immediately(self) -> None:
         """request_manual_override clears _stop_event so the IMU closed-loop
-        turn's should_abort callback returns False — R1 regression. Also the
+        turn's should_abort callback returns False. Also the
         heading-hold consecutive counter is reset so a stale correction can't
         bleed into the manual command."""
 
@@ -1238,8 +1238,7 @@ class CruiseRuntimeTest(unittest.TestCase):
             ),
             imu=FakeImu(guard),
         )
-        # Simulate the old broken path: stop() set _stop_event and it was
-        # never cleared.
+        # A pending stop flag must not abort the manual turn.
         runtime._stop_event.set()
 
         runtime.request_manual_override()
@@ -1293,10 +1292,9 @@ class CruiseRuntimeTest(unittest.TestCase):
         self.assertNotIn("rotate_right", motion.calls)
 
     def test_manual_turn_left_right_regression(self) -> None:
-        """Regression for ba52c92: manual turn_left_90 / turn_right_90 must
+        """Manual turn_left_90 / turn_right_90 must
         actually pulse the IMU turn — should_abort must be False throughout.
-        This is the test that R1 broke: the old runtime.stop() left
-        _stop_event set, so imu_turn aborted before motion."""
+        The stop flag is cleared before the IMU turn starts."""
 
         guard = FakeGuard(deviation=0.0)
         runtime, _, _ = self.make_runtime(
