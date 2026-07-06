@@ -75,9 +75,9 @@ def _env_text(default: str, *names: str) -> str:
 
 @dataclass(slots=True)
 class RobotRuntimeConfig:
-    blocked_distance_mm: int = field(default_factory=lambda: _env_int(100, "BLOCKED_DISTANCE_MM"))
-    clear_distance_mm: int = field(default_factory=lambda: _env_int(160, "CLEAR_DISTANCE_MM"))
-    blocked_samples: int = field(default_factory=lambda: _env_int(3, "BLOCKED_SAMPLES"))
+    blocked_distance_mm: int = field(default_factory=lambda: _env_int(120, "BLOCKED_DISTANCE_MM"))
+    clear_distance_mm: int = field(default_factory=lambda: _env_int(180, "CLEAR_DISTANCE_MM"))
+    blocked_samples: int = field(default_factory=lambda: _env_int(1, "BLOCKED_SAMPLES"))
     patrol_speed: int = field(default_factory=lambda: _env_int(16, "ROBOT_PATROL_SPEED", "ROBOT_SLOW_SPEED"))
     step_seconds: float = field(default_factory=lambda: _env_float(0.18, "ROBOT_PATROL_STEP_SECONDS", "ROBOT_STEP_SECONDS"))
     patrol_settle_seconds: float = field(default_factory=lambda: _env_float(0.05, "ROBOT_PATROL_SETTLE_SECONDS"))
@@ -1233,6 +1233,8 @@ class RobotRuntime:
         poll_seconds = max(0.001, float(self.config.transfer_line_guard_poll_seconds))
         deadline = time.monotonic() + duration
         latched = self._poll_boundary_during_motion(0.0)
+        if not latched:
+            latched = self._poll_obstacle_during_motion(0.0)
         while (
             not latched
             and time.monotonic() < deadline
@@ -1243,6 +1245,8 @@ class RobotRuntime:
             time.sleep(min(poll_seconds, remaining))
             elapsed = max(0.0, duration - max(0.0, deadline - time.monotonic()))
             latched = self._poll_boundary_during_motion(elapsed)
+            if not latched:
+                latched = self._poll_obstacle_during_motion(elapsed)
         if self._manual_override.is_set() or self._stop_event.is_set() or latched:
             self.motion.stop()
 
@@ -1283,6 +1287,7 @@ class RobotRuntime:
             speed=self.config.cruise_speed,
             duration_seconds=self.config.cruise_tick_seconds,
             watch_boundary=True,
+            watch_obstacle=True,
             heading_hold=True,
             keep_running=True,
         )
@@ -1331,6 +1336,7 @@ class RobotRuntime:
             speed=speed,
             duration_seconds=drive_seconds,
             watch_boundary=True,
+            watch_obstacle=True,
             heading_hold=True,
         )
         if (
@@ -1470,6 +1476,7 @@ class RobotRuntime:
                 self.motion.move_forward_slow,
                 speed=self.config.line_follow_speed,
                 duration_seconds=step_seconds,
+                watch_obstacle=True,
                 heading_hold=False,
             )
         elif command == "strafe_left":
@@ -1539,6 +1546,7 @@ class RobotRuntime:
         speed: int,
         duration_seconds: float,
         watch_boundary: bool = True,
+        watch_obstacle: bool = False,
         heading_hold: bool = False,
         keep_running: bool = False,
     ) -> bool:
@@ -1548,14 +1556,16 @@ class RobotRuntime:
         duration = max(0.0, float(duration_seconds))
         guard_interval = (
             max(0.0, float(self.config.motion_guard_poll_seconds))
-            if watch_boundary or heading_hold
+            if watch_boundary or watch_obstacle or heading_hold
             else 0.0
         )
-        if watch_boundary and guard_interval > 0.0:
+        if (watch_boundary or watch_obstacle) and guard_interval > 0.0:
             return self._run_guarded_motion_loop(
                 mover,
                 speed=speed,
                 duration_seconds=duration,
+                watch_boundary=watch_boundary,
+                watch_obstacle=watch_obstacle,
                 heading_hold=heading_hold,
                 keep_running=keep_running,
                 guard_interval=guard_interval,
@@ -1568,6 +1578,8 @@ class RobotRuntime:
             if correction is not None:
                 self._record_heading_hold_correction(correction, speed=speed)
             latched = self._poll_boundary_during_motion(duration) if watch_boundary else False
+            if not latched and watch_obstacle:
+                latched = self._poll_obstacle_during_motion(duration)
             if not keep_running or latched:
                 self.motion.stop()
             if latched:
@@ -1592,6 +1604,9 @@ class RobotRuntime:
             if watch_boundary and self._poll_boundary_during_motion(elapsed):
                 latched = True
                 break
+            if watch_obstacle and self._poll_obstacle_during_motion(elapsed):
+                latched = True
+                break
         if self._manual_override.is_set():
             # Manual control needs a clean slate: drop any energised axis so the
             # next manual motion command starts from a stopped chassis.
@@ -1609,6 +1624,8 @@ class RobotRuntime:
         *,
         speed: int,
         duration_seconds: float,
+        watch_boundary: bool,
+        watch_obstacle: bool,
         heading_hold: bool,
         keep_running: bool,
         guard_interval: float,
@@ -1627,7 +1644,10 @@ class RobotRuntime:
             self._start_guarded_motion(mover, speed=speed, correction=correction)
             if correction is not None:
                 self._record_heading_hold_correction(correction, speed=speed)
-            latched = self._poll_boundary_during_motion(elapsed)
+            if watch_boundary:
+                latched = self._poll_boundary_during_motion(elapsed)
+            if not latched and watch_obstacle:
+                latched = self._poll_obstacle_during_motion(elapsed)
             if latched or duration <= 0.0:
                 break
             now = time.monotonic()
@@ -1645,6 +1665,44 @@ class RobotRuntime:
         if latched:
             self._handle_pending_motion_boundary()
         return latched
+
+    def _poll_obstacle_during_motion(self, elapsed_seconds: float) -> bool:
+        try:
+            distance_mm = self.sensors.read_distance_mm()
+        except RobotHardwareError:
+            return False
+        if distance_mm is None:
+            return False
+        if not self._distance_blocked(distance_mm):
+            self._blocked_count = 0
+            if self._obstacle_active and self._distance_clear(distance_mm):
+                self._obstacle_active = False
+                self.alarm.clear_alarm()
+                self.store.record_obstacle(distance_mm, False)
+            return False
+        self._blocked_count += 1
+        if self._blocked_count < self.config.blocked_samples:
+            return False
+        self.motion.stop()
+        self.store.record_motion_debug(
+            "motion_guard_obstacle_latched",
+            f"前进中超声波检测到障碍：distance={distance_mm}mm，已停车。",
+            status="OBSTACLE_WAIT",
+            evidence={
+                "distance_mm": distance_mm,
+                "blocked_distance_mm": self.config.blocked_distance_mm,
+                "blocked_samples": self.config.blocked_samples,
+                "elapsed_seconds": elapsed_seconds,
+                "guard_poll_seconds": self.config.motion_guard_poll_seconds,
+            },
+        )
+        self._obstacle_active = True
+        self.alarm.show_obstacle_wait()
+        self._zupt_recalibrate("obstacle_stop")
+        self.store.record_obstacle(distance_mm, True, waiting_seconds=int(self.config.obstacle_wait_seconds))
+        self._play_cue("obstacle", "检测到障碍物，小车停车等待。")
+        self._wait_for_obstacle_clear(None)
+        return True
 
     def _handle_pending_motion_boundary(self) -> bool:
         if self._transfer_line_context is not None or self._pending_boundary_state is None:
@@ -1788,7 +1846,7 @@ class RobotRuntime:
         distance_mm = self.sensors.read_distance_mm()
         if distance_mm is None:
             return True
-        if distance_mm < self.config.blocked_distance_mm:
+        if distance_mm <= self.config.blocked_distance_mm:
             self._blocked_count += 1
         else:
             self._blocked_count = 0
@@ -2161,6 +2219,7 @@ class RobotRuntime:
             speed=self.config.avoidance_speed,
             duration_seconds=duration_seconds,
             watch_boundary=False,
+            watch_obstacle=False,
             heading_hold=False,
             source="obstacle",
         )
@@ -2176,7 +2235,7 @@ class RobotRuntime:
         return False
 
     def _distance_blocked(self, distance_mm: int | None) -> bool:
-        return distance_mm is not None and distance_mm < self.config.blocked_distance_mm
+        return distance_mm is not None and distance_mm <= self.config.blocked_distance_mm
 
     def _distance_clear(self, distance_mm: int | None) -> bool:
         return distance_mm is not None and distance_mm >= self.config.clear_distance_mm
@@ -2288,6 +2347,7 @@ class RobotRuntime:
         speed: int,
         duration_seconds: float,
         watch_boundary: bool = True,
+        watch_obstacle: bool = True,
         heading_hold: bool = True,
         settle_seconds: float | None = None,
         source: str = "patrol",
@@ -2303,6 +2363,7 @@ class RobotRuntime:
             speed=speed,
             duration_seconds=duration_seconds,
             watch_boundary=watch_boundary,
+            watch_obstacle=watch_obstacle,
             heading_hold=heading_hold,
         )
         self._settle(settle_seconds)

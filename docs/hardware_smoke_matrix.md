@@ -19,7 +19,7 @@ sh /home/pi/project_demo/raspbot/killprocess.sh
 | Mecanum forward/backward | `python3 -c "from inspection_robot.robot import motion; motion.move_forward_slow(); motion.move_backward_slow()"` | LOCAL_NOT_RUN | Calls vendor `McLumk_Wheel_Sports.move_forward/move_backward` at conservative speed. |
 | Mecanum strafe | `python3 -c "from inspection_robot.robot import motion; motion.strafe_left_slow(); motion.strafe_right_slow()"` | LOCAL_NOT_RUN | Calls vendor `move_left/move_right`. |
 | Mecanum rotation | `python3 -c "from inspection_robot.robot import motion; motion.rotate_left_slow(); motion.rotate_right_slow()"` | LOCAL_NOT_RUN | Calls vendor `rotate_left/rotate_right`. |
-| Ultrasonic | `python3 scripts/test_obstacle_avoidance_on_car.py` | LOCAL_NOT_RUN | `blocked_distance_mm=200`, `clear_distance_mm=280`, three blocked samples to confirm. |
+| Ultrasonic | `python3 scripts/test_obstacle_avoidance_on_car.py` | LOCAL_NOT_RUN | `blocked_distance_mm=120`, `clear_distance_mm=180`, one blocked sample to confirm; set `BLOCKED_SAMPLES=2` if the sensor is noisy. |
 | Line sensor / tape boundary | `python3 scripts/test_tape_boundary_on_car.py` | LOCAL_NOT_RUN | Four-channel order is `left, left-center, right-center, right`; `0` means black tape; all four black means shelf-row end turn trigger. |
 | Buzzer | `python3 scripts/test_obstacle_avoidance_on_car.py` | LOCAL_NOT_RUN | Uses `Raspbot.Ctrl_BEEP_Switch`. |
 | RGB | `python3 scripts/test_obstacle_avoidance_on_car.py` | LOCAL_NOT_RUN | Uses `Raspbot.Ctrl_WQ2812_ALL`; green=normal, yellow=obstacle, purple=warning, red=high priority. |

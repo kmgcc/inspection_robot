@@ -151,9 +151,9 @@ class RuntimeTest(unittest.TestCase):
         ):
             config = RobotRuntimeConfig()
 
-        self.assertEqual(config.blocked_distance_mm, 100)
-        self.assertEqual(config.clear_distance_mm, 160)
-        self.assertEqual(config.blocked_samples, 3)
+        self.assertEqual(config.blocked_distance_mm, 120)
+        self.assertEqual(config.clear_distance_mm, 180)
+        self.assertEqual(config.blocked_samples, 1)
         self.assertEqual(config.patrol_speed, 16)
         self.assertEqual(config.step_seconds, 0.18)
         self.assertEqual(config.patrol_settle_seconds, 0.05)
@@ -380,6 +380,75 @@ class RuntimeTest(unittest.TestCase):
         self.assertIn("obstacle_wait", event_types)
         self.assertIn("obstacle_clear", event_types)
         self.assertIn("obstacle_wait", fake_alarm.calls)
+
+    def test_runtime_triggers_obstacle_at_inclusive_blocked_distance(self) -> None:
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        fake_alarm = FakeAlarm()
+        fake_sensors = FakeSensors(distances=[120, 320, 400, 400], tapes=[(1, 1, 1, 1)] * 10)
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=RobotRuntimeConfig(
+                blocked_distance_mm=120,
+                clear_distance_mm=180,
+                blocked_samples=1,
+                step_seconds=0,
+                poll_seconds=0,
+                scan_timeout_seconds=0,
+                action_settle_seconds=0,
+            ),
+            motion_adapter=fake_motion,
+            sensor_adapter=fake_sensors,
+            alarm_adapter=fake_alarm,
+            detection_provider=fake_detection_provider,
+        )
+
+        runtime.run_patrol(shelf_order=["A1"], max_steps=1)
+        event_types = [event["type"] for event in store.snapshot()["events"]]
+
+        self.assertIn("obstacle_wait", event_types)
+        self.assertIn("obstacle_clear", event_types)
+        self.assertIn("obstacle_wait", fake_alarm.calls)
+
+    def test_forward_motion_guard_stops_for_obstacle_seen_mid_step(self) -> None:
+        store = self.make_store()
+        fake_motion = FakeMotion()
+        fake_alarm = FakeAlarm()
+        fake_sensors = FakeSensors(distances=[400, 120, 320], tapes=[(1, 1, 1, 1)] * 10)
+        runtime = RobotRuntime(
+            store,
+            DEFAULT_WAREHOUSE_MAP,
+            {"A1": DEFAULT_SHELF_MANIFEST["A1"]},
+            config=RobotRuntimeConfig(
+                blocked_distance_mm=120,
+                clear_distance_mm=180,
+                blocked_samples=1,
+                obstacle_wait_seconds=0,
+                step_seconds=0.002,
+                motion_guard_poll_seconds=0.001,
+                poll_seconds=0,
+                scan_timeout_seconds=0,
+                action_settle_seconds=0,
+            ),
+            motion_adapter=fake_motion,
+            sensor_adapter=fake_sensors,
+            alarm_adapter=fake_alarm,
+            detection_provider=fake_detection_provider,
+        )
+
+        runtime.run_patrol(shelf_order=["A1"], max_steps=1)
+        event_stages = [
+            event["evidence"].get("stage")
+            for event in store.snapshot()["events"]
+            if event["type"] == "motion_debug" and isinstance(event.get("evidence"), dict)
+        ]
+        event_types = [event["type"] for event in store.snapshot()["events"]]
+
+        self.assertIn("motion_guard_obstacle_latched", event_stages)
+        self.assertIn("obstacle_wait", event_types)
+        self.assertIn("obstacle_clear", event_types)
 
     def test_runtime_turns_right_when_all_tape_sensors_hit_end_boundary(self) -> None:
         store = self.make_store()

@@ -1,5 +1,6 @@
 <!doctype html>
 <html lang="zh-CN">
+
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -7,21 +8,23 @@
   <meta name="description" content="RASPBOT V2 麦轮小车：手动控制、运动测试、参数标定与巡逻看板">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Roboto:wght@300;400;500;700&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Roboto:wght@300;400;500;700&family=Fira+Code:wght@400;500;600&display=swap"
+    rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
+
 <body>
   <!-- 顶部：应用标题 + 标签导航 + 实时状态 + 急停按钮 -->
   <header class="app-header">
     <div class="header-left">
-      <h1>固定仓库巡逻看板</h1>
-      <span class="subtitle">小车控制系统</span>
+      <h1>仓库巡逻小车</h1>
     </div>
 
     <!-- 标签页导航 -->
     <nav class="tab-nav" role="tablist" aria-label="功能分区">
       <button class="tab-btn active" role="tab" aria-selected="true" data-tab="manual" id="tab-manual">
-        手动控制
+        巡逻控制
       </button>
       <button class="tab-btn" role="tab" aria-selected="false" data-tab="test" id="tab-test">
         运动测试
@@ -57,8 +60,10 @@
 
           <div class="console-section">
             <div class="btn-group">
-              <button class="btn btn-primary btn-sm" type="button" data-post="/api/start" id="btn-start-patrol">开始巡逻</button>
-              <button class="btn btn-danger btn-sm" type="button" data-post="/api/stop" id="btn-stop-patrol">停止巡逻</button>
+              <button class="btn btn-primary btn-sm" type="button" data-post="/api/start"
+                id="btn-start-patrol">开始巡逻</button>
+              <button class="btn btn-danger btn-sm" type="button" data-post="/api/stop"
+                id="btn-stop-patrol">停止巡逻</button>
               <button class="btn btn-sm" type="button" data-post="/api/reset" id="btn-reset">重置</button>
               <button class="btn btn-sm" type="button" data-post="/api/gimbal/init" id="btn-gimbal">云台侧向</button>
             </div>
@@ -91,7 +96,8 @@
               </div>
               <div class="param-input-group">
                 <label for="manual-duration">单步时长</label>
-                <input class="field-number" id="manual-duration" type="number" min="0.05" max="5" step="0.05" value="0.14">
+                <input class="field-number" id="manual-duration" type="number" min="0.05" max="5" step="0.05"
+                  value="0.14">
               </div>
             </div>
           </div>
@@ -202,15 +208,25 @@
       <details class="panel card collapsible" style="margin-top:12px" open>
         <summary class="card-title collapsible-title">事件日志</summary>
         <div style="margin-top: 6px; display: flex; justify-content: flex-end;">
-          <button class="btn btn-sm btn-danger" type="button" data-post="/api/reset" id="btn-clear-events">清空全部日志与状态</button>
+          <button class="btn btn-sm btn-danger" type="button" data-post="/api/reset"
+            id="btn-clear-events">清空全部日志与状态</button>
         </div>
         <div class="table-wrap" style="margin-top:8px">
           <table>
             <thead>
               <tr>
-                <th>时间</th><th>类型</th><th>货架</th><th>标签</th>
-                <th>物品</th><th>期望货架</th><th>状态</th><th>来源</th>
-                <th>OCR</th><th>颜色</th><th>图像类别</th><th>说明</th>
+                <th>时间</th>
+                <th>类型</th>
+                <th>货架</th>
+                <th>标签</th>
+                <th>物品</th>
+                <th>期望货架</th>
+                <th>状态</th>
+                <th>来源</th>
+                <th>OCR</th>
+                <th>颜色</th>
+                <th>图像类别</th>
+                <th>说明</th>
               </tr>
             </thead>
             <tbody id="events"></tbody>
@@ -295,9 +311,11 @@
           </div>
           <div class="field-row">
             <label class="field-label" for="cw-comp">顺时针补偿</label>
-            <input class="field-number" id="cw-comp" type="number" min="0.5" max="2.0" step="0.05" value="1.0" style="width:72px">
+            <input class="field-number" id="cw-comp" type="number" min="0.5" max="2.0" step="0.05" value="1.0"
+              style="width:72px">
             <label class="field-label" for="ccw-comp" style="margin-left:16px">逆时针补偿</label>
-            <input class="field-number" id="ccw-comp" type="number" min="0.5" max="2.0" step="0.05" value="1.0" style="width:72px">
+            <input class="field-number" id="ccw-comp" type="number" min="0.5" max="2.0" step="0.05" value="1.0"
+              style="width:72px">
           </div>
         </div>
 
@@ -502,4 +520,5 @@
 
   <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
 </body>
+
 </html>

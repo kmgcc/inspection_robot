@@ -16,8 +16,9 @@ from inspection_robot.robot.sensors import RobotHardwareError
 
 
 def main() -> int:
-    blocked_distance_mm = int(os.environ.get("BLOCKED_DISTANCE_MM", "160"))
-    clear_distance_mm = int(os.environ.get("CLEAR_DISTANCE_MM", "240"))
+    blocked_distance_mm = int(os.environ.get("BLOCKED_DISTANCE_MM", "120"))
+    clear_distance_mm = int(os.environ.get("CLEAR_DISTANCE_MM", "180"))
+    blocked_samples = int(os.environ.get("BLOCKED_SAMPLES", "1"))
     wait_seconds = float(os.environ.get("OBSTACLE_WAIT_SECONDS", "6"))
     turn_seconds = float(os.environ.get("ROBOT_TURN_90_SECONDS", "0.75"))
     turn_speed = int(os.environ.get("ROBOT_TURN_SPEED", "18"))
@@ -30,7 +31,7 @@ def main() -> int:
     blocked_count = 0
     print(
         "obstacle avoidance test: "
-        f"blocked<{blocked_distance_mm}mm, clear>={clear_distance_mm}mm, wait={wait_seconds}s, "
+        f"blocked<={blocked_distance_mm}mm, clear>={clear_distance_mm}mm, samples={blocked_samples}, wait={wait_seconds}s, "
         f"right detour body={body_seconds}s speed={avoidance_speed}, "
         f"steps={side_clearance_bodies:g}/{parallel_bodies:g}/{return_bodies:g} bodies",
         flush=True,
@@ -39,11 +40,11 @@ def main() -> int:
         while True:
             distance = sensors.read_distance_mm()
             print(f"distance_mm={distance}", flush=True)
-            if distance is not None and distance < blocked_distance_mm:
+            if distance is not None and distance <= blocked_distance_mm:
                 blocked_count += 1
             else:
                 blocked_count = 0
-            if blocked_count >= 3:
+            if blocked_count >= blocked_samples:
                 print("obstacle confirmed: stop and wait", flush=True)
                 motion.stop()
                 alarm.show_obstacle_wait()
